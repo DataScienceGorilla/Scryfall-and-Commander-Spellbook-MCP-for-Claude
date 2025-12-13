@@ -1,0 +1,910 @@
+"""
+MTG MCP Server
+==============
+An MCP server that provides tools for querying Magic: The Gathering data
+from Scryfall (card database) and Commander Spellbook (combo database).
+
+This server enables Claude to help with:
+- Card lookups and searches using Scryfall's powerful syntax
+- Finding combos for Commander/EDH decks
+- Checking card rulings and legality
+- Estimating deck brackets based on combos
+"""
+
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+from typing import Optional, List
+from enum import Enum
+import httpx
+import json
+import asyncio
+
+# =============================================================================
+# SERVER INITIALIZATION
+# =============================================================================
+
+mcp = FastMCP("mtg_mcp")
+
+# API base URLs
+SCRYFALL_API = "https://api.scryfall.com"
+SPELLBOOK_API = "https://backend.commanderspellbook.com"
+
+# Required headers for Scryfall (they require User-Agent)
+SCRYFALL_HEADERS = {
+    "User-Agent": "MTG-MCP-Server/1.0",
+    "Accept": "application/json"
+}
+
+
+# =============================================================================
+# SHARED UTILITIES
+# =============================================================================
+
+async def make_scryfall_request(endpoint: str, params: dict = None) -> dict:
+    """
+    Makes a request to the Scryfall API with proper headers and rate limiting.
+    
+    Scryfall asks for 50-100ms between requests, so we add a small delay.
+    This helper centralizes error handling for all Scryfall calls.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            # Build the full URL
+            url = f"{SCRYFALL_API}{endpoint}"
+            
+            # Make the request with required headers
+            response = await client.get(
+                url,
+                params=params,
+                headers=SCRYFALL_HEADERS,
+                timeout=30.0
+            )
+            
+            # Check for HTTP errors
+            response.raise_for_status()
+            
+            # Small delay to respect rate limits
+            await asyncio.sleep(0.1)
+            
+            return response.json()
+            
+        except httpx.HTTPStatusError as e:
+            # Return structured error info
+            return {
+                "error": True,
+                "status_code": e.response.status_code,
+                "message": _parse_scryfall_error(e.response)
+            }
+        except httpx.TimeoutException:
+            return {"error": True, "message": "Request timed out. Please try again."}
+        except Exception as e:
+            return {"error": True, "message": f"Unexpected error: {str(e)}"}
+
+
+async def make_spellbook_request(endpoint: str, params: dict = None) -> dict:
+    """
+    Makes a request to the Commander Spellbook API.
+    
+    This helper centralizes error handling for all Spellbook calls.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            url = f"{SPELLBOOK_API}{endpoint}"
+            
+            response = await client.get(
+                url,
+                params=params,
+                timeout=30.0
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except httpx.HTTPStatusError as e:
+            return {
+                "error": True,
+                "status_code": e.response.status_code,
+                "message": f"API error: {e.response.status_code}"
+            }
+        except httpx.TimeoutException:
+            return {"error": True, "message": "Request timed out. Please try again."}
+        except Exception as e:
+            return {"error": True, "message": f"Unexpected error: {str(e)}"}
+
+
+async def make_spellbook_post(endpoint: str, data: dict) -> dict:
+    """
+    Makes a POST request to Commander Spellbook API.
+    
+    Some endpoints like find-my-combos require POST with JSON body.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            url = f"{SPELLBOOK_API}{endpoint}"
+            
+            response = await client.post(
+                url,
+                json=data,
+                timeout=60.0  # Longer timeout for combo searches
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except httpx.HTTPStatusError as e:
+            return {
+                "error": True,
+                "status_code": e.response.status_code,
+                "message": f"API error: {e.response.status_code}"
+            }
+        except httpx.TimeoutException:
+            return {"error": True, "message": "Request timed out. Please try again."}
+        except Exception as e:
+            return {"error": True, "message": f"Unexpected error: {str(e)}"}
+
+
+def _parse_scryfall_error(response) -> str:
+    """
+    Extracts a human-readable error message from Scryfall error responses.
+    """
+    try:
+        data = response.json()
+        # Scryfall returns errors with 'details' field
+        return data.get("details", f"HTTP {response.status_code}")
+    except:
+        return f"HTTP {response.status_code}"
+
+
+def format_card_markdown(card: dict) -> str:
+    """
+    Formats a Scryfall card object as readable markdown.
+    
+    This helper extracts the most useful info and presents it clearly.
+    """
+    lines = []
+    
+    # Card name and mana cost
+    name = card.get("name", "Unknown")
+    mana_cost = card.get("mana_cost", "")
+    lines.append(f"## {name} {mana_cost}")
+    
+    # Type line
+    type_line = card.get("type_line", "")
+    if type_line:
+        lines.append(f"**{type_line}**")
+    
+    # Oracle text (the rules text on the card)
+    oracle_text = card.get("oracle_text", "")
+    if oracle_text:
+        lines.append(f"\n{oracle_text}")
+    
+    # Power/Toughness for creatures
+    power = card.get("power")
+    toughness = card.get("toughness")
+    if power and toughness:
+        lines.append(f"\n**P/T:** {power}/{toughness}")
+    
+    # Loyalty for planeswalkers
+    loyalty = card.get("loyalty")
+    if loyalty:
+        lines.append(f"\n**Starting Loyalty:** {loyalty}")
+    
+    # Set and rarity
+    set_name = card.get("set_name", "")
+    rarity = card.get("rarity", "").capitalize()
+    if set_name:
+        lines.append(f"\n*{set_name} ({rarity})*")
+    
+    # Legalities (just show Commander since that's our focus)
+    legalities = card.get("legalities", {})
+    commander_legal = legalities.get("commander", "unknown")
+    lines.append(f"\n**Commander Legal:** {commander_legal}")
+    
+    # Price info (USD)
+    prices = card.get("prices", {})
+    usd = prices.get("usd")
+    usd_foil = prices.get("usd_foil")
+    if usd or usd_foil:
+        price_parts = []
+        if usd:
+            price_parts.append(f"${usd}")
+        if usd_foil:
+            price_parts.append(f"${usd_foil} foil")
+        lines.append(f"**Price:** {' / '.join(price_parts)}")
+    
+    # Scryfall URL for more details
+    scryfall_uri = card.get("scryfall_uri", "")
+    if scryfall_uri:
+        lines.append(f"\n[View on Scryfall]({scryfall_uri})")
+    
+    return "\n".join(lines)
+
+
+def format_combo_markdown(combo: dict) -> str:
+    """
+    Formats a Commander Spellbook combo as readable markdown.
+    """
+    lines = []
+    
+    # Combo ID for reference
+    combo_id = combo.get("id", "unknown")
+    lines.append(f"## Combo #{combo_id}")
+    
+    # Cards involved
+    uses = combo.get("uses", [])
+    if uses:
+        card_names = [u.get("card", {}).get("name", "Unknown") for u in uses]
+        lines.append(f"\n**Cards:** {', '.join(card_names)}")
+    
+    # Color identity
+    identity = combo.get("identity", "")
+    if identity:
+        lines.append(f"**Color Identity:** {identity}")
+    
+    # Prerequisites (what you need to set up)
+    requires = combo.get("requires", [])
+    if requires:
+        lines.append("\n**Prerequisites:**")
+        for req in requires:
+            template = req.get("template", {})
+            name = template.get("name", "")
+            if name:
+                lines.append(f"- {name}")
+    
+    # Steps to execute
+    description = combo.get("description", "")
+    if description:
+        lines.append(f"\n**Steps:**\n{description}")
+    
+    # Results (what the combo does)
+    produces = combo.get("produces", [])
+    if produces:
+        lines.append("\n**Results:**")
+        for prod in produces:
+            feature = prod.get("feature", {})
+            name = feature.get("name", "")
+            if name:
+                lines.append(f"- {name}")
+    
+    # Bracket/power level
+    bracket = combo.get("bracket", "")
+    if bracket:
+        lines.append(f"\n**Bracket:** {bracket}")
+    
+    # Link to Commander Spellbook
+    lines.append(f"\n[View on Commander Spellbook](https://commanderspellbook.com/combo/{combo_id})")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
+# INPUT MODELS (Pydantic models for input validation)
+# =============================================================================
+
+class ResponseFormat(str, Enum):
+    """Output format for tool responses."""
+    MARKDOWN = "markdown"
+    JSON = "json"
+
+
+class ScryfallSearchInput(BaseModel):
+    """
+    Input for searching cards on Scryfall.
+    
+    The query uses Scryfall's search syntax which is very powerful.
+    Examples:
+    - 'c:blue t:creature' = blue creatures
+    - 'o:draw cmc<=2' = cards with 'draw' in text, CMC 2 or less
+    - 'id:simic t:legendary' = Simic identity legendary cards
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    query: str = Field(
+        ...,
+        description=(
+            "Search query using Scryfall syntax. Examples: "
+            "'c:green t:creature pow>=5' (green creatures with 5+ power), "
+            "'o:\"draw a card\" id:izzet' (Izzet cards with draw effects), "
+            "'t:legendary t:creature id:simic' (Simic legendary creatures)"
+        ),
+        min_length=1,
+        max_length=500
+    )
+    
+    limit: int = Field(
+        default=10,
+        description="Maximum number of results to return (1-50)",
+        ge=1,
+        le=50
+    )
+    
+    order: Optional[str] = Field(
+        default=None,
+        description=(
+            "Sort order: 'name', 'released', 'set', 'rarity', 'color', "
+            "'usd', 'cmc', 'power', 'toughness', 'edhrec' (by EDHREC rank)"
+        )
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+class ScryfallNamedInput(BaseModel):
+    """Input for looking up a specific card by name."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    name: str = Field(
+        ...,
+        description="Card name to look up (e.g., 'Lightning Bolt', 'Rhystic Study')",
+        min_length=1,
+        max_length=200
+    )
+    
+    fuzzy: bool = Field(
+        default=True,
+        description=(
+            "If True, allows fuzzy matching for typos/partial names. "
+            "If False, requires exact name match."
+        )
+    )
+    
+    set_code: Optional[str] = Field(
+        default=None,
+        description="Optional 3-letter set code to get a specific printing (e.g., 'mh2', 'cmr')"
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+class ScryfallRandomInput(BaseModel):
+    """Input for getting a random card."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    query: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional Scryfall query to filter random selection. "
+            "Example: 't:creature c:red' for a random red creature"
+        ),
+        max_length=500
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+class ScryfallRulingsInput(BaseModel):
+    """Input for getting card rulings."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    card_name: str = Field(
+        ...,
+        description="Name of the card to get rulings for",
+        min_length=1,
+        max_length=200
+    )
+
+
+class SpellbookSearchInput(BaseModel):
+    """
+    Input for searching combos on Commander Spellbook.
+    
+    You can search by card names, color identity, or combo results.
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    query: str = Field(
+        ...,
+        description=(
+            "Search query. Can include card names, effects, or use their syntax: "
+            "'card:\"Thassa's Oracle\"' for combos with that card, "
+            "'result:infinite' for infinite combos"
+        ),
+        min_length=1,
+        max_length=500
+    )
+    
+    color_identity: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filter by color identity using WUBRG letters. "
+            "Examples: 'UB' for Dimir, 'GUR' for Temur, 'WUBRG' for 5-color"
+        )
+    )
+    
+    limit: int = Field(
+        default=10,
+        description="Maximum number of combos to return (1-50)",
+        ge=1,
+        le=50
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+class SpellbookFindCombosInput(BaseModel):
+    """
+    Input for finding combos that use specific cards.
+    
+    Provide a list of card names and find all combos that can be made with them.
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    cards: List[str] = Field(
+        ...,
+        description=(
+            "List of card names to find combos for. "
+            "Example: ['Thassa\\'s Oracle', 'Demonic Consultation']"
+        ),
+        min_length=1,
+        max_length=100
+    )
+    
+    limit: int = Field(
+        default=10,
+        description="Maximum number of combos to return (1-50)",
+        ge=1,
+        le=50
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+    
+    @field_validator('cards')
+    @classmethod
+    def validate_cards(cls, v: List[str]) -> List[str]:
+        """Ensure card names are not empty strings."""
+        return [card.strip() for card in v if card.strip()]
+
+
+class SpellbookGetComboInput(BaseModel):
+    """Input for getting details of a specific combo by ID."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    combo_id: str = Field(
+        ...,
+        description="The Commander Spellbook combo ID",
+        min_length=1
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+# =============================================================================
+# SCRYFALL TOOLS
+# =============================================================================
+
+@mcp.tool(
+    name="scryfall_search_cards",
+    annotations={
+        "title": "Search MTG Cards on Scryfall",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def scryfall_search_cards(params: ScryfallSearchInput) -> str:
+    """
+    Search for Magic: The Gathering cards using Scryfall's powerful search syntax.
+    
+    This tool queries Scryfall's card database which contains every MTG card ever printed.
+    The search syntax is very flexible - you can filter by color, type, text, CMC, and more.
+    
+    Common search operators:
+    - c: or color: = card color (c:blue, c:UR for blue/red)
+    - id: or identity: = color identity for Commander (id:simic)
+    - t: or type: = card type (t:creature, t:instant)
+    - o: or oracle: = oracle text contains (o:"draw a card")
+    - cmc: or mv: = mana value (cmc<=3, cmc=5)
+    - pow: and tou: = power/toughness (pow>=4)
+    - r: or rarity: = rarity (r:mythic)
+    - is:commander = can be a commander
+    
+    Args:
+        params (ScryfallSearchInput): Search parameters including:
+            - query (str): Scryfall search syntax query
+            - limit (int): Max results to return (1-50)
+            - order (str): Sort order (name, cmc, edhrec, etc.)
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: Formatted card results or JSON data
+    """
+    # Build the query parameters
+    api_params = {"q": params.query}
+    
+    if params.order:
+        api_params["order"] = params.order
+    
+    # Make the API request
+    result = await make_scryfall_request("/cards/search", api_params)
+    
+    # Handle errors
+    if result.get("error"):
+        return f"**Error:** {result.get('message', 'Unknown error')}"
+    
+    # Extract the cards from the response
+    cards = result.get("data", [])
+    total = result.get("total_cards", len(cards))
+    
+    # Limit to requested number
+    cards = cards[:params.limit]
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps({"total": total, "cards": cards}, indent=2)
+    
+    # Markdown format
+    lines = [f"**Found {total} cards** (showing {len(cards)})\n"]
+    
+    for card in cards:
+        lines.append(format_card_markdown(card))
+        lines.append("\n---\n")
+    
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="scryfall_get_card",
+    annotations={
+        "title": "Get MTG Card by Name",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def scryfall_get_card(params: ScryfallNamedInput) -> str:
+    """
+    Look up a specific Magic: The Gathering card by name.
+    
+    This is faster than searching when you know the exact card name.
+    Supports fuzzy matching for typos or partial names.
+    
+    Args:
+        params (ScryfallNamedInput): Lookup parameters including:
+            - name (str): Card name to look up
+            - fuzzy (bool): Allow fuzzy/partial matching
+            - set_code (str): Optional set code for specific printing
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: Card details or JSON data
+    """
+    # Build query parameters
+    # Use 'fuzzy' for approximate matching, 'exact' for precise
+    param_key = "fuzzy" if params.fuzzy else "exact"
+    api_params = {param_key: params.name}
+    
+    if params.set_code:
+        api_params["set"] = params.set_code
+    
+    # Make the API request
+    result = await make_scryfall_request("/cards/named", api_params)
+    
+    # Handle errors
+    if result.get("error"):
+        return f"**Error:** {result.get('message', 'Card not found. Try a different name or enable fuzzy matching.')}"
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps(result, indent=2)
+    
+    return format_card_markdown(result)
+
+
+@mcp.tool(
+    name="scryfall_random_card",
+    annotations={
+        "title": "Get Random MTG Card",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False,  # Returns different results each time
+        "openWorldHint": True
+    }
+)
+async def scryfall_random_card(params: ScryfallRandomInput) -> str:
+    """
+    Get a random Magic: The Gathering card.
+    
+    Optionally filter the random selection with a Scryfall query.
+    Great for discovery, challenges, or inspiration.
+    
+    Args:
+        params (ScryfallRandomInput): Parameters including:
+            - query (str): Optional Scryfall query to filter
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: Random card details or JSON data
+    """
+    # Build query parameters
+    api_params = {}
+    if params.query:
+        api_params["q"] = params.query
+    
+    # Make the API request
+    result = await make_scryfall_request("/cards/random", api_params)
+    
+    # Handle errors
+    if result.get("error"):
+        return f"**Error:** {result.get('message', 'Could not get random card')}"
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps(result, indent=2)
+    
+    return format_card_markdown(result)
+
+
+@mcp.tool(
+    name="scryfall_get_rulings",
+    annotations={
+        "title": "Get MTG Card Rulings",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def scryfall_get_rulings(params: ScryfallRulingsInput) -> str:
+    """
+    Get official rulings for a Magic: The Gathering card.
+    
+    Rulings are official clarifications from Wizards of the Coast about
+    how a card works. Useful for understanding complex interactions.
+    
+    Args:
+        params (ScryfallRulingsInput): Parameters including:
+            - card_name (str): Name of the card to get rulings for
+    
+    Returns:
+        str: List of rulings with dates
+    """
+    # First, we need to get the card to find its Scryfall ID
+    card_result = await make_scryfall_request("/cards/named", {"fuzzy": params.card_name})
+    
+    if card_result.get("error"):
+        return f"**Error:** Could not find card '{params.card_name}'"
+    
+    card_id = card_result.get("id")
+    card_name = card_result.get("name")
+    
+    # Now get the rulings for this card
+    rulings_result = await make_scryfall_request(f"/cards/{card_id}/rulings")
+    
+    if rulings_result.get("error"):
+        return f"**Error:** {rulings_result.get('message', 'Could not get rulings')}"
+    
+    rulings = rulings_result.get("data", [])
+    
+    if not rulings:
+        return f"**No rulings found for {card_name}.**\n\nThis card has no official rulings or clarifications."
+    
+    # Format the rulings
+    lines = [f"## Rulings for {card_name}\n"]
+    
+    for ruling in rulings:
+        date = ruling.get("published_at", "Unknown date")
+        comment = ruling.get("comment", "")
+        source = ruling.get("source", "wotc")
+        
+        # Format the source nicely
+        source_label = "Wizards of the Coast" if source == "wotc" else source.upper()
+        
+        lines.append(f"**{date}** ({source_label})")
+        lines.append(f"> {comment}\n")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
+# COMMANDER SPELLBOOK TOOLS
+# =============================================================================
+
+@mcp.tool(
+    name="spellbook_search_combos",
+    annotations={
+        "title": "Search EDH Combos",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def spellbook_search_combos(params: SpellbookSearchInput) -> str:
+    """
+    Search for Commander/EDH combos on Commander Spellbook.
+    
+    Find combos by card names, effects, or color identity.
+    Great for discovering new synergies for your decks.
+    
+    Args:
+        params (SpellbookSearchInput): Search parameters including:
+            - query (str): Search text (card names, effects, etc.)
+            - color_identity (str): Filter by colors (e.g., 'UB', 'GUR')
+            - limit (int): Max results to return (1-50)
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: List of combos or JSON data
+    """
+    # Build the search parameters
+    # Commander Spellbook uses 'q' for the query parameter
+    api_params = {"q": params.query, "limit": params.limit}
+    
+    if params.color_identity:
+        # Format the color identity (needs to be uppercase)
+        api_params["id"] = params.color_identity.upper()
+    
+    # Make the API request
+    result = await make_spellbook_request("/variants", api_params)
+    
+    # Handle errors
+    if result.get("error"):
+        return f"**Error:** {result.get('message', 'Search failed')}"
+    
+    # The API returns a 'results' list
+    combos = result.get("results", result) if isinstance(result, dict) else result
+    
+    # Handle case where result is a list directly
+    if isinstance(combos, list):
+        pass
+    elif isinstance(combos, dict):
+        combos = combos.get("results", [])
+    else:
+        combos = []
+    
+    combos = combos[:params.limit]
+    
+    if not combos:
+        return "**No combos found.** Try a different search query or broader color identity."
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps(combos, indent=2)
+    
+    # Markdown format
+    lines = [f"**Found {len(combos)} combos**\n"]
+    
+    for combo in combos:
+        lines.append(format_combo_markdown(combo))
+        lines.append("\n---\n")
+    
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="spellbook_find_combos_for_cards",
+    annotations={
+        "title": "Find Combos for Specific Cards",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def spellbook_find_combos_for_cards(params: SpellbookFindCombosInput) -> str:
+    """
+    Find all combos that can be made with a specific set of cards.
+    
+    This is perfect for checking what combos exist in your deck
+    or discovering new combos when adding cards.
+    
+    Args:
+        params (SpellbookFindCombosInput): Parameters including:
+            - cards (List[str]): List of card names
+            - limit (int): Max combos to return (1-50)
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: Combos found with those cards or JSON data
+    """
+    # Build a search query with all card names
+    # We search for combos containing any of these cards
+    card_queries = [f'card:"{card}"' for card in params.cards]
+    combined_query = " OR ".join(card_queries)
+    
+    # Make the API request
+    api_params = {"q": combined_query, "limit": params.limit}
+    result = await make_spellbook_request("/variants", api_params)
+    
+    # Handle errors
+    if result.get("error"):
+        return f"**Error:** {result.get('message', 'Search failed')}"
+    
+    # Extract combos
+    combos = result.get("results", result) if isinstance(result, dict) else result
+    
+    if isinstance(combos, list):
+        pass
+    elif isinstance(combos, dict):
+        combos = combos.get("results", [])
+    else:
+        combos = []
+    
+    combos = combos[:params.limit]
+    
+    if not combos:
+        card_list = ", ".join(params.cards)
+        return f"**No combos found** containing these cards: {card_list}\n\nThese cards may not have any documented combos, or try different card names."
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps(combos, indent=2)
+    
+    # Markdown format
+    card_list = ", ".join(params.cards)
+    lines = [f"**Combos containing:** {card_list}\n"]
+    lines.append(f"**Found {len(combos)} combos**\n")
+    
+    for combo in combos:
+        lines.append(format_combo_markdown(combo))
+        lines.append("\n---\n")
+    
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="spellbook_get_combo",
+    annotations={
+        "title": "Get Combo Details by ID",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def spellbook_get_combo(params: SpellbookGetComboInput) -> str:
+    """
+    Get detailed information about a specific combo by its ID.
+    
+    Use this when you have a combo ID and want full details including
+    prerequisites, steps, and results.
+    
+    Args:
+        params (SpellbookGetComboInput): Parameters including:
+            - combo_id (str): The Commander Spellbook combo ID
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: Full combo details or JSON data
+    """
+    # Get the specific combo by ID
+    result = await make_spellbook_request(f"/variants/{params.combo_id}")
+    
+    # Handle errors
+    if result.get("error"):
+        return f"**Error:** Could not find combo with ID '{params.combo_id}'"
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps(result, indent=2)
+    
+    return format_combo_markdown(result)
+
+
+# =============================================================================
+# MAIN ENTRY POINT
+# =============================================================================
+
+if __name__ == "__main__":
+    # Run the MCP server using stdio transport (for local use)
+    mcp.run()

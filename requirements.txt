@@ -1,0 +1,11 @@
+# MTG MCP Server Dependencies
+# Install with: pip install -r requirements.txt
+
+# MCP SDK - provides FastMCP framework
+mcp>=1.0.0
+
+# HTTP client for async API requests
+httpx>=0.24.0
+
+# Data validation (comes with MCP, but listed for clarity)
+pydantic>=2.0.0
