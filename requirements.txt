@@ -9,3 +9,7 @@ httpx>=0.24.0
 
 # Data validation (comes with MCP, but listed for clarity)
 pydantic>=2.0.0
+
+chromadb>=0.4.0
+
+sentence-transformers>=2.4.0
