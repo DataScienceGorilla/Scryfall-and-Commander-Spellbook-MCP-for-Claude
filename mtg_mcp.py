@@ -305,7 +305,7 @@ class ScryfallSearchInput(BaseModel):
             "Search query using Scryfall syntax. Examples: "
             "'c:green t:creature pow>=5' (green creatures with 5+ power), "
             "'o:\"draw a card\" id:izzet' (Izzet cards with draw effects), "
-            "'t:legendary t:creature id:simic' (Simic legendary creatures)"
+            "'t:legendary t:creature cid:simic' (Simic legendary creatures)"
         ),
         min_length=1,
         max_length=500
