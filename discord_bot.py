@@ -54,8 +54,8 @@ MAX_TOKENS = 1024
 RULES_DB_PATH = Path(__file__).parent / "mtg_rules_data"
 
 # System prompt that tells Claude how to behave
-SYSTEM_PROMPT = """You are an expert Magic: The Gathering assistant in a Discord server. 
-You help players with card lookups, combo searches, and rules questions.
+SYSTEM_PROMPT = """You are an expert Magic: The Gathering judge assistant in a Discord server. 
+You help players with card lookups, combo searches, rules questions, and deck power level analysis.
 
 You have access to these tools:
 - scryfall_search_cards: Search for MTG cards using Scryfall syntax
@@ -63,12 +63,81 @@ You have access to these tools:
 - scryfall_get_rulings: Get official rulings for a card
 - spellbook_search_combos: Search for Commander/EDH combos
 - spellbook_find_combos_for_cards: Find combos containing specific cards
+- spellbook_find_combos_in_decklist: Analyze a full decklist (URL or pasted) for combos
+- spellbook_estimate_bracket: Estimate the Commander bracket (power level 1-4) for a deck
 - mtg_rules_search: Search the Comprehensive Rules (if database is available)
+
+COMMANDER BRACKET SYSTEM (official WotC system):
+- Bracket 1: Exhibition
+    Players expect:
+    Decks to prioritize a goal, theme, or idea over power 
+    Rules around card legality or viable commanders to have some flexibility depending on the pod 
+    Win conditions to be highly thematic or substandard 
+    Gameplay to be an opportunity to show off creations 
+    At least nine turns before a win or loss.
+    No mass land denial
+    Only thematic game changers (if any)
+
+- Bracket 2: Core
+    Players expect:
+    Decks to be unoptimized and straightforward, with some cards chosen to maximize creativity and/or entertainment 
+    Win conditions to be incremental, telegraphed on the board, and disruptable 
+    Gameplay to be low pressure with an emphasis on social interaction 
+    Gameplay to be proactive and considerate, letting each deck showcase its plan 
+    At least eight turns before a win or loss.
+    No mass land denial, chaining extra turns, or two card infinite combos
+    No game changers
+
+- Bracket 3: Upgraded
+    Players expect:
+    Decks to be powered up with strong synergy and high card quality; they can effectively disrupt opponents 
+    Game Changers that are likely to be value engines and game-ending spells 
+    Win conditions that can be deployed in one big turn from hand, usually because of steadily accrued resources 
+    Gameplay to feature many proactive and reactive plays 
+    At least six turns before a win or loss.
+    No mass land denial, chaining extra turns, or early two card infinite combos
+    Up to 3 game changers
+
+- Bracket 4: Optimized / cEDH
+    Players expect:
+    Decks to be lethal, consistent, and fast, designed to take people down as fast as possible 
+    Game Changers that are likely to be fast mana, snowballing resource engines, free disruption, and tutors 
+    Win conditions to vary but be efficient and instantaneous 
+    Gameplay to be explosive and powerful, featuring huge threats and efficient disruption to match 
+    Anything goes
+    No game changers restrictions
+
+Key bracket factors:
+- You can query scryfall with is:gamechanger to identify game changers
+- Two-card infinite combos push decks toward Bracket 3-4
+- Mass land destruction, extra turns, and stax effects raise bracket
+- Combo piece count and combo speed matter
+- Fast mana (Mana Crypt, Mox Diamond, etc.) raises bracket
+
+IMPORTANT - When answering rules questions:
+1. ALWAYS search the rules with mtg_rules_search first
+2. Look up any specific cards mentioned with scryfall_get_card to see exact oracle text
+3. As elements on the stack resolve, make sure to consider state-based actions and triggers, as they change over time
+4. Check scryfall_get_rulings for official clarifications on those cards
+5. Cite rule numbers in your answer when possible
+
+KEY MTG RULES PRINCIPLES (use these to verify your answers):
+- Abilities on the stack exist independently of their source (killing a creature doesn't counter its ability)
+- "Dies" and "leaves the battlefield" triggers see the game state right BEFORE the event
+- Colorless is NOT a color - cards can't "share a color" if they're both colorless
+- Summoning sickness checks if YOU'VE controlled the creature since your turn began, not when it ETB'd
+- Replacement effects modify events as they happen - they don't use the stack
+- State-based actions don't use the stack and can't be responded to
+- "As [this] enters" and "enters with" are replacement effects, not triggered abilities
+- Activated abilities are written as "[cost]: [effect]" - the colon is the giveaway
+- Triggered abilities start with "when", "whenever", or "at"
+- Each activation of an ability that grants an ability STACKS (e.g., activating a manland's ability twice gives two instances of any granted triggered abilities)
+- The stack resolves top-down, but state-based actions are checked after EACH object resolves
+- "Target" is a magic word - if a spell/ability doesn't say "target", it doesn't target
 
 Keep responses concise since this is Discord - aim for under 2000 characters.
 Use markdown formatting sparingly. Don't use headers (##) in Discord.
 When showing card info, focus on the most relevant details.
-If a user asks about rules interactions, search the rules AND consider the specific cards involved.
 """
 
 
@@ -218,8 +287,47 @@ TOOLS = [
         }
     },
     {
+        "name": "spellbook_find_combos_in_decklist",
+        "description": "Find all combos present in a decklist. Accepts either a deck URL (Moxfield, Archidekt, etc.) or a pasted list of card names.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decklist_url": {
+                    "type": "string",
+                    "description": "URL to a decklist (Moxfield, Archidekt, Deckstats, TappedOut, etc.)"
+                },
+                "decklist_text": {
+                    "type": "string",
+                    "description": "Pasted decklist as text - one card per line, quantity optional (e.g., '1 Sol Ring' or just 'Sol Ring')"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max combos to return (1-20)",
+                    "default": 10
+                }
+            }
+        }
+    },
+    {
+        "name": "spellbook_estimate_bracket",
+        "description": "Estimate the Commander bracket (power level 1-4) for a decklist based on its combos. Bracket 1 = Casual, Bracket 2 = Precon-appropriate, Bracket 3 = Powerful, Bracket 4 = Ruthless/cEDH.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decklist_url": {
+                    "type": "string",
+                    "description": "URL to a decklist (Moxfield, Archidekt, etc.)"
+                },
+                "decklist_text": {
+                    "type": "string",
+                    "description": "Pasted decklist as text - one card per line"
+                }
+            }
+        }
+    },
+    {
         "name": "mtg_rules_search",
-        "description": "Search the MTG Comprehensive Rules using semantic search. Ask rules questions in natural language.",
+        "description": "Search the MTG Comprehensive Rules using semantic search. Ask rules questions in natural language. ALWAYS use this tool first when answering rules questions.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -230,7 +338,7 @@ TOOLS = [
                 "num_results": {
                     "type": "integer",
                     "description": "Number of relevant rules to return (1-10)",
-                    "default": 3
+                    "default": 5
                 }
             },
             "required": ["query"]
@@ -416,7 +524,121 @@ async def spellbook_find_combos_for_cards(cards: list, limit: int = 5) -> str:
     return await spellbook_search_combos(combined_query, limit=limit)
 
 
-async def mtg_rules_search(query: str, num_results: int = 3) -> str:
+async def spellbook_find_combos_in_decklist(
+    decklist_url: str = None, 
+    decklist_text: str = None, 
+    limit: int = 10
+) -> str:
+    """
+    Find all combos present in a decklist.
+    Can accept either a URL to a deck or pasted card list.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            cards = []
+            
+            # Option 1: Get cards from a deck URL
+            if decklist_url:
+                response = await client.post(
+                    f"{SPELLBOOK_API}/card-list-from-url/",
+                    json={"url": decklist_url},
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # Extract card names from the response
+                card_list = data.get("cards", [])
+                for card in card_list:
+                    if isinstance(card, dict):
+                        cards.append(card.get("name", card.get("card", "")))
+                    else:
+                        cards.append(str(card))
+            
+            # Option 2: Parse pasted decklist text
+            elif decklist_text:
+                response = await client.post(
+                    f"{SPELLBOOK_API}/card-list-from-text/",
+                    json={"text": decklist_text},
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                card_list = data.get("cards", [])
+                for card in card_list:
+                    if isinstance(card, dict):
+                        cards.append(card.get("name", card.get("card", "")))
+                    else:
+                        cards.append(str(card))
+            
+            else:
+                return "Please provide either a decklist URL or pasted card list."
+            
+            if not cards:
+                return "Couldn't extract any cards from that decklist."
+            
+            # Now find combos using the find-my-combos endpoint
+            response = await client.post(
+                f"{SPELLBOOK_API}/find-my-combos/",
+                json={"cards": cards},
+                timeout=60.0  # Can be slow for large decklists
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # The response contains 'results' with 'included' combos
+            results = data.get("results", {})
+            included = results.get("included", [])
+            almost = results.get("almost_included", [])
+            
+            if not included and not almost:
+                return f"No combos found in this deck ({len(cards)} cards analyzed)."
+            
+            lines = [f"Analyzed {len(cards)} cards:"]
+            
+            # Show fully included combos first
+            if included:
+                lines.append(f"\n**Complete combos in deck ({len(included)}):**")
+                for combo in included[:limit]:
+                    uses = combo.get("uses", [])
+                    card_names = [u.get("card", {}).get("name", "?") for u in uses]
+                    cards_str = " + ".join(card_names[:4])
+                    if len(card_names) > 4:
+                        cards_str += f" +{len(card_names)-4} more"
+                    
+                    produces = combo.get("produces", [])
+                    results_list = [p.get("feature", {}).get("name", "") for p in produces[:2]]
+                    results_str = ", ".join(results_list) if results_list else "combo"
+                    
+                    lines.append(f"• {cards_str} → {results_str}")
+            
+            # Show "almost" combos (missing 1 card) if room
+            remaining = limit - len(included)
+            if almost and remaining > 0:
+                lines.append(f"\n**Almost complete (missing 1 card):**")
+                for combo in almost[:remaining]:
+                    uses = combo.get("uses", [])
+                    card_names = [u.get("card", {}).get("name", "?") for u in uses]
+                    cards_str = " + ".join(card_names[:4])
+                    
+                    # Try to identify the missing card
+                    missing = combo.get("missing", [])
+                    if missing:
+                        missing_name = missing[0].get("card", {}).get("name", "?")
+                        lines.append(f"• {cards_str} (needs: {missing_name})")
+                    else:
+                        lines.append(f"• {cards_str}")
+            
+            return "\n".join(lines)
+            
+        except httpx.HTTPStatusError as e:
+            return f"Error analyzing decklist: {e.response.status_code}"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+async def mtg_rules_search(query: str, num_results: int = 5) -> str:
     """Search the Comprehensive Rules."""
     collection = get_rules_collection()
     
@@ -438,14 +660,126 @@ async def mtg_rules_search(query: str, num_results: int = 3) -> str:
         lines = []
         for doc, meta in zip(documents, metadatas):
             rule_num = meta.get("rule_number", "?")
-            # Truncate long rules for Discord
-            text = doc[:300] + "..." if len(doc) > 300 else doc
+            # Truncate long rules for Discord, but keep more context
+            text = doc[:500] + "..." if len(doc) > 500 else doc
             lines.append(f"**{rule_num}**: {text}")
         
         return "\n\n".join(lines)
         
     except Exception as e:
         return f"Error searching rules: {str(e)}"
+
+
+async def spellbook_estimate_bracket(
+    decklist_url: str = None,
+    decklist_text: str = None
+) -> str:
+    """
+    Estimate the Commander bracket (power level) for a decklist.
+    
+    Bracket levels:
+    - Bracket 1: Casual - No two-card infinite combos
+    - Bracket 2: Precon-appropriate / Oddball - Simple combos, fair play
+    - Bracket 3: Powerful / Spicy - Strong combos, optimized
+    - Bracket 4: Ruthless / cEDH - Competitive, fast combos
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            cards = []
+            
+            # Get cards from URL or text
+            if decklist_url:
+                response = await client.post(
+                    f"{SPELLBOOK_API}/card-list-from-url/",
+                    json={"url": decklist_url},
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                data = response.json()
+                card_list = data.get("cards", [])
+                for card in card_list:
+                    if isinstance(card, dict):
+                        cards.append(card.get("name", card.get("card", "")))
+                    else:
+                        cards.append(str(card))
+                        
+            elif decklist_text:
+                response = await client.post(
+                    f"{SPELLBOOK_API}/card-list-from-text/",
+                    json={"text": decklist_text},
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                data = response.json()
+                card_list = data.get("cards", [])
+                for card in card_list:
+                    if isinstance(card, dict):
+                        cards.append(card.get("name", card.get("card", "")))
+                    else:
+                        cards.append(str(card))
+            else:
+                return "Please provide either a decklist URL or pasted card list."
+            
+            if not cards:
+                return "Couldn't extract any cards from that decklist."
+            
+            # Call the bracket estimation endpoint
+            response = await client.post(
+                f"{SPELLBOOK_API}/estimate-bracket/",
+                json={"cards": cards},
+                timeout=60.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse the bracket response
+            bracket = data.get("bracket", "Unknown")
+            
+            # Get combo breakdown by bracket
+            combos_by_bracket = data.get("combos_by_bracket", {})
+            two_card_combos = data.get("two_card_combos", [])
+            
+            # Build the response
+            lines = [f"**Estimated Bracket: {bracket}**"]
+            lines.append(f"Cards analyzed: {len(cards)}")
+            
+            # Bracket descriptions
+            bracket_desc = {
+                "1": "Exhibition - Thematic, creative, 9+ turns expected",
+                "2": "Core - Unoptimized, social, no two-card infinites",
+                "3": "Upgraded - Strong synergy, up to 3 game changers", 
+                "4": "Optimized/cEDH - Lethal, consistent, anything goes"
+            }
+            
+            bracket_num = str(bracket).split()[0] if bracket else "?"
+            if bracket_num in bracket_desc:
+                lines.append(f"*{bracket_desc[bracket_num]}*")
+            
+            # Show two-card combos if any (these heavily influence bracket)
+            if two_card_combos:
+                lines.append(f"\n**Two-card combos found ({len(two_card_combos)}):**")
+                for combo in two_card_combos[:5]:
+                    cards_in_combo = combo.get("uses", [])
+                    card_names = [c.get("card", {}).get("name", "?") for c in cards_in_combo]
+                    combo_bracket = combo.get("bracket", "?")
+                    lines.append(f"• {' + '.join(card_names)} (Bracket {combo_bracket})")
+                
+                if len(two_card_combos) > 5:
+                    lines.append(f"  ...and {len(two_card_combos) - 5} more")
+            
+            # Show combo count by bracket level
+            if combos_by_bracket:
+                lines.append("\n**Combos by bracket level:**")
+                for b_level, combos in sorted(combos_by_bracket.items()):
+                    count = len(combos) if isinstance(combos, list) else combos
+                    lines.append(f"• Bracket {b_level}: {count} combos")
+            
+            return "\n".join(lines)
+            
+        except httpx.HTTPStatusError as e:
+            return f"Error estimating bracket: {e.response.status_code}"
+        except Exception as e:
+            return f"Error: {str(e)}"
 
 
 # Map tool names to functions
@@ -455,6 +789,8 @@ TOOL_FUNCTIONS = {
     "scryfall_get_rulings": scryfall_get_rulings,
     "spellbook_search_combos": spellbook_search_combos,
     "spellbook_find_combos_for_cards": spellbook_find_combos_for_cards,
+    "spellbook_find_combos_in_decklist": spellbook_find_combos_in_decklist,
+    "spellbook_estimate_bracket": spellbook_estimate_bracket,
     "mtg_rules_search": mtg_rules_search,
 }
 

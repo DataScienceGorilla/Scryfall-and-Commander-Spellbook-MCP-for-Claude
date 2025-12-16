@@ -2,19 +2,26 @@
 MTG MCP Server
 ==============
 An MCP server that provides tools for querying Magic: The Gathering data
-from Scryfall (card database) and Commander Spellbook (combo database).
+from Scryfall (card database), Commander Spellbook (combo database),
+and the MTG Comprehensive Rules (via local RAG).
 
 This server enables Claude to help with:
 - Card lookups and searches using Scryfall's powerful syntax
 - Finding combos for Commander/EDH decks
 - Checking card rulings and legality
-- Estimating deck brackets based on combos
+- Answering rules questions using the Comprehensive Rules
+
+Setup:
+1. pip install -r requirements.txt
+2. python rules_ingestion.py  (to download and index the rules)
+3. Add to Claude Desktop config
 """
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List
 from enum import Enum
+from pathlib import Path
 import httpx
 import json
 import asyncio
@@ -34,6 +41,61 @@ SCRYFALL_HEADERS = {
     "User-Agent": "MTG-MCP-Server/1.0",
     "Accept": "application/json"
 }
+
+# Path to the rules database (created by rules_ingestion.py)
+RULES_DB_PATH = Path(__file__).parent / "mtg_rules_data"
+
+
+# =============================================================================
+# RULES DATABASE SETUP (Lazy Loading)
+# =============================================================================
+
+# We use lazy loading so the server starts fast even if the DB isn't ready
+_rules_collection = None
+
+def get_rules_collection():
+    """
+    Lazily loads the ChromaDB collection for rules search.
+    
+    Returns None if the database hasn't been created yet.
+    This allows the server to run even without the rules database.
+    """
+    global _rules_collection
+    
+    # Return cached collection if we already loaded it
+    if _rules_collection is not None:
+        return _rules_collection
+    
+    # Check if the database exists
+    if not RULES_DB_PATH.exists():
+        return None
+    
+    try:
+        # Import ChromaDB only when needed
+        import chromadb
+        from chromadb.utils import embedding_functions
+        
+        # Connect to the existing database
+        client = chromadb.PersistentClient(path=str(RULES_DB_PATH))
+        
+        # Set up the same embedding function used during ingestion
+        embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+        
+        # Get the collection
+        _rules_collection = client.get_collection(
+            name="mtg_comprehensive_rules",
+            embedding_function=embedding_func
+        )
+        
+        return _rules_collection
+        
+    except Exception as e:
+        # If anything goes wrong, just return None
+        # The tool will show an appropriate error message
+        print(f"Warning: Could not load rules database: {e}", flush=True)
+        return None
 
 
 # =============================================================================
@@ -305,7 +367,7 @@ class ScryfallSearchInput(BaseModel):
             "Search query using Scryfall syntax. Examples: "
             "'c:green t:creature pow>=5' (green creatures with 5+ power), "
             "'o:\"draw a card\" id:izzet' (Izzet cards with draw effects), "
-            "'t:legendary t:creature cid:simic' (Simic legendary creatures)"
+            "'t:legendary t:creature id:simic' (Simic legendary creatures)"
         ),
         min_length=1,
         max_length=500
@@ -483,6 +545,89 @@ class SpellbookGetComboInput(BaseModel):
     response_format: ResponseFormat = Field(
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+class SpellbookDecklistInput(BaseModel):
+    """
+    Input for finding combos in a decklist.
+    
+    Accepts either a URL to a deck or pasted card names.
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    decklist_url: Optional[str] = Field(
+        default=None,
+        description="URL to a decklist (Moxfield, Archidekt, Deckstats, TappedOut, etc.)"
+    )
+    
+    decklist_text: Optional[str] = Field(
+        default=None,
+        description="Pasted decklist - one card per line, quantity optional (e.g., '1 Sol Ring' or just 'Sol Ring')"
+    )
+    
+    limit: int = Field(
+        default=10,
+        description="Maximum number of combos to return (1-20)",
+        ge=1,
+        le=20
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+class SpellbookBracketInput(BaseModel):
+    """
+    Input for estimating a deck's Commander bracket (power level).
+    
+    Accepts either a URL to a deck or pasted card names.
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    decklist_url: Optional[str] = Field(
+        default=None,
+        description="URL to a decklist (Moxfield, Archidekt, Deckstats, TappedOut, etc.)"
+    )
+    
+    decklist_text: Optional[str] = Field(
+        default=None,
+        description="Pasted decklist - one card per line, quantity optional"
+    )
+    
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for readable text, 'json' for raw data"
+    )
+
+
+class RulesSearchInput(BaseModel):
+    """
+    Input for searching the MTG Comprehensive Rules.
+    
+    Uses semantic search to find relevant rules for your question.
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    query: str = Field(
+        ...,
+        description=(
+            "Your rules question in natural language. Examples: "
+            "'When can I cast instants?', "
+            "'How does summoning sickness work?', "
+            "'What happens when a creature has 0 toughness?'"
+        ),
+        min_length=3,
+        max_length=500
+    )
+    
+    num_results: int = Field(
+        default=5,
+        description="Number of relevant rules to return (1-15)",
+        ge=1,
+        le=15
     )
 
 
@@ -899,6 +1044,344 @@ async def spellbook_get_combo(params: SpellbookGetComboInput) -> str:
         return json.dumps(result, indent=2)
     
     return format_combo_markdown(result)
+
+
+@mcp.tool(
+    name="spellbook_find_combos_in_decklist",
+    annotations={
+        "title": "Find Combos in Decklist",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def spellbook_find_combos_in_decklist(params: SpellbookDecklistInput) -> str:
+    """
+    Find all combos present in a decklist.
+    
+    Can accept either a URL to a deck (Moxfield, Archidekt, etc.)
+    or a pasted list of card names.
+    
+    Args:
+        params (SpellbookDecklistInput): Parameters including:
+            - decklist_url (str): URL to a decklist
+            - decklist_text (str): Pasted card list
+            - limit (int): Max combos to return (1-20)
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: Combos found in the decklist
+    """
+    cards = []
+    
+    # Option 1: Get cards from a deck URL
+    if params.decklist_url:
+        result = await make_spellbook_post(
+            "/card-list-from-url/",
+            {"url": params.decklist_url}
+        )
+        
+        if result.get("error"):
+            return f"**Error:** Could not fetch decklist from URL. Make sure it's a valid Moxfield, Archidekt, or similar link."
+        
+        card_list = result.get("cards", [])
+        for card in card_list:
+            if isinstance(card, dict):
+                cards.append(card.get("name", card.get("card", "")))
+            else:
+                cards.append(str(card))
+    
+    # Option 2: Parse pasted decklist text
+    elif params.decklist_text:
+        result = await make_spellbook_post(
+            "/card-list-from-text/",
+            {"text": params.decklist_text}
+        )
+        
+        if result.get("error"):
+            return f"**Error:** Could not parse the decklist text."
+        
+        card_list = result.get("cards", [])
+        for card in card_list:
+            if isinstance(card, dict):
+                cards.append(card.get("name", card.get("card", "")))
+            else:
+                cards.append(str(card))
+    
+    else:
+        return "**Error:** Please provide either a decklist URL or pasted card list."
+    
+    if not cards:
+        return "**Error:** Couldn't extract any cards from that decklist."
+    
+    # Now find combos using the find-my-combos endpoint
+    result = await make_spellbook_post("/find-my-combos/", {"cards": cards})
+    
+    if result.get("error"):
+        return f"**Error:** {result.get('message', 'Could not analyze decklist')}"
+    
+    # The response contains 'results' with 'included' combos
+    results = result.get("results", {})
+    included = results.get("included", [])
+    almost = results.get("almost_included", [])
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps({
+            "cards_analyzed": len(cards),
+            "complete_combos": included[:params.limit],
+            "almost_complete": almost[:params.limit]
+        }, indent=2)
+    
+    if not included and not almost:
+        return f"**No combos found** in this deck ({len(cards)} cards analyzed)."
+    
+    lines = [f"**Analyzed {len(cards)} cards**\n"]
+    
+    # Show fully included combos first
+    if included:
+        lines.append(f"## Complete Combos ({len(included)} found)\n")
+        for combo in included[:params.limit]:
+            lines.append(format_combo_markdown(combo))
+            lines.append("\n---\n")
+    
+    # Show "almost" combos (missing 1 card)
+    remaining = params.limit - len(included)
+    if almost and remaining > 0:
+        lines.append(f"\n## Almost Complete (missing 1 card)\n")
+        for combo in almost[:remaining]:
+            # Get the missing card name
+            missing = combo.get("missing", [])
+            if missing:
+                missing_name = missing[0].get("card", {}).get("name", "Unknown")
+                lines.append(f"**Missing:** {missing_name}\n")
+            lines.append(format_combo_markdown(combo))
+            lines.append("\n---\n")
+    
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="spellbook_estimate_bracket",
+    annotations={
+        "title": "Estimate Commander Bracket",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def spellbook_estimate_bracket(params: SpellbookBracketInput) -> str:
+    """
+    Estimate the Commander bracket (power level 1-4) for a decklist.
+    
+    The bracket system is the official WotC Commander power level system:
+    - Bracket 1: Exhibition - Thematic/creative, 9+ turns, no MLD
+    - Bracket 2: Core - Unoptimized, social, no two-card infinites or game changers
+    - Bracket 3: Upgraded - Strong synergy, up to 3 game changers, 6+ turns
+    - Bracket 4: Optimized/cEDH - Anything goes, fast and lethal
+    
+    Args:
+        params (SpellbookBracketInput): Parameters including:
+            - decklist_url (str): URL to a decklist
+            - decklist_text (str): Pasted card list
+            - response_format (str): 'markdown' or 'json'
+    
+    Returns:
+        str: Bracket estimation with combo breakdown
+    """
+    cards = []
+    
+    # Option 1: Get cards from a deck URL
+    if params.decklist_url:
+        result = await make_spellbook_post(
+            "/card-list-from-url/",
+            {"url": params.decklist_url}
+        )
+        
+        if result.get("error"):
+            return f"**Error:** Could not fetch decklist from URL."
+        
+        card_list = result.get("cards", [])
+        for card in card_list:
+            if isinstance(card, dict):
+                cards.append(card.get("name", card.get("card", "")))
+            else:
+                cards.append(str(card))
+    
+    # Option 2: Parse pasted decklist text
+    elif params.decklist_text:
+        result = await make_spellbook_post(
+            "/card-list-from-text/",
+            {"text": params.decklist_text}
+        )
+        
+        if result.get("error"):
+            return f"**Error:** Could not parse the decklist text."
+        
+        card_list = result.get("cards", [])
+        for card in card_list:
+            if isinstance(card, dict):
+                cards.append(card.get("name", card.get("card", "")))
+            else:
+                cards.append(str(card))
+    
+    else:
+        return "**Error:** Please provide either a decklist URL or pasted card list."
+    
+    if not cards:
+        return "**Error:** Couldn't extract any cards from that decklist."
+    
+    # Call the bracket estimation endpoint
+    result = await make_spellbook_post("/estimate-bracket/", {"cards": cards})
+    
+    if result.get("error"):
+        return f"**Error:** {result.get('message', 'Could not estimate bracket')}"
+    
+    # Parse the response
+    bracket = result.get("bracket", "Unknown")
+    combos_by_bracket = result.get("combos_by_bracket", {})
+    two_card_combos = result.get("two_card_combos", [])
+    
+    # Format based on requested output
+    if params.response_format == ResponseFormat.JSON:
+        return json.dumps({
+            "bracket": bracket,
+            "cards_analyzed": len(cards),
+            "two_card_combos": two_card_combos,
+            "combos_by_bracket": combos_by_bracket
+        }, indent=2)
+    
+    # Bracket descriptions
+    bracket_desc = {
+        "1": "Exhibition - Thematic, creative, 9+ turns expected",
+        "2": "Core - Unoptimized, social, no two-card infinites",
+        "3": "Upgraded - Strong synergy, up to 3 game changers",
+        "4": "Optimized/cEDH - Lethal, consistent, anything goes"
+    }
+    
+    lines = [f"## Bracket Estimation: **{bracket}**"]
+    lines.append(f"*Cards analyzed: {len(cards)}*\n")
+    
+    bracket_num = str(bracket).split()[0] if bracket else "?"
+    if bracket_num in bracket_desc:
+        lines.append(f"**{bracket_desc[bracket_num]}**\n")
+    
+    # Show two-card combos (these heavily influence bracket)
+    if two_card_combos:
+        lines.append(f"### Two-Card Combos ({len(two_card_combos)} found)")
+        lines.append("*These have the biggest impact on bracket level*\n")
+        for combo in two_card_combos[:8]:
+            cards_in_combo = combo.get("uses", [])
+            card_names = [c.get("card", {}).get("name", "?") for c in cards_in_combo]
+            combo_bracket = combo.get("bracket", "?")
+            
+            produces = combo.get("produces", [])
+            results = [p.get("feature", {}).get("name", "") for p in produces[:2]]
+            results_str = f" → {', '.join(results)}" if results else ""
+            
+            lines.append(f"- **{' + '.join(card_names)}** (B{combo_bracket}){results_str}")
+        
+        if len(two_card_combos) > 8:
+            lines.append(f"\n*...and {len(two_card_combos) - 8} more two-card combos*")
+    
+    # Show combo count by bracket
+    if combos_by_bracket:
+        lines.append("\n### All Combos by Bracket Level")
+        for b_level, combos in sorted(combos_by_bracket.items()):
+            count = len(combos) if isinstance(combos, list) else combos
+            lines.append(f"- Bracket {b_level}: {count} combos")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
+# COMPREHENSIVE RULES TOOL
+# =============================================================================
+
+@mcp.tool(
+    name="mtg_rules_search",
+    annotations={
+        "title": "Search MTG Comprehensive Rules",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False  # Local database, not external
+    }
+)
+async def mtg_rules_search(params: RulesSearchInput) -> str:
+    """
+    Search the MTG Comprehensive Rules using semantic search.
+    
+    This tool finds relevant rules from the official Comprehensive Rules
+    document based on your question. Great for understanding game mechanics,
+    resolving disputes, and learning edge cases.
+    
+    The search uses AI embeddings to find semantically relevant rules,
+    not just keyword matching. Ask questions in natural language!
+    
+    Args:
+        params (RulesSearchInput): Search parameters including:
+            - query (str): Your rules question in natural language
+            - num_results (int): Number of rules to return (1-15)
+    
+    Returns:
+        str: Relevant rules with their rule numbers
+    
+    Note: Run rules_ingestion.py first to download and index the rules.
+    """
+    # Try to get the rules collection
+    collection = get_rules_collection()
+    
+    # If no database, provide helpful error message
+    if collection is None:
+        return (
+            "**Rules database not found.**\n\n"
+            "To use this tool, you need to run the ingestion script first:\n"
+            "```\n"
+            "python rules_ingestion.py\n"
+            "```\n"
+            "This will download the Comprehensive Rules and create the search index."
+        )
+    
+    try:
+        # Query the collection for relevant rules
+        # ChromaDB will convert the query to an embedding and find similar rules
+        results = collection.query(
+            query_texts=[params.query],
+            n_results=params.num_results
+        )
+        
+        # Extract the results
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
+        
+        if not documents:
+            return f"**No relevant rules found for:** {params.query}\n\nTry rephrasing your question."
+        
+        # Format the results
+        lines = [f"**Relevant rules for:** {params.query}\n"]
+        
+        for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances), 1):
+            rule_number = meta.get("rule_number", "Unknown")
+            
+            # Convert distance to a simple relevance indicator
+            # Lower distance = more relevant
+            # ChromaDB uses L2 distance by default
+            relevance = "●●●" if dist < 0.5 else "●●○" if dist < 1.0 else "●○○"
+            
+            lines.append(f"### {rule_number} {relevance}")
+            lines.append(f"{doc}\n")
+        
+        lines.append("---")
+        lines.append("*Relevance: ●●● = High, ●●○ = Medium, ●○○ = Lower*")
+        
+        return "\n".join(lines)
+        
+    except Exception as e:
+        return f"**Error searching rules:** {str(e)}"
 
 
 # =============================================================================
