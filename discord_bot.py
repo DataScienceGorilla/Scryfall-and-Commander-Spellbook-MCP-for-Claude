@@ -117,9 +117,11 @@ Key bracket factors:
 IMPORTANT - When answering rules questions:
 1. ALWAYS search the rules with mtg_rules_search first
 2. Look up any specific cards mentioned with scryfall_get_card to see exact oracle text
-3. As elements on the stack resolve, make sure to consider state-based actions and triggers, as they change over time
-4. Check scryfall_get_rulings for official clarifications on those cards
-5. Cite rule numbers in your answer when possible
+3. As elements on the stack resolve, make sure to consider state-based actions, turn based actions, and triggers, as they change over time
+4. Some triggers can only occur during specific phases or steps of a turn, like attack triggers requiring declared attackers (508.3a), check those are valid triggers
+5. Take your time analyzing timings and interactions carefully, it matters exactly when things happen
+6. Check scryfall_get_rulings for official clarifications on those cards, put weight behind ALL official rulings, even if they dont seem relevant at first.
+7. Cite rule numbers in your answer when possible
 
 KEY MTG RULES PRINCIPLES (use these to verify your answers):
 - Abilities on the stack exist independently of their source (killing a creature doesn't counter its ability)
@@ -141,6 +143,7 @@ When showing card info, focus on the most relevant details.
 """
 
 
+
 # =============================================================================
 # API CLIENTS AND SETUP
 # =============================================================================
@@ -160,14 +163,16 @@ claude_client = anthropic.Anthropic()
 
 # Rules database (lazy loaded)
 _rules_collection = None
+_rules_loading = False  # Prevents multiple simultaneous loads
 
 
-def get_rules_collection():
-    """Lazily loads the ChromaDB collection for rules search."""
+def _load_rules_collection_sync():
+    """
+    Synchronous function to load the rules collection.
+    This is slow (~10-20s first time) because it imports heavy libraries.
+    Should be run in a thread pool to avoid blocking the event loop.
+    """
     global _rules_collection
-    
-    if _rules_collection is not None:
-        return _rules_collection
     
     if not RULES_DB_PATH.exists():
         return None
@@ -188,6 +193,48 @@ def get_rules_collection():
     except Exception as e:
         print(f"Warning: Could not load rules database: {e}")
         return None
+
+
+async def get_rules_collection_async():
+    """
+    Asynchronously loads the ChromaDB collection for rules search.
+    Runs the heavy import/load in a thread pool to avoid blocking Discord's heartbeat.
+    """
+    global _rules_collection, _rules_loading
+    
+    # Return cached collection if already loaded
+    if _rules_collection is not None:
+        return _rules_collection
+    
+    # Check if database exists before trying to load
+    if not RULES_DB_PATH.exists():
+        return None
+    
+    # Prevent multiple simultaneous loads
+    if _rules_loading:
+        # Wait for the other load to finish
+        while _rules_loading and _rules_collection is None:
+            await asyncio.sleep(0.5)
+        return _rules_collection
+    
+    _rules_loading = True
+    
+    try:
+        # Run the blocking load in a thread pool
+        # This prevents it from blocking Discord's heartbeat
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _load_rules_collection_sync)
+        return _rules_collection
+    finally:
+        _rules_loading = False
+
+
+def get_rules_collection():
+    """
+    Synchronous getter - only use if collection is already loaded.
+    Returns None if not yet loaded (caller should use async version).
+    """
+    return _rules_collection
 
 
 # =============================================================================
@@ -231,13 +278,13 @@ TOOLS = [
     },
     {
         "name": "scryfall_get_rulings",
-        "description": "Get official rulings and clarifications for a specific card from Wizards of the Coast.",
+        "description": "Get official rulings for a specific card OR keyword ability. If you pass a keyword like 'myriad', 'cascade', 'mobilize', etc., it will find a card with that keyword and return relevant rulings.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "card_name": {
                     "type": "string",
-                    "description": "Name of the card to get rulings for"
+                    "description": "Name of the card OR keyword ability to get rulings for (e.g., 'Lightning Bolt' or 'myriad')"
                 }
             },
             "required": ["card_name"]
@@ -433,10 +480,111 @@ async def scryfall_get_card(name: str) -> str:
 
 
 async def scryfall_get_rulings(card_name: str) -> str:
-    """Get rulings for a card."""
+    """Get rulings for a card. Also handles keyword ability lookups."""
+    
+    # Common MTG keywords that people might search rulings for
+    # If they search for a keyword, we'll find a card with it and get those rulings
+    KEYWORDS = [
+        "myriad", "mobilize", "cascade", "annihilator", "afflict", "aftermath",
+        "amass", "amplify", "annihilator", "ascend", "aura swap", "awaken",
+        "backup", "banding", "bargain", "battalion", "battle cry", "bestow",
+        "blitz", "bloodrush", "bloodthirst", "boast", "bushido", "buyback",
+        "casualty", "celebration", "champion", "changeling", "channel", "choose a background",
+        "cipher", "clash", "cleave", "companion", "compleated", "connive",
+        "conspire", "convoke", "corrupted", "council's dilemma", "coup de grâce",
+        "craft", "crew", "cumulative upkeep", "cycling", "dash", "daybound",
+        "deathtouch", "decayed", "defender", "delve", "detain", "devoid",
+        "devour", "disguise", "disturb", "doctor's companion", "domain",
+        "double strike", "dredge", "echo", "embalm", "emerge", "eminence",
+        "enchant", "encore", "enlist", "enrage", "entwine", "escalate",
+        "escape", "eternalize", "evoke", "evolve", "exalted", "excess damage",
+        "exploit", "explore", "extort", "fabricate", "fading", "fateful hour",
+        "fathomless descent", "fear", "ferocious", "fight", "first strike",
+        "flanking", "flash", "flashback", "flying", "food", "for mirrodin!",
+        "forecast", "foretell", "formidable", "friends forever", "fuse",
+        "goad", "graft", "gravestorm", "graveyard hate", "haste", "haunt",
+        "hellbent", "heroic", "hexproof", "hidden agenda", "hideaway",
+        "horsemanship", "improvise", "incubate", "indestructible", "infect",
+        "initiative", "inspired", "intensity", "intimidate", "investigate",
+        "jump-start", "kicker", "landfall", "landwalk", "learn", "level up",
+        "lifelink", "living weapon", "madness", "magecraft", "manifest",
+        "meld", "melee", "menace", "mentor", "metalcraft", "mill", "miracle",
+        "modular", "monstrosity", "morbid", "morph", "mutate", "ninjutsu",
+        "offering", "offspring", "outlast", "overload", "pack tactics", "paradox",
+        "parley", "partner", "persist", "phasing", "pilot", "plainscycling",
+        "plot", "populate", "proliferate", "protection", "provoke", "prowess",
+        "prowl", "radiance", "raid", "rampage", "ravenous", "reach", "rebound",
+        "reconfigure", "recover", "reinforce", "renown", "replicate", "retrace",
+        "revolt", "riot", "saddle", "scavenge", "scry", "shadow", "shroud",
+        "skulk", "soulbond", "soulshift", "spectacle", "spell mastery",
+        "splice", "split second", "squad", "storm", "strive", "sunburst",
+        "support", "surge", "surveil", "suspend", "swampcycling", "threshold",
+        "totem armor", "toxic", "trample", "training", "transfigure", "transform",
+        "transmute", "treasure", "tribute", "undaunted", "undying", "unearth",
+        "unleash", "vanishing", "vigilance", "ward", "wither"
+    ]
+    
+    search_term = card_name.lower().strip()
+    is_keyword = search_term in KEYWORDS
+    
     async with httpx.AsyncClient() as client:
         try:
-            # First get the card to find its ID
+            # If it's a keyword, search for a card with that keyword first
+            if is_keyword:
+                # Search for a card with this keyword in its oracle text
+                # Prefer cards that have the keyword as a main mechanic
+                search_response = await client.get(
+                    f"{SCRYFALL_API}/cards/search",
+                    params={"q": f"o:{search_term}", "order": "edhrec"},
+                    headers=SCRYFALL_HEADERS,
+                    timeout=30.0
+                )
+                
+                if search_response.status_code == 200:
+                    search_data = search_response.json()
+                    cards = search_data.get("data", [])
+                    
+                    if cards:
+                        # Use the first (most popular) card with this keyword
+                        card = cards[0]
+                        card_id = card.get("id")
+                        actual_name = card.get("name")
+                        
+                        # Get rulings for this card
+                        response = await client.get(
+                            f"{SCRYFALL_API}/cards/{card_id}/rulings",
+                            headers=SCRYFALL_HEADERS,
+                            timeout=30.0
+                        )
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        rulings = data.get("data", [])
+                        if not rulings:
+                            return f"No rulings found for the keyword '{search_term}' (searched via {actual_name})."
+                        
+                        # Filter to rulings that mention the keyword
+                        keyword_rulings = [r for r in rulings if search_term in r.get("comment", "").lower()]
+                        
+                        # If we found keyword-specific rulings, show those; otherwise show all
+                        rulings_to_show = keyword_rulings if keyword_rulings else rulings
+                        
+                        lines = [f"Rulings for **{search_term}** (via {actual_name}):"]
+                        for ruling in rulings_to_show[:8]:  # Limit for Discord
+                            comment = ruling.get("comment", "")
+                            lines.append(f"• {comment}")
+                        
+                        if len(rulings_to_show) > 8:
+                            lines.append(f"*...and {len(rulings_to_show) - 8} more rulings*")
+                        
+                        return "\n".join(lines)
+                    else:
+                        return f"Could not find any cards with the keyword '{search_term}'."
+                else:
+                    # Fall through to regular card lookup
+                    pass
+            
+            # Regular card lookup (not a keyword)
             response = await client.get(
                 f"{SCRYFALL_API}/cards/named",
                 params={"fuzzy": card_name},
@@ -462,12 +610,19 @@ async def scryfall_get_rulings(card_name: str) -> str:
                 return f"No rulings found for {actual_name}."
             
             lines = [f"Rulings for **{actual_name}**:"]
-            for ruling in rulings[:5]:  # Limit to 5 for Discord
+            for ruling in rulings[:8]:  # Limit to 8 for Discord
                 comment = ruling.get("comment", "")
                 lines.append(f"• {comment}")
             
+            if len(rulings) > 8:
+                lines.append(f"*...and {len(rulings) - 8} more rulings*")
+            
             return "\n".join(lines)
             
+        except httpx.HTTPStatusError:
+            if is_keyword:
+                return f"Could not find rulings for the keyword '{search_term}'. Try searching for a specific card with this ability."
+            return f"Could not find card: {card_name}"
         except Exception as e:
             return f"Error getting rulings: {str(e)}"
 
@@ -640,16 +795,23 @@ async def spellbook_find_combos_in_decklist(
 
 async def mtg_rules_search(query: str, num_results: int = 5) -> str:
     """Search the Comprehensive Rules."""
-    collection = get_rules_collection()
+    # Use async loader to avoid blocking the event loop
+    collection = await get_rules_collection_async()
     
     if collection is None:
         return "Rules database not available. Run rules_ingestion.py to set it up."
     
     try:
-        results = collection.query(
-            query_texts=[query],
-            n_results=num_results
-        )
+        # Run the query in a thread pool too, since ChromaDB can be slow
+        loop = asyncio.get_event_loop()
+        
+        def do_query():
+            return collection.query(
+                query_texts=[query],
+                n_results=num_results
+            )
+        
+        results = await loop.run_in_executor(None, do_query)
         
         documents = results.get("documents", [[]])[0]
         metadatas = results.get("metadatas", [[]])[0]
@@ -881,6 +1043,24 @@ async def on_ready():
     """Called when the bot successfully connects to Discord."""
     print(f"Bot is ready! Logged in as {bot.user}")
     print(f"Invite URL: https://discord.com/api/oauth2/authorize?client_id={bot.user.id}&permissions=274877908992&scope=bot")
+    
+    # Pre-load the rules database in the background
+    # This prevents the first rules query from blocking for 10-20 seconds
+    if RULES_DB_PATH.exists():
+        print("Pre-loading rules database in background...")
+        asyncio.create_task(preload_rules_database())
+
+
+async def preload_rules_database():
+    """Background task to pre-load the rules database on startup."""
+    try:
+        collection = await get_rules_collection_async()
+        if collection:
+            print("Rules database loaded successfully!")
+        else:
+            print("Rules database not found or failed to load.")
+    except Exception as e:
+        print(f"Error pre-loading rules database: {e}")
 
 
 @bot.event

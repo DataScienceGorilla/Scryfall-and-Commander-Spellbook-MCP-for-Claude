@@ -802,7 +802,7 @@ async def scryfall_random_card(params: ScryfallRandomInput) -> str:
 @mcp.tool(
     name="scryfall_get_rulings",
     annotations={
-        "title": "Get MTG Card Rulings",
+        "title": "Get MTG Card or Keyword Rulings",
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
@@ -811,19 +811,116 @@ async def scryfall_random_card(params: ScryfallRandomInput) -> str:
 )
 async def scryfall_get_rulings(params: ScryfallRulingsInput) -> str:
     """
-    Get official rulings for a Magic: The Gathering card.
+    Get official rulings for a Magic: The Gathering card or keyword ability.
     
     Rulings are official clarifications from Wizards of the Coast about
     how a card works. Useful for understanding complex interactions.
     
+    If you pass a keyword ability name (like "myriad", "cascade", "mobilize"),
+    this will automatically find a card with that keyword and return relevant rulings.
+    
     Args:
         params (ScryfallRulingsInput): Parameters including:
-            - card_name (str): Name of the card to get rulings for
+            - card_name (str): Name of the card OR keyword ability to get rulings for
     
     Returns:
         str: List of rulings with dates
     """
-    # First, we need to get the card to find its Scryfall ID
+    # Common MTG keywords that people might search rulings for
+    # If they search for a keyword, we'll find a card with it and get those rulings
+    KEYWORDS = {
+        "myriad", "mobilize", "cascade", "annihilator", "afflict", "aftermath",
+        "amass", "amplify", "ascend", "aura swap", "awaken", "backup", "banding",
+        "bargain", "battalion", "battle cry", "bestow", "blitz", "bloodrush",
+        "bloodthirst", "boast", "bushido", "buyback", "casualty", "celebration",
+        "champion", "changeling", "channel", "choose a background", "cipher",
+        "clash", "cleave", "companion", "compleated", "connive", "conspire",
+        "convoke", "corrupted", "council's dilemma", "coup de grâce", "craft",
+        "crew", "cumulative upkeep", "cycling", "dash", "daybound", "deathtouch",
+        "decayed", "defender", "delve", "detain", "devoid", "devour", "disguise",
+        "disturb", "doctor's companion", "domain", "double strike", "dredge",
+        "echo", "embalm", "emerge", "eminence", "enchant", "encore", "enlist",
+        "enrage", "entwine", "escalate", "escape", "eternalize", "evoke", "evolve",
+        "exalted", "exploit", "explore", "extort", "fabricate", "fading",
+        "fateful hour", "fathomless descent", "fear", "ferocious", "fight",
+        "first strike", "flanking", "flash", "flashback", "flying", "food",
+        "for mirrodin!", "forecast", "foretell", "formidable", "friends forever",
+        "fuse", "goad", "graft", "gravestorm", "haste", "haunt", "hellbent",
+        "heroic", "hexproof", "hidden agenda", "hideaway", "horsemanship",
+        "improvise", "incubate", "indestructible", "infect", "initiative",
+        "inspired", "intensity", "intimidate", "investigate", "jump-start",
+        "kicker", "landfall", "landwalk", "learn", "level up", "lifelink",
+        "living weapon", "madness", "magecraft", "manifest", "meld", "melee",
+        "menace", "mentor", "metalcraft", "mill", "miracle", "modular",
+        "monstrosity", "morbid", "morph", "mutate", "ninjutsu", "offering",
+        "offspring", "outlast", "overload", "pack tactics", "paradox", "parley",
+        "partner", "persist", "phasing", "pilot", "plot", "populate",
+        "proliferate", "protection", "provoke", "prowess", "prowl", "radiance",
+        "raid", "rampage", "ravenous", "reach", "rebound", "reconfigure",
+        "recover", "reinforce", "renown", "replicate", "retrace", "revolt",
+        "riot", "saddle", "scavenge", "scry", "shadow", "shroud", "skulk",
+        "soulbond", "soulshift", "spectacle", "spell mastery", "splice",
+        "split second", "squad", "storm", "strive", "sunburst", "support",
+        "surge", "surveil", "suspend", "threshold", "totem armor", "toxic",
+        "trample", "training", "transfigure", "transform", "transmute",
+        "treasure", "tribute", "undaunted", "undying", "unearth", "unleash",
+        "vanishing", "vigilance", "ward", "wither"
+    }
+    
+    search_term = params.card_name.lower().strip()
+    is_keyword = search_term in KEYWORDS
+    
+    # If it's a keyword, search for a card with that keyword first
+    if is_keyword:
+        # Search for a card with this keyword in its oracle text
+        search_result = await make_scryfall_request(
+            "/cards/search",
+            {"q": f"o:{search_term}", "order": "edhrec"}
+        )
+        
+        if not search_result.get("error"):
+            cards = search_result.get("data", [])
+            
+            if cards:
+                # Use the first (most popular) card with this keyword
+                card = cards[0]
+                card_id = card.get("id")
+                actual_name = card.get("name")
+                
+                # Get rulings for this card
+                rulings_result = await make_scryfall_request(f"/cards/{card_id}/rulings")
+                
+                if rulings_result.get("error"):
+                    return f"**Error:** Could not get rulings for '{search_term}'"
+                
+                rulings = rulings_result.get("data", [])
+                
+                if not rulings:
+                    return f"**No rulings found for the keyword '{search_term}'** (searched via {actual_name})."
+                
+                # Filter to rulings that mention the keyword (most relevant)
+                keyword_rulings = [r for r in rulings if search_term in r.get("comment", "").lower()]
+                
+                # If we found keyword-specific rulings, prioritize those
+                rulings_to_show = keyword_rulings if keyword_rulings else rulings
+                
+                lines = [f"## Rulings for '{search_term}' keyword (via {actual_name})\n"]
+                
+                for ruling in rulings_to_show:
+                    date = ruling.get("published_at", "Unknown date")
+                    comment = ruling.get("comment", "")
+                    source = ruling.get("source", "wotc")
+                    source_label = "Wizards of the Coast" if source == "wotc" else source.upper()
+                    
+                    lines.append(f"**{date}** ({source_label})")
+                    lines.append(f"> {comment}\n")
+                
+                return "\n".join(lines)
+        
+        # If keyword search failed, return helpful message
+        return f"**Error:** Could not find rulings for the keyword '{search_term}'. Try searching for a specific card with this ability."
+    
+    # Regular card lookup (not a keyword)
     card_result = await make_scryfall_request("/cards/named", {"fuzzy": params.card_name})
     
     if card_result.get("error"):
