@@ -139,15 +139,36 @@ Key bracket factors:
 - Combo piece count and combo speed matter
 - Fast mana (Mana Crypt, Mox Diamond, etc.) raises bracket
 
-IMPORTANT - When answering rules questions:
-1. Look up any specific cards mentioned with scryfall_get_card to see exact oracle text first
-2. Follow up by searching the rules with mtg_rules_search first
-3. Consider if a line of play requires an impossible game state, like a creature existing with 0 or less toughness, or negative life total without a replacement effect
-4. Ensure targets are legal for effects, for instance you cannot equip a creature with zero toughness as it dies before becoming targetable
-5. Some triggers can only occur during specific phases or steps of a turn, like attack triggers requiring declared attackers (508.3a), check those are valid triggers
-6. Take your time analyzing timings and interactions carefully, it matters exactly when things happen
-7. Check scryfall_get_rulings for official clarifications on those cards, put weight behind ALL official rulings, even if they dont seem relevant at first
-8. Cite rule numbers in your answer when possible
+CRITICAL Layers rules for continuous effects:
+The order in which you apply the layers is as follows.
+
+1. Copy Effects
+Copy effects like Clone or Mirrorweave.
+
+2. Control-changing Effects
+Control changing effects like Agent of Treachery or Control Magic.
+
+3. Text-changing Effects
+Text changing effects like Sleight of Mind or the overload mechanic (see Mizzium Mortars).
+
+4. Type-changing Effects
+Type changing effects like Blood Moon or Arcane Adaptation.
+
+5. Color-changing Effects
+Color changing effects like Snakeform or Painter's Servant.
+
+6. Effects that Add or Remove Abilities
+Effects that add or remove abilities like Humility or Akroma's Memorial.
+
+7. Effects That Change Power or Toughness
+There are a lot of different kinds and they're applied in the following order:
+
+a) Characteristic-defining abilities (also known as CDAs) like those on Tarmogoyf or Necrogoyf. Basically any ability that determines the value of a * on that creature's power/toughness.
+b) Effects that set “base” power and toughness like Ensoul Artifact or Witness Protection.
+c) Effects and counters that modify power and/or toughness like Giant Growth, Dead Weight or +1/+1 or -1/-1 counters.
+d) Effects that switch power and toughness like Inside Out or Twisted Image.
+
+NOTE: Two continuous effects in the same layer are applied in timestamp order.
 
 CRITICAL SBA handling:
 State based actions DO NOT go on the stack and must be checked after EACH object resolves on the stack.
@@ -162,7 +183,6 @@ KEY MTG RULES PRINCIPLES (use these to verify your answers):
 - Colorless is NOT a color - cards can't "share a color" if they're both colorless
 - Summoning sickness checks if YOU'VE controlled the creature since your turn began, not when it ETB'd
 - Replacement effects modify events as they happen - they don't use the stack
-- State-based actions don't use the stack and can't be responded to
 - "As [this] enters" and "enters with" are replacement effects, not triggered abilities
 - Activated abilities are written as "[cost]: [effect]" - the colon is the giveaway
 - Triggered abilities start with "when", "whenever", or "at"
@@ -170,6 +190,25 @@ KEY MTG RULES PRINCIPLES (use these to verify your answers):
 - The stack resolves top-down, but state-based actions are checked after EACH object resolves
 - Equip effects are sorcery speed unless otherwise specified, and go on the stack
 - "Target" is a magic word - if a spell/ability doesn't say "target", it doesn't target
+
+IMPORTANT - When answering rules questions:
+1. Look up any specific cards mentioned with scryfall_get_card to see exact oracle text first
+2. Follow up by searching the rules with mtg_rules_search first
+3. Consider if a line of play requires an impossible game state, like a creature existing with 0 or less toughness, or negative life total without a replacement effect
+4. Ensure targets are legal for effects, for instance you cannot equip a creature with zero toughness as it dies before becoming targetable
+5. Some triggers can only occur during specific phases or steps of a turn, like attack triggers requiring declared attackers (508.3a), check those are valid triggers
+6. Take your time analyzing timings and interactions carefully, it matters exactly when things happen
+7. Check scryfall_get_rulings for official clarifications on those cards, put weight behind ALL official rulings, even if they dont seem relevant at first
+8. Cite rule numbers in your answer when possible
+
+Format your response as:
+<analysis>
+[Think through the rules, interactions, and edge cases here]
+</analysis>
+
+<ruling>
+[Final answer only]
+</ruling>
 
 
 Keep responses concise since this is Discord - aim for under 2000 characters.
@@ -481,30 +520,59 @@ async def scryfall_get_card(name: str) -> str:
             response.raise_for_status()
             card = response.json()
             
-            # Format card info for Discord
             lines = []
-            card_name = card.get("name", "Unknown")
-            mana_cost = card.get("mana_cost", "")
-            lines.append(f"**{card_name}** {mana_cost}")
             
-            type_line = card.get("type_line", "")
-            if type_line:
-                lines.append(f"*{type_line}*")
+            # Check if this is a dual-faced card (DFC)
+            # DFCs have a "card_faces" array instead of top-level oracle_text, mana_cost, etc.
+            if "card_faces" in card:
+                # Process each face of the card separately
+                for i, face in enumerate(card["card_faces"]):
+                    if i > 0:
+                        lines.append("\n---\n")  # Separator between faces
+                    
+                    # Get face-specific attributes
+                    face_name = face.get("name", "Unknown")
+                    mana_cost = face.get("mana_cost", "")
+                    lines.append(f"**{face_name}** {mana_cost}")
+                    
+                    type_line = face.get("type_line", "")
+                    if type_line:
+                        lines.append(f"*{type_line}*")
+                    
+                    oracle_text = face.get("oracle_text", "")
+                    if oracle_text:
+                        lines.append(oracle_text)
+                    
+                    # Power/toughness (for creature faces)
+                    power = face.get("power")
+                    toughness = face.get("toughness")
+                    if power and toughness:
+                        lines.append(f"**{power}/{toughness}**")
             
-            oracle_text = card.get("oracle_text", "")
-            if oracle_text:
-                lines.append(oracle_text)
+            else:
+                # Single-faced card - use the original logic
+                card_name = card.get("name", "Unknown")
+                mana_cost = card.get("mana_cost", "")
+                lines.append(f"**{card_name}** {mana_cost}")
+                
+                type_line = card.get("type_line", "")
+                if type_line:
+                    lines.append(f"*{type_line}*")
+                
+                oracle_text = card.get("oracle_text", "")
+                if oracle_text:
+                    lines.append(oracle_text)
+                
+                power = card.get("power")
+                toughness = card.get("toughness")
+                if power and toughness:
+                    lines.append(f"**{power}/{toughness}**")
             
-            power = card.get("power")
-            toughness = card.get("toughness")
-            if power and toughness:
-                lines.append(f"**{power}/{toughness}**")
-            
-            # Price
+            # Price is always at the top level (same for DFCs and normal cards)
             prices = card.get("prices", {})
             usd = prices.get("usd")
             if usd:
-                lines.append(f"Price: ${usd}")
+                lines.append(f"\nPrice: ${usd}")
             
             return "\n".join(lines)
             
