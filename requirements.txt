@@ -1,4 +1,5 @@
 # MTG MCP Server Dependencies
+# Python 3.12 compatible versions
 # Install with: pip install -r requirements.txt
 
 # MCP SDK - provides FastMCP framework
@@ -10,7 +11,8 @@ httpx>=0.24.0
 # Data validation (comes with MCP, but listed for clarity)
 pydantic>=2.0.0
 
-chromadb>=0.4.0
+# ChromaDB with Python 3.12 support
+chromadb>=0.5.0
 
 sentence-transformers>=2.4.0
 
@@ -20,4 +22,4 @@ discord.py>=2.3.0
 # Claude API client
 anthropic>=0.39.0
 
-dotenv>=0.9.0
+python-dotenv>=1.0.0
