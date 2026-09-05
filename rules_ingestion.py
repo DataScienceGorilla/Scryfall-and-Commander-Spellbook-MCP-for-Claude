@@ -18,6 +18,8 @@ Run this whenever you want to update to the latest rules.
 
 import re
 import os
+import sys
+import argparse
 import httpx
 import chromadb
 from chromadb.utils import embedding_functions
@@ -27,13 +29,22 @@ from pathlib import Path
 # CONFIGURATION
 # =============================================================================
 
-# URL to the Comprehensive Rules TXT file
-# Update this URL when new rules are released
-RULES_URL = "https://media.wizards.com/2025/downloads/MagicCompRules%2020251114.txt"
+# Official page that lists the current rules downloads. The script scrapes this
+# to auto-discover the latest Comprehensive Rules URL, so it stays current on its
+# own as new sets are released.
+RULES_PAGE_URL = "https://magic.wizards.com/en/rules"
+
+# Fallback URL used only if auto-discovery fails (e.g. the page layout changed
+# or there's no network). Bump the date here as a manual safety net.
+FALLBACK_RULES_URL = "https://media.wizards.com/2026/downloads/MagicCompRules%2020260819.txt"
 
 # Directory to store the ChromaDB database
 # This will be created next to the script
 DATA_DIR = Path(__file__).parent / "mtg_rules_data"
+
+# Tracks which rules version (YYYYMMDD) is currently ingested, so re-runs can
+# skip the work when nothing has changed.
+VERSION_FILE = DATA_DIR / "version.txt"
 
 # ChromaDB collection name
 COLLECTION_NAME = "mtg_comprehensive_rules"
@@ -46,6 +57,56 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 # =============================================================================
 # RULES PARSING
 # =============================================================================
+
+def version_from_url(url: str) -> str:
+    """Pulls the YYYYMMDD version stamp out of a rules URL, or 'unknown'."""
+    match = re.search(r'(\d{8})\.txt', url)
+    return match.group(1) if match else "unknown"
+
+
+def discover_latest_url() -> tuple[str, str] | None:
+    """
+    Scrapes the official rules page for the latest Comprehensive Rules TXT link.
+
+    Returns (url, version_date) on success, or None if the link can't be found
+    (in which case the caller should fall back to FALLBACK_RULES_URL).
+    """
+    headers = {"User-Agent": "MTG-MCP-RulesIngestion/1.0"}
+    try:
+        resp = httpx.get(RULES_PAGE_URL, headers=headers, follow_redirects=True, timeout=60.0)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"Auto-discovery failed to reach {RULES_PAGE_URL}: {e}")
+        return None
+
+    # Links look like .../MagicCompRules 20260819.txt — the space may be encoded
+    # as %20, a '+', or a literal space depending on the page.
+    match = re.search(
+        r'https://media\.wizards\.com/(\d{4})/downloads/MagicCompRules(?:%20|\+|\s)*(\d{8})\.txt',
+        resp.text,
+    )
+    if not match:
+        print("Auto-discovery: no Comprehensive Rules TXT link found on the page.")
+        return None
+
+    year, date = match.group(1), match.group(2)
+    url = f"https://media.wizards.com/{year}/downloads/MagicCompRules%20{date}.txt"
+    return url, date
+
+
+def read_installed_version() -> str | None:
+    """Returns the version stamp of the currently ingested rules, if any."""
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+
+
+def write_installed_version(version: str) -> None:
+    """Records the version stamp of the rules we just ingested."""
+    VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    VERSION_FILE.write_text(version, encoding="utf-8")
+
 
 def download_rules(url: str) -> str:
     """
@@ -76,7 +137,7 @@ def parse_rules(content: str) -> list[dict]:
     - rule_number: The rule identifier (e.g., "704.5k", "302.6")
     - text: The full text of the rule (with section context prepended)
     - section: The major section number (e.g., "7" for state-based actions)
-    
+
     The chunking strategy:
     - Each numbered rule becomes its own chunk
     - Subrules (like 704.5a, 704.5b) are kept as separate chunks
@@ -94,7 +155,7 @@ def parse_rules(content: str) -> list[dict]:
         section_num = match.group(1)
         section_name = match.group(2).strip()
         section_headers[section_num] = section_name
-    
+
     # Pattern to match rule numbers like "100.1", "704.5k", "702.16a"
     # Rule numbers start at the beginning of a line
     rule_pattern = re.compile(
@@ -124,7 +185,7 @@ def parse_rules(content: str) -> list[dict]:
             contextualized_text = f"{section_name} ({section}): {rule_text}"
         else:
             contextualized_text = rule_text
-        
+
         chunks.append({
             "rule_number": rule_number,
             "text": contextualized_text,
@@ -245,24 +306,52 @@ def create_database(chunks: list[dict], data_dir: Path):
 # MAIN
 # =============================================================================
 
-def main():
+def main(force: bool = False, url_override: str | None = None):
     """
-    Main entry point - downloads rules, parses them, and creates the database.
+    Main entry point - discovers the latest rules, and (re)builds the database
+    if a newer version is available.
+
+    Args:
+        force: Re-ingest even if the installed version already matches.
+        url_override: Ingest this exact URL instead of auto-discovering.
     """
     print("=" * 60)
     print("MTG Comprehensive Rules Ingestion")
     print("=" * 60)
     print()
-    
+
+    # Step 0: Figure out which rules version we should have
+    if url_override:
+        url = url_override
+        version = version_from_url(url)
+        print(f"Using provided URL (version {version}).")
+    else:
+        discovered = discover_latest_url()
+        if discovered:
+            url, version = discovered
+            print(f"Latest published rules: {version}")
+        else:
+            url = FALLBACK_RULES_URL
+            version = version_from_url(url)
+            print(f"Falling back to pinned URL (version {version}).")
+
+    installed = read_installed_version()
+    print(f"Currently ingested:     {installed or 'none'}")
+
+    if installed == version and version != "unknown" and not force:
+        print("\nAlready up to date. Nothing to do.")
+        print("(Run with --force to rebuild anyway.)")
+        return
+
     # Step 1: Download the rules
     try:
-        content = download_rules(RULES_URL)
+        content = download_rules(url)
     except Exception as e:
         print(f"Error downloading rules: {e}")
         print("\nYou can manually download the rules from:")
         print("https://magic.wizards.com/en/rules")
         print("\nThen save as 'MagicCompRules.txt' in this directory")
-        
+
         # Try to load from local file as fallback
         local_file = Path(__file__).parent / "MagicCompRules.txt"
         if local_file.exists():
@@ -270,7 +359,7 @@ def main():
             content = local_file.read_text(encoding='utf-8')
         else:
             return
-    
+
     # Step 2: Parse into chunks
     chunks = parse_rules(content)
     
@@ -291,13 +380,29 @@ def main():
     # Step 3: Create the database
     print()
     create_database(chunks, DATA_DIR)
-    
+
+    # Step 4: Record which version we just ingested
+    write_installed_version(version)
+
     print()
     print("=" * 60)
-    print("Done! The rules database is ready to use.")
+    print(f"Done! Rules database is ready (version {version}).")
     print("You can now use the mtg_rules_search tool in the MCP server.")
+    print("Restart the MCP server so it picks up the fresh database.")
     print("=" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Download and index the MTG Comprehensive Rules for semantic search."
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-ingest even if the installed version is already current.",
+    )
+    parser.add_argument(
+        "--url", default=None,
+        help="Ingest this exact rules TXT URL instead of auto-discovering.",
+    )
+    args = parser.parse_args()
+    main(force=args.force, url_override=args.url)
