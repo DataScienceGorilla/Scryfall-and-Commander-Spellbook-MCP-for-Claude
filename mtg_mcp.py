@@ -205,6 +205,52 @@ async def make_spellbook_post(endpoint: str, data: dict) -> dict:
             return {"error": True, "message": f"Unexpected error: {str(e)}"}
 
 
+def _parse_decklist_to_main(text: str) -> list:
+    """
+    Parse a pasted decklist into Commander Spellbook's 'main' format:
+    [{"card": name, "quantity": n}, ...].
+
+    Handles "1 Sol Ring", "12 Plains", bare "Sol Ring", strips trailing set/
+    collector annotations like " (C21) 263", and skips section headers.
+    """
+    main = []
+    skip = {"commander", "deck", "mainboard", "sideboard", "companion", "maybeboard"}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.lower().rstrip(":") in skip:
+            continue
+        qty = 1
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0].rstrip("xX").isdigit():
+            qty = int(parts[0].rstrip("xX"))
+            name = parts[1].strip()
+        else:
+            name = line
+        if " (" in name:
+            name = name.split(" (", 1)[0].strip()
+        if name:
+            main.append({"card": name, "quantity": qty})
+    return main
+
+
+async def _decklist_to_main(decklist_url, decklist_text):
+    """
+    Resolve a decklist (pasted text or URL) into the 'main' payload list.
+    Returns (main, error_message). On success error_message is None.
+    """
+    if decklist_text:
+        return _parse_decklist_to_main(decklist_text), None
+    # URL import via Spellbook (best effort; endpoint may be unavailable)
+    result = await make_spellbook_post("/card-list-from-url/", {"url": decklist_url})
+    if result.get("error"):
+        return None, "Could not import that deck URL. Please paste the decklist text instead (one card per line)."
+    main = [
+        {"card": (c.get("name") if isinstance(c, dict) else str(c)), "quantity": 1}
+        for c in result.get("cards", [])
+    ]
+    return main, None
+
+
 def _parse_scryfall_error(response) -> str:
     """
     Extracts a human-readable error message from Scryfall error responses.
@@ -1170,92 +1216,55 @@ async def spellbook_find_combos_in_decklist(params: SpellbookDecklistInput) -> s
     Returns:
         str: Combos found in the decklist
     """
-    cards = []
-    
-    # Option 1: Get cards from a deck URL
-    if params.decklist_url:
-        result = await make_spellbook_post(
-            "/card-list-from-url/",
-            {"url": params.decklist_url}
-        )
-        
-        if result.get("error"):
-            return f"**Error:** Could not fetch decklist from URL. Make sure it's a valid Moxfield, Archidekt, or similar link."
-        
-        card_list = result.get("cards", [])
-        for card in card_list:
-            if isinstance(card, dict):
-                cards.append(card.get("name", card.get("card", "")))
-            else:
-                cards.append(str(card))
-    
-    # Option 2: Parse pasted decklist text
-    elif params.decklist_text:
-        result = await make_spellbook_post(
-            "/card-list-from-text/",
-            {"text": params.decklist_text}
-        )
-        
-        if result.get("error"):
-            return f"**Error:** Could not parse the decklist text."
-        
-        card_list = result.get("cards", [])
-        for card in card_list:
-            if isinstance(card, dict):
-                cards.append(card.get("name", card.get("card", "")))
-            else:
-                cards.append(str(card))
-    
-    else:
+    if not params.decklist_url and not params.decklist_text:
         return "**Error:** Please provide either a decklist URL or pasted card list."
-    
-    if not cards:
-        return "**Error:** Couldn't extract any cards from that decklist."
-    
-    # Now find combos using the find-my-combos endpoint
-    result = await make_spellbook_post("/find-my-combos/", {"cards": cards})
-    
+
+    main, err = await _decklist_to_main(params.decklist_url, params.decklist_text)
+    if err:
+        return f"**Error:** {err}"
+    if not main:
+        return "**Error:** Couldn't parse any cards from that decklist."
+
+    # Find combos via the find-my-combos endpoint (expects the 'main' format)
+    result = await make_spellbook_post("/find-my-combos/", {"main": main})
+
     if result.get("error"):
         return f"**Error:** {result.get('message', 'Could not analyze decklist')}"
-    
-    # The response contains 'results' with 'included' combos
+
     results = result.get("results", {})
-    included = results.get("included", [])
-    almost = results.get("almost_included", [])
-    
+    included = results.get("included", []) or []
+    almost = results.get("almostIncluded", []) or []
+    identity = results.get("identity", "")
+
     # Format based on requested output
     if params.response_format == ResponseFormat.JSON:
         return json.dumps({
-            "cards_analyzed": len(cards),
+            "cards_analyzed": len(main),
+            "color_identity": identity,
             "complete_combos": included[:params.limit],
             "almost_complete": almost[:params.limit]
         }, indent=2)
-    
+
     if not included and not almost:
-        return f"**No combos found** in this deck ({len(cards)} cards analyzed)."
-    
-    lines = [f"**Analyzed {len(cards)} cards**\n"]
-    
+        return f"**No combos found** in this deck ({len(main)} cards analyzed, color identity {identity})."
+
+    lines = [f"**Analyzed {len(main)} cards** (color identity {identity})\n"]
+
     # Show fully included combos first
     if included:
         lines.append(f"## Complete Combos ({len(included)} found)\n")
         for combo in included[:params.limit]:
             lines.append(format_combo_markdown(combo))
             lines.append("\n---\n")
-    
-    # Show "almost" combos (missing 1 card)
+
+    # Show "almost" combos (missing 1-2 pieces)
     remaining = params.limit - len(included)
     if almost and remaining > 0:
-        lines.append(f"\n## Almost Complete (missing 1 card)\n")
+        lines.append(f"\n## Almost Complete (missing 1-2 pieces)\n")
         for combo in almost[:remaining]:
-            # Get the missing card name
-            missing = combo.get("missing", [])
-            if missing:
-                missing_name = missing[0].get("card", {}).get("name", "Unknown")
-                lines.append(f"**Missing:** {missing_name}\n")
             lines.append(format_combo_markdown(combo))
             lines.append("\n---\n")
-    
+
     return "\n".join(lines)
 
 
@@ -1288,108 +1297,74 @@ async def spellbook_estimate_bracket(params: SpellbookBracketInput) -> str:
     Returns:
         str: Bracket estimation with combo breakdown
     """
-    cards = []
-    
-    # Option 1: Get cards from a deck URL
-    if params.decklist_url:
-        result = await make_spellbook_post(
-            "/card-list-from-url/",
-            {"url": params.decklist_url}
-        )
-        
-        if result.get("error"):
-            return f"**Error:** Could not fetch decklist from URL."
-        
-        card_list = result.get("cards", [])
-        for card in card_list:
-            if isinstance(card, dict):
-                cards.append(card.get("name", card.get("card", "")))
-            else:
-                cards.append(str(card))
-    
-    # Option 2: Parse pasted decklist text
-    elif params.decklist_text:
-        result = await make_spellbook_post(
-            "/card-list-from-text/",
-            {"text": params.decklist_text}
-        )
-        
-        if result.get("error"):
-            return f"**Error:** Could not parse the decklist text."
-        
-        card_list = result.get("cards", [])
-        for card in card_list:
-            if isinstance(card, dict):
-                cards.append(card.get("name", card.get("card", "")))
-            else:
-                cards.append(str(card))
-    
-    else:
+    if not params.decklist_url and not params.decklist_text:
         return "**Error:** Please provide either a decklist URL or pasted card list."
-    
-    if not cards:
-        return "**Error:** Couldn't extract any cards from that decklist."
-    
-    # Call the bracket estimation endpoint
-    result = await make_spellbook_post("/estimate-bracket/", {"cards": cards})
-    
+
+    main, err = await _decklist_to_main(params.decklist_url, params.decklist_text)
+    if err:
+        return f"**Error:** {err}"
+    if not main:
+        return "**Error:** Couldn't parse any cards from that decklist."
+
+    # Call the bracket estimation endpoint (expects the 'main' format)
+    result = await make_spellbook_post("/estimate-bracket/", {"main": main})
+
     if result.get("error"):
         return f"**Error:** {result.get('message', 'Could not estimate bracket')}"
-    
-    # Parse the response
-    bracket = result.get("bracket", "Unknown")
-    combos_by_bracket = result.get("combos_by_bracket", {})
-    two_card_combos = result.get("two_card_combos", [])
-    
-    # Format based on requested output
+
+    tag = result.get("bracketTag", "?")
+    gc_cards = result.get("cards", []) or []
+    combos = result.get("combos", []) or []
+
+    # Spellbook single-letter bracket tags -> official bracket names
+    tag_names = {
+        "E": "1 - Exhibition",
+        "C": "2 - Core",
+        "U": "3 - Upgraded",
+        "O": "4 - Optimized / cEDH",
+    }
+
+    # Evidence pulled from the combo flags (mirror the official bracket criteria)
+    two_card = [c for c in combos if c.get("definitelyTwoCard") or c.get("arguablyTwoCard")]
+    mld = any(c.get("massLandDenial") for c in combos)
+    extra_turns = any(c.get("extraTurn") or c.get("skipTurns") for c in combos)
+    locks = any(c.get("lock") or c.get("controlAllOpponents") for c in combos)
+
+    gc_names = [c.get("card", {}).get("name") for c in gc_cards if isinstance(c, dict)]
+    gc_names = [n for n in gc_names if n]
+
     if params.response_format == ResponseFormat.JSON:
         return json.dumps({
-            "bracket": bracket,
-            "cards_analyzed": len(cards),
-            "two_card_combos": two_card_combos,
-            "combos_by_bracket": combos_by_bracket
+            "bracket_tag": tag,
+            "bracket": tag_names.get(tag, tag),
+            "cards_analyzed": len(main),
+            "game_changers": gc_names,
+            "combo_count": len(combos),
+            "two_card_combos": len(two_card),
+            "mass_land_denial": mld,
+            "extra_turns": extra_turns,
+            "locks": locks,
         }, indent=2)
-    
-    # Bracket descriptions
-    bracket_desc = {
-        "1": "Exhibition - Thematic, creative, 9+ turns expected",
-        "2": "Core - Unoptimized, social, no two-card infinites",
-        "3": "Upgraded - Strong synergy, up to 3 game changers",
-        "4": "Optimized/cEDH - Lethal, consistent, anything goes"
-    }
-    
-    lines = [f"## Bracket Estimation: **{bracket}**"]
-    lines.append(f"*Cards analyzed: {len(cards)}*\n")
-    
-    bracket_num = str(bracket).split()[0] if bracket else "?"
-    if bracket_num in bracket_desc:
-        lines.append(f"**{bracket_desc[bracket_num]}**\n")
-    
-    # Show two-card combos (these heavily influence bracket)
-    if two_card_combos:
-        lines.append(f"### Two-Card Combos ({len(two_card_combos)} found)")
-        lines.append("*These have the biggest impact on bracket level*\n")
-        for combo in two_card_combos[:8]:
-            cards_in_combo = combo.get("uses", [])
-            card_names = [c.get("card", {}).get("name", "?") for c in cards_in_combo]
-            combo_bracket = combo.get("bracket", "?")
-            
-            produces = combo.get("produces", [])
-            results = [p.get("feature", {}).get("name", "") for p in produces[:2]]
-            results_str = f" → {', '.join(results)}" if results else ""
-            
-            lines.append(f"- **{' + '.join(card_names)}** (B{combo_bracket}){results_str}")
-        
-        if len(two_card_combos) > 8:
-            lines.append(f"\n*...and {len(two_card_combos) - 8} more two-card combos*")
-    
-    # Show combo count by bracket
-    if combos_by_bracket:
-        lines.append("\n### All Combos by Bracket Level")
-        for b_level, combos in sorted(combos_by_bracket.items()):
-            count = len(combos) if isinstance(combos, list) else combos
-            lines.append(f"- Bracket {b_level}: {count} combos")
-    
+
+    lines = [f"## Bracket Estimation: **{tag_names.get(tag, tag)}**"]
+    lines.append(f"*Cards analyzed: {len(main)}*\n")
+
+    lines.append(f"**Game-changer / notable cards:** {len(gc_names)}")
+    if gc_names:
+        lines.append(", ".join(gc_names[:15]))
+
+    lines.append(f"\n**Combos detected:** {len(combos)} (two-card infinite-style: {len(two_card)})")
+    flags = []
+    if mld:
+        flags.append("mass land denial")
+    if extra_turns:
+        flags.append("extra turns")
+    if locks:
+        flags.append("lock / control-all-opponents")
+    if flags:
+        lines.append("**Bracket-raising elements:** " + ", ".join(flags))
+
+    lines.append("\n*Weigh these signals against the official bracket criteria to place the deck.*")
     return "\n".join(lines)
 
 
