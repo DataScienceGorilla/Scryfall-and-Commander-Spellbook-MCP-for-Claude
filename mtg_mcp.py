@@ -26,6 +26,9 @@ import httpx
 import json
 import asyncio
 
+# Shared, framework-agnostic helpers (single source of truth in mtg_tools.py).
+from mtg_tools import _identity_letters, _parse_decklist_to_main
+
 # =============================================================================
 # SERVER INITIALIZATION
 # =============================================================================
@@ -203,41 +206,6 @@ async def make_spellbook_post(endpoint: str, data: dict) -> dict:
             return {"error": True, "message": "Request timed out. Please try again."}
         except Exception as e:
             return {"error": True, "message": f"Unexpected error: {str(e)}"}
-
-
-def _identity_letters(commander_identity):
-    """Normalize a WUBRG identity string to a set of uppercase letters ('' = colorless)."""
-    if not commander_identity:
-        return None
-    return set(commander_identity.upper().replace("C", ""))
-
-
-def _parse_decklist_to_main(text: str) -> list:
-    """
-    Parse a pasted decklist into Commander Spellbook's 'main' format:
-    [{"card": name, "quantity": n}, ...].
-
-    Handles "1 Sol Ring", "12 Plains", bare "Sol Ring", strips trailing set/
-    collector annotations like " (C21) 263", and skips section headers.
-    """
-    main = []
-    skip = {"commander", "deck", "mainboard", "sideboard", "companion", "maybeboard"}
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.lower().rstrip(":") in skip:
-            continue
-        qty = 1
-        parts = line.split(None, 1)
-        if len(parts) == 2 and parts[0].rstrip("xX").isdigit():
-            qty = int(parts[0].rstrip("xX"))
-            name = parts[1].strip()
-        else:
-            name = line
-        if " (" in name:
-            name = name.split(" (", 1)[0].strip()
-        if name:
-            main.append({"card": name, "quantity": qty})
-    return main
 
 
 async def _decklist_to_main(decklist_url, decklist_text):

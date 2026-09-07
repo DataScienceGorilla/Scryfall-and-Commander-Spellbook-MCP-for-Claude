@@ -13,9 +13,8 @@ Run locally:
     uvicorn advisor_app:app --reload --port 8000
     # then open http://localhost:8000
 
-TECH DEBT: tool implementations are imported from discord_bot to avoid a third
-copy. Next refactor is to extract a shared `mtg_tools.py` that the bot, the MCP
-server (mtg_mcp.py), and this app all import.
+Tool implementations live in the shared `mtg_tools.py` module (also used by the
+Discord bot); this app imports the schemas + handlers from there.
 """
 
 import os
@@ -33,8 +32,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Reuse the existing, framework-agnostic tool handlers + schemas from the bot.
-from discord_bot import (
+# Shared, framework-agnostic tool handlers + schemas (also used by the Discord bot).
+from mtg_tools import (
     TOOLS as BASE_TOOLS,
     TOOL_FUNCTIONS as BASE_TOOL_FUNCTIONS,
     get_rules_collection_async,
