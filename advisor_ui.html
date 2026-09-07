@@ -73,6 +73,12 @@
   .status .gear { animation: spin 1.6s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .warn-banner {
+    align-self: stretch; background: rgba(217,86,79,.14); border: 1px solid var(--danger);
+    color: #f2b8b4; border-radius: 10px; padding: 10px 13px; font-size: 13px; line-height: 1.5;
+  }
+  .warn-banner strong { color: #fff; }
+
   /* Activity / thinking + tool trace */
   .activity {
     align-self: flex-start; max-width: 92%;
@@ -115,7 +121,9 @@
   #canvas { flex: 1; display: flex; flex-direction: column; min-width: 300px; background: var(--panel); }
   #canvas .canvas-head { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--muted); display:flex; align-items:center; gap:8px;}
   #cards { flex: 1; overflow-y: auto; padding: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; align-content: start; }
-  .card-tile { border-radius: 9px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); transition: transform .12s, box-shadow .12s; }
+  .card-tile { position: relative; border-radius: 9px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); transition: transform .12s, box-shadow .12s; }
+  .card-tile.offcolor { box-shadow: 0 0 0 2px var(--danger); }
+  .card-tile.offcolor::after { content: "⚠ off-color"; position: absolute; top: 6px; left: 6px; right: 6px; text-align: center; background: rgba(217,86,79,.92); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 4px; border-radius: 5px; pointer-events: none; }
   .card-tile:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,.45); }
   .card-tile.flash { box-shadow: 0 0 0 2px var(--accent); }
   .card-tile img { width: 100%; display: block; }
@@ -180,6 +188,22 @@ tooltip.className = 'card-tooltip';
 document.body.appendChild(tooltip);
 let ttCard = null;
 
+// Commander color-identity guardrail. deckIdentity is a Set of WUBRG letters
+// (empty = colorless); null until the advisor declares it via %%IDENTITY:XX%%.
+let deckIdentity = null;
+function setDeckIdentity(letters) {
+  const next = new Set(letters.replace(/C/g, '').split('').filter(Boolean));
+  deckIdentity = next;
+  // Re-evaluate any cards already on the canvas.
+  for (const entry of cardCache.values()) evaluateTile(entry);
+}
+function evaluateTile(entry) {
+  if (!entry || !entry.tile || deckIdentity === null || entry.status !== 'ok') return;
+  const off = (entry.identity || []).some(c => !deckIdentity.has(c));
+  entry.tile.classList.toggle('offcolor', off);
+  if (off) entry.tile.title = `${entry.canonical || ''} is outside this deck's color identity`;
+}
+
 // ---- textarea auto-grow ----
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
@@ -197,6 +221,8 @@ function escapeHtml(s) {
 }
 function renderMarkdown(raw) {
   let t = escapeHtml(raw);
+  // Strip the machine identity marker so it never shows to the player.
+  t = t.replace(/%%IDENTITY:[WUBRGC]+%%\s*/gi, '');
   // headers (### )
   t = t.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
   // bold / italic / inline code
@@ -320,6 +346,18 @@ function addActivity() {
 
 function scrollToBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
+function renderWarning(cards) {
+  if (!cards || !cards.length) return;
+  const list = cards.map(c => `${c.name} (${c.identity})`).join(', ');
+  const el = document.createElement('div');
+  el.className = 'warn-banner';
+  el.innerHTML = `<strong>⚠ Color-identity check:</strong> ${cards.length} recommended `
+    + `card${cards.length > 1 ? 's are' : ' is'} outside this deck's color identity and `
+    + `illegal here — ${escapeHtml(list)}. Ignore ${cards.length > 1 ? 'them' : 'it'}.`;
+  messagesEl.appendChild(el);
+  scrollToBottom();
+}
+
 // ---- Scryfall card canvas ----
 function keyFor(name) { return name.toLowerCase(); }
 
@@ -353,11 +391,13 @@ async function fetchCard(name, key) {
     if (!img) throw new Error('no image');
     entry.canonical = data.name;
     entry.img = img;
+    entry.identity = data.color_identity || [];
     entry.status = 'ok';
     entry.tile.className = 'card-tile';
     entry.tile.innerHTML = `<a href="${data.scryfall_uri}" target="_blank" rel="noopener" title="${data.name}"><img loading="lazy" src="${img}" alt="${data.name}"></a>`;
     // map canonical name too, so chips/hover using the exact name resolve correctly
     cardCache.set(keyFor(data.name), entry);
+    evaluateTile(entry);  // flag if outside the commander's color identity
   } catch (e) {
     entry.status = 'missing';
     entry.tile.className = 'card-tile missing';
@@ -409,11 +449,17 @@ async function send() {
         if (ev.event === 'text') {
           if (!bubble) { activity.stopSpinner(); bubble = addMessage('assistant', ''); }
           acc += ev.data.text;
+          if (deckIdentity === null) {
+            const m = acc.match(/%%IDENTITY:([WUBRGC]+)%%/i);
+            if (m) setDeckIdentity(m[1].toUpperCase());
+          }
           bubble.innerHTML = renderMarkdown(acc);
           bindChips(bubble);
           scrollToBottom();
         } else if (ev.event === 'status') {
           activity.addTool(ev.data.tool, ev.data.input || '');
+        } else if (ev.event === 'warning') {
+          renderWarning(ev.data.cards);
         } else if (ev.event === 'error') {
           activity.stopSpinner();
           addMessage('assistant', '⚠️ ' + ev.data.message);
@@ -449,7 +495,7 @@ async function resetConversation() {
   });
   messagesEl.innerHTML = '';
   cardsEl.innerHTML = '<div class="empty-note">Cards the advisor mentions will show up here.</div>';
-  cardCache.clear(); seenNames.clear();
+  cardCache.clear(); seenNames.clear(); deckIdentity = null;
   addMessage('assistant', "Fresh start. What commander are we building around?");
 }
 </script>
