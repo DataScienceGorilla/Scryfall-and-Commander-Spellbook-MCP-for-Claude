@@ -319,18 +319,22 @@ def get_rules_collection():
 TOOLS = [
     {
         "name": "scryfall_search_cards",
-        "description": "Search for Magic: The Gathering cards using Scryfall's search syntax. Use operators like c: (color), t: (type), o: (oracle text), cmc: (mana value), pow: (power), id: (color identity for Commander).",
+        "description": "Search for Magic: The Gathering cards using Scryfall's search syntax. Use operators like c: (color), t: (type), o: (oracle text), cmc: (mana value), pow: (power). When finding cards to recommend for a Commander deck, ALWAYS pass commander_identity - results are then hard-filtered to that color identity so only legal cards come back.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Scryfall search query. Examples: 'c:blue t:creature', 'o:\"draw a card\" cmc<=3', 'id:simic t:legendary'"
+                    "description": "Scryfall search query. Examples: 'c:blue t:creature', 'o:\"draw a card\" cmc<=3', 't:legendary'"
                 },
                 "limit": {
                     "type": "integer",
                     "description": "Max results to return (1-10)",
                     "default": 5
+                },
+                "commander_identity": {
+                    "type": "string",
+                    "description": "The commander's color identity as WUBRG letters (e.g. 'WB', 'GWU', or 'C' for colorless). When set, results are strictly limited to cards legal in that identity. Always set this when searching for cards to add to a specific deck."
                 }
             },
             "required": ["query"]
@@ -338,13 +342,17 @@ TOOLS = [
     },
     {
         "name": "scryfall_get_card",
-        "description": "Look up a specific Magic: The Gathering card by name. Supports fuzzy matching for typos.",
+        "description": "Look up a specific Magic: The Gathering card by name. Supports fuzzy matching for typos. Pass commander_identity to get an explicit legal/illegal verdict for that deck's color identity.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
                     "description": "Card name to look up"
+                },
+                "commander_identity": {
+                    "type": "string",
+                    "description": "Optional. The commander's color identity as WUBRG letters (e.g. 'WB'). When set, the result states whether this card is legal in that deck."
                 }
             },
             "required": ["name"]
@@ -472,43 +480,76 @@ TOOLS = [
 # TOOL IMPLEMENTATIONS
 # =============================================================================
 
-async def scryfall_search_cards(query: str, limit: int = 5) -> str:
-    """Search for cards on Scryfall."""
+def _identity_letters(commander_identity):
+    """Normalize a WUBRG identity string to a set of uppercase letters ('' = colorless)."""
+    if not commander_identity:
+        return None
+    return set(commander_identity.upper().replace("C", ""))
+
+
+async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: str = None) -> str:
+    """
+    Search for cards on Scryfall.
+
+    When commander_identity is provided (e.g. "WB"), the search is HARD-scoped to
+    that Commander color identity: the query is constrained with Scryfall's id<=
+    operator AND every result is post-filtered so no card outside the identity can
+    ever be returned. Always pass commander_identity when finding cards for a deck.
+    """
+    allowed = _identity_letters(commander_identity)
+    q = query
+    if allowed is not None:
+        scope = f"id<={''.join(sorted(allowed)).lower()}" if allowed else "id:c"
+        q = f"({query}) {scope}"
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
                 f"{SCRYFALL_API}/cards/search",
-                params={"q": query},
+                params={"q": q},
                 headers=SCRYFALL_HEADERS,
                 timeout=30.0
             )
+            if response.status_code == 404:
+                return "No cards found matching that search."
             response.raise_for_status()
             data = response.json()
-            
-            cards = data.get("data", [])[:limit]
+
+            cards = data.get("data", [])
+            # Belt-and-suspenders: guarantee color-identity legality on our side too.
+            if allowed is not None:
+                cards = [c for c in cards if set(c.get("color_identity", [])).issubset(allowed)]
             total = data.get("total_cards", len(cards))
-            
+            cards = cards[:limit]
+
             if not cards:
-                return "No cards found matching that search."
-            
-            # Format results concisely for Discord
-            lines = [f"Found {total} cards (showing {len(cards)}):"]
+                scope_note = f" within color identity {commander_identity.upper()}" if allowed is not None else ""
+                return f"No cards found matching that search{scope_note}."
+
+            header = f"Found {total} cards (showing {len(cards)})"
+            if allowed is not None:
+                header += f", all legal in a {commander_identity.upper()} deck"
+            lines = [header + ":"]
             for card in cards:
                 name = card.get("name", "Unknown")
                 mana = card.get("mana_cost", "")
                 type_line = card.get("type_line", "")
-                lines.append(f"**{name}** {mana} - {type_line}")
-            
+                ci = "".join(card.get("color_identity", [])) or "C"
+                lines.append(f"**{name}** {mana} - {type_line} [id:{ci}]")
+
             return "\n".join(lines)
-            
+
         except httpx.HTTPStatusError as e:
             return f"Search error: {e.response.status_code}"
         except Exception as e:
             return f"Error: {str(e)}"
 
 
-async def scryfall_get_card(name: str) -> str:
-    """Look up a specific card by name."""
+async def scryfall_get_card(name: str, commander_identity: str = None) -> str:
+    """
+    Look up a specific card by name. When commander_identity is provided, the
+    result includes an explicit color-identity legality verdict for that deck.
+    """
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
@@ -568,14 +609,30 @@ async def scryfall_get_card(name: str) -> str:
                 if power and toughness:
                     lines.append(f"**{power}/{toughness}**")
             
+            # Color identity + legality verdict (always at top level, incl. DFCs)
+            ci_letters = card.get("color_identity", [])
+            ci = "".join(ci_letters) or "C"
+            lines.append(f"\nColor identity: {ci}")
+            allowed = _identity_letters(commander_identity)
+            if allowed is not None:
+                legal = set(ci_letters).issubset(allowed)
+                if legal:
+                    lines.append(f"Legality: LEGAL in a {commander_identity.upper()} deck.")
+                else:
+                    lines.append(
+                        f"Legality: ILLEGAL in a {commander_identity.upper()} deck "
+                        f"(color identity {ci} is outside {commander_identity.upper()}). "
+                        f"DO NOT recommend this card."
+                    )
+
             # Price is always at the top level (same for DFCs and normal cards)
             prices = card.get("prices", {})
             usd = prices.get("usd")
             if usd:
                 lines.append(f"\nPrice: ${usd}")
-            
+
             return "\n".join(lines)
-            
+
         except httpx.HTTPStatusError:
             return f"Could not find card: {name}"
         except Exception as e:

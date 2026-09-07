@@ -205,6 +205,13 @@ async def make_spellbook_post(endpoint: str, data: dict) -> dict:
             return {"error": True, "message": f"Unexpected error: {str(e)}"}
 
 
+def _identity_letters(commander_identity):
+    """Normalize a WUBRG identity string to a set of uppercase letters ('' = colorless)."""
+    if not commander_identity:
+        return None
+    return set(commander_identity.upper().replace("C", ""))
+
+
 def _parse_decklist_to_main(text: str) -> list:
     """
     Parse a pasted decklist into Commander Spellbook's 'main' format:
@@ -425,7 +432,16 @@ class ScryfallSearchInput(BaseModel):
         ge=1,
         le=50
     )
-    
+
+    commander_identity: Optional[str] = Field(
+        default=None,
+        description=(
+            "Commander color identity as WUBRG letters (e.g. 'WB', 'GWU', 'C' for "
+            "colorless). When set, results are HARD-restricted to cards legal in that "
+            "identity. Always set this when finding cards to add to a specific deck."
+        )
+    )
+
     order: Optional[str] = Field(
         default=None,
         description=(
@@ -463,7 +479,15 @@ class ScryfallNamedInput(BaseModel):
         default=None,
         description="Optional 3-letter set code to get a specific printing (e.g., 'mh2', 'cmr')"
     )
-    
+
+    commander_identity: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional commander color identity as WUBRG letters (e.g. 'WB'). When set, "
+            "the result states whether this card is legal in that deck's color identity."
+        )
+    )
+
     response_format: ResponseFormat = Field(
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' for readable text, 'json' for raw data"
@@ -718,37 +742,50 @@ async def scryfall_search_cards(params: ScryfallSearchInput) -> str:
     Returns:
         str: Formatted card results or JSON data
     """
+    # Hard-scope to the commander's color identity when provided.
+    allowed = _identity_letters(params.commander_identity)
+    query = params.query
+    if allowed is not None:
+        scope = f"id<={''.join(sorted(allowed)).lower()}" if allowed else "id:c"
+        query = f"({params.query}) {scope}"
+
     # Build the query parameters
-    api_params = {"q": params.query}
-    
+    api_params = {"q": query}
+
     if params.order:
         api_params["order"] = params.order
-    
+
     # Make the API request
     result = await make_scryfall_request("/cards/search", api_params)
-    
+
     # Handle errors
     if result.get("error"):
         return f"**Error:** {result.get('message', 'Unknown error')}"
-    
+
     # Extract the cards from the response
     cards = result.get("data", [])
+    # Belt-and-suspenders: guarantee color-identity legality on our side too.
+    if allowed is not None:
+        cards = [c for c in cards if set(c.get("color_identity", [])).issubset(allowed)]
     total = result.get("total_cards", len(cards))
-    
+
     # Limit to requested number
     cards = cards[:params.limit]
-    
+
     # Format based on requested output
     if params.response_format == ResponseFormat.JSON:
         return json.dumps({"total": total, "cards": cards}, indent=2)
-    
+
     # Markdown format
-    lines = [f"**Found {total} cards** (showing {len(cards)})\n"]
-    
+    header = f"**Found {total} cards** (showing {len(cards)})"
+    if allowed is not None:
+        header += f" — all legal in a {params.commander_identity.upper()} deck"
+    lines = [header + "\n"]
+
     for card in cards:
         lines.append(format_card_markdown(card))
         lines.append("\n---\n")
-    
+
     return "\n".join(lines)
 
 
@@ -797,8 +834,24 @@ async def scryfall_get_card(params: ScryfallNamedInput) -> str:
     # Format based on requested output
     if params.response_format == ResponseFormat.JSON:
         return json.dumps(result, indent=2)
-    
-    return format_card_markdown(result)
+
+    md = format_card_markdown(result)
+
+    # Append a color-identity legality verdict when a commander identity is given.
+    allowed = _identity_letters(params.commander_identity)
+    if allowed is not None:
+        ci_letters = result.get("color_identity", [])
+        ci = "".join(ci_letters) or "C"
+        if set(ci_letters).issubset(allowed):
+            md += f"\n\n**Legality:** LEGAL in a {params.commander_identity.upper()} deck."
+        else:
+            md += (
+                f"\n\n**Legality:** ILLEGAL in a {params.commander_identity.upper()} deck "
+                f"(color identity {ci} is outside {params.commander_identity.upper()}). "
+                f"Do NOT recommend this card."
+            )
+
+    return md
 
 
 @mcp.tool(

@@ -19,11 +19,13 @@ server (mtg_mcp.py), and this app all import.
 """
 
 import os
+import re
 import json
 import uuid
 import asyncio
 from pathlib import Path
 
+import httpx
 import anthropic
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -75,6 +77,36 @@ Whenever you reference a specific Magic card, wrap its EXACT name in double squa
 brackets, e.g. [[Dockside Extortionist]], [[Rhystic Study]], [[Cyclonic Rift]].
 Use the precise Scryfall card name. Do this every time you name a card - it is how
 the player sees what you're talking about. Do not wrap non-card terms in brackets.
+
+# COLOR IDENTITY IS AN ABSOLUTE CONSTRAINT (non-negotiable)
+A card is legal in a Commander deck ONLY IF its entire color identity fits within the
+commander's colors. Color identity = every colored mana symbol on the card, in the mana
+cost AND the rules text, plus any color indicator. Recommending an off-identity card is
+an illegal suggestion and a total failure of Commander understanding - never do it.
+- FIRST, establish the commander's color identity and hold it fixed for the whole
+  conversation. E.g. [[Eriette of the Charmed Apple]] is White-Black (WB). If unsure,
+  read it from scryfall_get_card's color_identity field on the commander.
+- EVERY card you recommend, name as an add, or cite as a combo piece MUST have a color
+  identity that is a subset of the commander's. ONE off-color pip makes it ILLEGAL - no
+  splashing, no "but it's so good", no exceptions. In a WB deck: [[Rankle, Master of
+  Pranks]] (B/R) is illegal (red), [[Deflecting Swat]] (R) is illegal, [[Flare of Denial]]
+  (U) is illegal, anything with a green/blue/red symbol is illegal.
+- SOURCE YOUR RECOMMENDATIONS FROM THE TOOLS, NOT FROM MEMORY. To find cards to add,
+  call scryfall_search_cards with commander_identity set to the commander's colors - it
+  hard-filters to legal cards, so anything it returns is safe to recommend. Do not name an
+  add from memory unless you have confirmed it is legal via a tool.
+- If you do reference a specific card from your own knowledge, verify it first with
+  scryfall_get_card (pass commander_identity) and only keep it if the verdict is LEGAL.
+- BEFORE presenting recommendations, re-check each card against the commander's identity
+  and silently drop any that don't fit. When in doubt, leave it out. (An automated check
+  also runs on your answer and will make you redo it if any off-identity card slips through,
+  so getting it right the first time is faster.)
+- Colorless cards (most artifacts, Wastes) are legal in any deck.
+- MACHINE MARKER: the very first line of your first response about a deck must be, on its
+  own line, `%%IDENTITY:XX%%` where XX is the commander's color identity in WUBRG letters
+  (e.g. `%%IDENTITY:WB%%`; use `C` for a colorless commander). It is stripped from what the
+  player sees and drives an automatic legality highlight on the card canvas. Emit it once
+  per deck, as soon as you know the commander.
 
 # INTAKE FIRST (don't advise into a vacuum)
 Before giving substantive deck advice, make sure you know:
@@ -294,6 +326,61 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+_CARD_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_IDENT_RE = re.compile(r"%%IDENTITY:([WUBRGC]+)%%", re.I)
+
+
+async def _check_off_color(answer_text: str):
+    """
+    Deterministic color-identity guardrail. Reads the advisor's declared
+    %%IDENTITY:XX%% marker, then verifies every [[card]] it referenced against
+    Scryfall's color_identity. Returns a list of off-identity cards (illegal in
+    this deck), or None if no identity was declared.
+    """
+    m = _IDENT_RE.search(answer_text)
+    if not m:
+        return None
+    allowed = set(m.group(1).upper().replace("C", ""))
+    names = list(dict.fromkeys(_CARD_RE.findall(answer_text)))  # unique, in order
+    if not names:
+        return []
+
+    async with httpx.AsyncClient(
+        timeout=15.0, headers={"User-Agent": "mtg-advisor/1.0"}
+    ) as client:
+        sem = asyncio.Semaphore(6)
+
+        async def lookup(name):
+            async with sem:
+                try:
+                    r = await client.get(
+                        "https://api.scryfall.com/cards/named",
+                        params={"fuzzy": name},
+                    )
+                    if r.status_code != 200:
+                        return None
+                    ci = set(r.json().get("color_identity", []))
+                    if not ci.issubset(allowed):
+                        return {"name": name, "identity": "".join(sorted(ci)) or "C"}
+                except Exception:
+                    return None
+                return None
+
+        results = await asyncio.gather(*(lookup(n) for n in names))
+    return [r for r in results if r]
+
+
+def _strip_off_color_lines(text: str, off_names: list) -> str:
+    """
+    Last-resort deterministic backstop: drop any line that recommends an
+    off-identity card (matched by its [[Name]] marker), so an illegal card can
+    never appear in the shown answer even if the model refuses to comply.
+    """
+    tokens = [f"[[{n}]]".lower() for n in off_names]
+    kept = [ln for ln in text.split("\n") if not any(t in ln.lower() for t in tokens)]
+    return "\n".join(kept)
+
+
 def _short_input(tool_input: dict) -> str:
     """A compact, human-readable summary of a tool call's arguments."""
     try:
@@ -303,14 +390,21 @@ def _short_input(tool_input: dict) -> str:
     return s if len(s) <= 160 else s[:157] + "..."
 
 
+MAX_IDENTITY_RETRIES = 2  # regenerate the answer this many times if off-color cards slip in
+
+
 async def agent_stream(session_id: str, messages: list):
     """
-    Drives the Claude tool-use loop, streaming text deltas and tool-status
-    events to the browser as SSE frames.
+    Drives the Claude tool-use loop. Tool-call turns stream status live; the FINAL
+    answer is buffered and validated for color-identity legality BEFORE it is shown,
+    and regenerated if any off-identity card slipped in - so an illegal recommendation
+    never reaches the user.
     """
     yield _sse("session", {"session_id": session_id})
+    identity_retries = 0
     try:
-        for _ in range(MAX_ITERATIONS):
+        for _ in range(MAX_ITERATIONS + MAX_IDENTITY_RETRIES):
+            turn_parts = []
             async with aclient.messages.stream(
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
@@ -324,39 +418,80 @@ async def agent_stream(session_id: str, messages: list):
                         event.type == "content_block_delta"
                         and getattr(event.delta, "type", None) == "text_delta"
                     ):
-                        yield _sse("text", {"text": event.delta.text})
+                        turn_parts.append(event.delta.text)
                 final = await stream.get_final_message()
 
-            # Record the assistant turn (may contain text + tool_use blocks).
             messages.append({"role": "assistant", "content": final.content})
 
-            if final.stop_reason != "tool_use":
-                break
+            if final.stop_reason == "tool_use":
+                # Emit any preamble text, then run the tools.
+                preamble = "".join(turn_parts)
+                if preamble.strip():
+                    yield _sse("text", {"text": preamble})
 
-            # Execute every tool the model asked for (concurrently), feed results back.
-            tool_blocks = [b for b in final.content if b.type == "tool_use"]
-            for block in tool_blocks:
-                yield _sse("status", {"tool": block.name, "input": _short_input(block.input)})
+                tool_blocks = [b for b in final.content if b.type == "tool_use"]
+                for block in tool_blocks:
+                    yield _sse("status", {"tool": block.name, "input": _short_input(block.input)})
 
-            async def _run(block):
-                func = TOOL_FUNCTIONS.get(block.name)
-                if func is None:
-                    return f"Unknown tool: {block.name}"
-                try:
-                    return await func(**block.input)
-                except Exception as e:
-                    return f"Error running {block.name}: {e}"
+                async def _run(block):
+                    func = TOOL_FUNCTIONS.get(block.name)
+                    if func is None:
+                        return f"Unknown tool: {block.name}"
+                    try:
+                        return await func(**block.input)
+                    except Exception as e:
+                        return f"Error running {block.name}: {e}"
 
-            results = await asyncio.gather(*(_run(b) for b in tool_blocks))
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": b.id, "content": r}
-                    for b, r in zip(tool_blocks, results)
-                ],
-            })
+                results = await asyncio.gather(*(_run(b) for b in tool_blocks))
+                messages.append({
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": b.id, "content": r}
+                        for b, r in zip(tool_blocks, results)
+                    ],
+                })
+                continue
+
+            # ---- Final answer turn: validate color identity BEFORE showing it ----
+            answer_text = "".join(turn_parts)
+            try:
+                off = await _check_off_color(answer_text)
+            except Exception:
+                off = None
+
+            if off and identity_retries < MAX_IDENTITY_RETRIES:
+                identity_retries += 1
+                bad = ", ".join(f"{c['name']} ({c['identity']})" for c in off)
+                yield _sse("status", {"tool": "color-identity check",
+                                      "input": f"off-identity found ({bad}) - revising"})
+                messages.append({"role": "user", "content": (
+                    "STOP - your previous answer recommended cards that are ILLEGAL in "
+                    f"this deck's color identity: {bad}. Rewrite your ENTIRE previous "
+                    "answer, removing every one of those cards and replacing each with a "
+                    "legal in-identity alternative (verify replacements with "
+                    "scryfall_search_cards using commander_identity). Do not mention the "
+                    "illegal cards at all. Keep the same %%IDENTITY%% marker and format."
+                )})
+                continue  # regenerate; do NOT show the bad answer
+
+            # Clean (or out of retries) - now it's safe to show.
+            if off:
+                # Out of retries but still off-color: physically strip the illegal
+                # recommendations, then flag what was removed.
+                off_names = [c["name"] for c in off]
+                answer_text = _strip_off_color_lines(answer_text, off_names)
+                answer_text += (
+                    f"\n\n_(Removed {len(off)} off-identity card"
+                    f"{'s' if len(off) > 1 else ''} that couldn't be legally replaced: "
+                    f"{', '.join(off_names)}.)_"
+                )
+            if answer_text:
+                yield _sse("text", {"text": answer_text})
+            if off:
+                yield _sse("warning", {"cards": off})
+            break
         else:
-            yield _sse("text", {"text": "\n\n_(Stopped after too many tool steps.)_"})
+            yield _sse("text", {"text": "\n\n_(Stopped after too many steps.)_"})
 
         yield _sse("done", {})
     except anthropic.APIError as e:
