@@ -20,11 +20,15 @@ Usage:
     python theory_ingestion.py --force         # re-fetch/re-embed everything
 """
 
+import os
 import re
 import json
 import time
 import argparse
 from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv()
 
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -61,6 +65,13 @@ CHUNK_SIZE = 1200        # ~250-300 tokens
 CHUNK_OVERLAP = 150
 FETCH_DELAY = 1.2        # base politeness delay between transcript fetches (seconds)
 BACKOFF_SCHEDULE = [20, 45, 90, 180]  # seconds to wait after a block, per retry
+
+# Apify backend (transcripts fetched via Apify's proxies - no IP block, no cookies).
+# Needs APIFY_TOKEN in the environment / .env. maxTotalChargeUsd caps spend so a run
+# can never exceed the free monthly credit.
+APIFY_ACTOR = "om_kh/youtube-transcript-api"
+APIFY_MAX_USD = float(os.environ.get("APIFY_MAX_USD", "4.5"))
+APIFY_BATCH = 40         # videos per Apify run
 
 _transcript_api = YouTubeTranscriptApi()
 
@@ -217,8 +228,129 @@ def get_collection():
 # MAIN
 # =============================================================================
 
+def store_video(collection, manifest, source, v, text, grand):
+    """Chunk + embed a video's transcript and record it in the manifest."""
+    vid = v["video_id"]
+    chunks = chunk_text(text) if text else []
+    if not chunks:
+        manifest[vid] = {"status": "no_transcript", "title": v["title"], "source": source["name"]}
+        grand["no_transcript"] += 1
+        print(f"  [no transcript] {v['title'][:70]}", flush=True)
+        return
+    ids = [f"{vid}:{i}" for i in range(len(chunks))]
+    metadatas = [{
+        "source": source["name"], "author": source["author"],
+        "title": v["title"], "url": v["url"], "video_id": vid, "type": "video",
+    } for _ in chunks]
+    collection.upsert(ids=ids, documents=chunks, metadatas=metadatas)
+    manifest[vid] = {"status": "ok", "title": v["title"], "source": source["name"], "chunks": len(chunks)}
+    grand["transcribed"] += 1
+    grand["chunks"] += len(chunks)
+    print(f"  [ok {len(chunks):>3} chunks] {v['title'][:66]}", flush=True)
+
+
+# ---- Apify backend (transcripts via Apify proxies; no IP block, no cookies) ----
+
+def _item_video_id(item: dict):
+    """Best-effort extraction of the 11-char YouTube id from an Apify result item."""
+    for k in ("videoId", "video_id", "id"):
+        val = item.get(k)
+        if isinstance(val, str) and re.fullmatch(r"[A-Za-z0-9_-]{11}", val):
+            return val
+    for k in ("url", "video_url", "videoUrl", "link", "webpage_url"):
+        u = item.get(k)
+        if isinstance(u, str):
+            m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})", u)
+            if m:
+                return m.group(1)
+    return None
+
+
+def fetch_transcripts_apify(video_ids: list) -> dict:
+    """Fetch a batch of transcripts via Apify. Returns {video_id: text|None}."""
+    from apify_client import ApifyClient
+    token = os.environ.get("APIFY_TOKEN")
+    if not token:
+        raise RuntimeError("APIFY_TOKEN is not set. Add it to your .env "
+                           "(Apify console -> Settings -> API tokens).")
+    client = ApifyClient(token)
+    run_input = {
+        "videos": list(video_ids),
+        "includeSegments": False,
+        # YouTube blocks datacenter IPs; residential proxy is required to get through.
+        "proxyConfiguration": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
+        "maxTotalChargeUsd": APIFY_MAX_USD,
+    }
+    run = client.actor(APIFY_ACTOR).call(run_input=run_input)
+    rd = run.model_dump() if hasattr(run, "model_dump") else dict(run)
+    dataset_id = rd.get("default_dataset_id") or rd.get("defaultDatasetId")
+    out = {}
+    if not dataset_id:
+        return out
+    for item in client.dataset(dataset_id).iterate_items():
+        vid = _item_video_id(item)
+        text = (item.get("text") or "").strip() or None
+        if vid:
+            out[vid] = text
+    return out
+
+
+def run_apify(sources, cap, force, retry_missing, collection, manifest, grand):
+    """Ingest via Apify: enumerate channels locally, fetch transcripts in batches."""
+    for source in sources:
+        name = source["name"]
+        print(f"\n--- {name} (via Apify) ---", flush=True)
+        try:
+            videos = enumerate_channel(source["channel_url"], cap)
+        except Exception as e:
+            print(f"  Could not enumerate channel: {e}", flush=True)
+            continue
+        print(f"  {len(videos)} videos found", flush=True)
+
+        pending = []
+        for v in videos:
+            grand["videos"] += 1
+            prior = manifest.get(v["video_id"])
+            if prior and not force:
+                if prior.get("status") == "ok":
+                    grand["skipped"] += 1
+                    continue
+                if prior.get("status") == "no_transcript" and not retry_missing:
+                    grand["skipped"] += 1
+                    continue
+            pending.append(v)
+
+        for i in range(0, len(pending), APIFY_BATCH):
+            batch = pending[i:i + APIFY_BATCH]
+            print(f"  fetching {len(batch)} transcripts via Apify...", flush=True)
+            try:
+                results = fetch_transcripts_apify([v["url"] for v in batch])
+            except Exception as e:
+                print(f"  Apify batch failed: {e}", flush=True)
+                save_manifest(manifest)
+                return
+            for v in batch:
+                store_video(collection, manifest, source, v, results.get(v["video_id"]), grand)
+            save_manifest(manifest)
+
+
+def _print_summary(grand, collection):
+    print("\n" + "=" * 64)
+    print("Done.")
+    print(f"  Videos seen:        {grand['videos']}")
+    print(f"  Newly transcribed:  {grand['transcribed']}  ({grand['chunks']} chunks)")
+    print(f"  No transcript:      {grand['no_transcript']}")
+    print(f"  Already done/skip:  {grand['skipped']}")
+    try:
+        print(f"  Collection size:    {collection.count()} chunks total")
+    except Exception:
+        pass
+    print("Restart the advisor / MCP server so deckbuilding_search picks up the corpus.")
+    print("=" * 64)
+
+
 def main(cap=None, only_source=None, retry_missing=False, force=False,
-         overnight=False, max_hours=10.0, probe_interval=600):
+         overnight=False, max_hours=10.0, probe_interval=600, backend="local"):
     print("=" * 64)
     print("MTG Deckbuilding Theory Ingestion" + ("  [OVERNIGHT MODE]" if overnight else ""))
     print("=" * 64, flush=True)
@@ -239,6 +371,12 @@ def main(cap=None, only_source=None, retry_missing=False, force=False,
 
     grand = {"videos": 0, "transcribed": 0, "no_transcript": 0, "skipped": 0, "chunks": 0}
     break_all = False
+
+    if backend == "apify":
+        run_apify(sources, cap, force, retry_missing, collection, manifest, grand)
+        save_manifest(manifest)
+        _print_summary(grand, collection)
+        return
 
     for source in sources:
         name = source["name"]
@@ -299,46 +437,14 @@ def main(cap=None, only_source=None, retry_missing=False, force=False,
                 print(f"  [no transcript] {v['title'][:70]}")
                 continue
 
-            chunks = chunk_text(text)
-            if not chunks:
-                manifest[vid] = {"status": "no_transcript", "title": v["title"], "source": name}
-                grand["no_transcript"] += 1
-                continue
-
-            ids = [f"{vid}:{i}" for i in range(len(chunks))]
-            metadatas = [{
-                "source": name,
-                "author": source["author"],
-                "title": v["title"],
-                "url": v["url"],
-                "video_id": vid,
-                "type": "video",
-            } for _ in chunks]
-            collection.upsert(ids=ids, documents=chunks, metadatas=metadatas)
-
-            manifest[vid] = {"status": "ok", "title": v["title"], "source": name, "chunks": len(chunks)}
+            store_video(collection, manifest, source, v, text, grand)
             save_manifest(manifest)
-            grand["transcribed"] += 1
-            grand["chunks"] += len(chunks)
-            print(f"  [ok {len(chunks):>3} chunks] {v['title'][:66]}")
 
         if break_all:
             break
 
     save_manifest(manifest)
-
-    print("\n" + "=" * 64)
-    print("Done.")
-    print(f"  Videos seen:        {grand['videos']}")
-    print(f"  Newly transcribed:  {grand['transcribed']}  ({grand['chunks']} chunks)")
-    print(f"  No transcript:      {grand['no_transcript']}")
-    print(f"  Already done/skip:  {grand['skipped']}")
-    try:
-        print(f"  Collection size:    {collection.count()} chunks total")
-    except Exception:
-        pass
-    print("Restart the advisor / MCP server so deckbuilding_search picks up the corpus.")
-    print("=" * 64)
+    _print_summary(grand, collection)
 
 
 if __name__ == "__main__":
@@ -351,6 +457,9 @@ if __name__ == "__main__":
                    help="Run slow and wait out IP blocks (poll until unblocked) instead of stopping.")
     p.add_argument("--max-hours", type=float, default=10.0, help="Max runtime in overnight mode (default 10).")
     p.add_argument("--probe-interval", type=int, default=600, help="Seconds between unblock probes (default 600).")
+    p.add_argument("--backend", choices=["local", "apify"], default="local",
+                   help="Transcript source: 'local' (youtube-transcript-api) or 'apify' (needs APIFY_TOKEN).")
     args = p.parse_args()
     main(cap=args.cap, only_source=args.source, retry_missing=args.retry_missing, force=args.force,
-         overnight=args.overnight, max_hours=args.max_hours, probe_interval=args.probe_interval)
+         overnight=args.overnight, max_hours=args.max_hours, probe_interval=args.probe_interval,
+         backend=args.backend)
