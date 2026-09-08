@@ -29,4 +29,25 @@ SOURCES = [
         "author": "Salubrious Snail",
         "channel_url": "https://www.youtube.com/@salubrioussnail/videos",
     },
+    {
+        "name": "Commander Challenge",
+        "author": "Commander Challenge",
+        "channel_url": "https://www.youtube.com/@TheCommanderChallenge/videos",
+    },
+    {
+        "name": "Wise Hoopoe",
+        "author": "Wise Hoopoe",
+        "channel_url": "https://www.youtube.com/@WiseHoopoeMTG/videos",
+    },
+    {
+        # This channel hosts several shows (the podcast, Game Knights, Extra Turns,
+        # Turn Talk...). We want ONLY the podcast, whose episodes are titled
+        # "... | The Command Zone <number> | ...", so include-filter on that.
+        "name": "The Command Zone",
+        "author": "The Command Zone",
+        "channel_url": "https://www.youtube.com/@commandcast/videos",
+        # "Command Zone <n>" (older eps drop the "The"); does not match Game
+        # Knights / Extra Turns / "Commander", so it's the podcast only.
+        "include_title": ["Command Zone"],
+    },
 ]

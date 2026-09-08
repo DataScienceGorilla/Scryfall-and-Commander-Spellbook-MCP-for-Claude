@@ -115,6 +115,25 @@ def enumerate_channel(channel_url: str, cap: int | None = None) -> list[dict]:
     return videos
 
 
+def _apply_title_filters(videos, source):
+    """
+    Filter a channel's videos by title. If the source has include_title, keep only
+    videos whose title contains one of those keywords; exclude_title drops matches.
+    Lets us pull just one show from a mixed channel (e.g. only "The Command Zone"
+    podcast episodes, not Game Knights / Extra Turns / Turn Talk).
+    """
+    include = [x.lower() for x in (source.get("include_title") or [])]
+    exclude = [x.lower() for x in (source.get("exclude_title") or [])]
+    kept = videos
+    if include:
+        kept = [v for v in kept if any(x in v["title"].lower() for x in include)]
+    if exclude:
+        kept = [v for v in kept if not any(x in v["title"].lower() for x in exclude)]
+    if len(kept) != len(videos):
+        print(f"  title filter: kept {len(kept)}/{len(videos)}", flush=True)
+    return kept
+
+
 def fetch_transcript(video_id: str) -> str | None:
     """
     Fetch and flatten a video's caption transcript.
@@ -315,6 +334,7 @@ def run_apify(sources, cap, force, retry_missing, collection, manifest, grand):
             print(f"  Could not enumerate channel: {e}", flush=True)
             continue
         print(f"  {len(videos)} videos found", flush=True)
+        videos = _apply_title_filters(videos, source)
 
         pending = []
         for v in videos:
@@ -396,6 +416,7 @@ def main(cap=None, only_source=None, retry_missing=False, force=False,
             print(f"  Could not enumerate channel: {e}")
             continue
         print(f"  {len(videos)} videos found")
+        videos = _apply_title_filters(videos, source)
 
         for v in videos:
             vid = v["video_id"]
