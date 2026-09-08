@@ -22,10 +22,19 @@ Usage:
 
 import os
 import re
+import sys
 import json
 import time
 import argparse
 from pathlib import Path
+
+# Windows consoles / redirected logs default to cp1252, which raises
+# UnicodeEncodeError on emoji in video titles. Force UTF-8 so prints never crash.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -331,7 +340,7 @@ def run_apify(sources, cap, force, retry_missing, collection, manifest, grand):
                 return
             for v in batch:
                 store_video(collection, manifest, source, v, results.get(v["video_id"]), grand)
-            save_manifest(manifest)
+                save_manifest(manifest)
 
 
 def _print_summary(grand, collection):
