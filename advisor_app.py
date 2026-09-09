@@ -373,17 +373,21 @@ _CARD_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _IDENT_RE = re.compile(r"%%IDENTITY:([WUBRGC]+)%%", re.I)
 
 
-async def _check_off_color(answer_text: str):
+async def _check_off_color(answer_text: str, identity_override: str | None = None):
     """
-    Deterministic color-identity guardrail. Reads the advisor's declared
-    %%IDENTITY:XX%% marker, then verifies every [[card]] it referenced against
-    Scryfall's color_identity. Returns a list of off-identity cards (illegal in
-    this deck), or None if no identity was declared.
+    Deterministic color-identity guardrail. Uses identity_override when given
+    (captured authoritatively from the model's commander_identity tool args),
+    else falls back to the declared %%IDENTITY:XX%% marker. Verifies every
+    [[card]] against Scryfall's color_identity. Returns a list of off-identity
+    cards (illegal in this deck), or None if no identity is known at all.
     """
-    m = _IDENT_RE.search(answer_text)
-    if not m:
-        return None
-    allowed = set(m.group(1).upper().replace("C", ""))
+    if identity_override:
+        allowed = set(identity_override.upper().replace("C", ""))
+    else:
+        m = _IDENT_RE.search(answer_text)
+        if not m:
+            return None
+        allowed = set(m.group(1).upper().replace("C", ""))
     names = list(dict.fromkeys(_CARD_RE.findall(answer_text)))  # unique, in order
     if not names:
         return []
@@ -445,6 +449,7 @@ async def agent_stream(session_id: str, messages: list):
     """
     yield _sse("session", {"session_id": session_id})
     identity_retries = 0
+    deck_identity = None  # authoritative commander identity, captured from tool args
     try:
         for _ in range(MAX_ITERATIONS + MAX_IDENTITY_RETRIES):
             turn_parts = []
@@ -473,6 +478,13 @@ async def agent_stream(session_id: str, messages: list):
 
                 tool_blocks = [b for b in final.content if b.type == "tool_use"]
                 for block in tool_blocks:
+                    # Capture the commander identity the model passes to its tools -
+                    # authoritative for the color-identity guardrail (doesn't depend on
+                    # the %%IDENTITY%% marker, which the model sometimes forgets).
+                    ci = (block.input or {}).get("commander_identity")
+                    if ci and not deck_identity:
+                        deck_identity = ci
+                        yield _sse("identity", {"identity": ci})
                     yield _sse("status", {"tool": block.name, "input": _short_input(block.input)})
 
                 async def _run(block):
@@ -497,7 +509,7 @@ async def agent_stream(session_id: str, messages: list):
             # ---- Final answer turn: validate color identity BEFORE showing it ----
             answer_text = "".join(turn_parts)
             try:
-                off = await _check_off_color(answer_text)
+                off = await _check_off_color(answer_text, deck_identity)
             except Exception:
                 off = None
 

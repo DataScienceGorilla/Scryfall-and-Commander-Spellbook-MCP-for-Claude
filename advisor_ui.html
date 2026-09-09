@@ -631,6 +631,10 @@ async function send() {
           scrollToBottom();
         } else if (ev.event === 'status') {
           activity.addTool(ev.data.tool, ev.data.input || '');
+        } else if (ev.event === 'identity') {
+          // authoritative commander identity from the backend (tool args) -
+          // drives off-color canvas flagging even if the model drops the marker
+          if (ev.data.identity) setDeckIdentity(ev.data.identity.toUpperCase());
         } else if (ev.event === 'warning') {
           renderWarning(ev.data.cards);
         } else if (ev.event === 'error') {
