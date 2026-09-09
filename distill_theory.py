@@ -185,7 +185,7 @@ def distill_creator(source_name, cap_videos=None):
     print(f"  {len(notes)} usable; synthesizing playbook...", flush=True)
     combined = "\n\n".join(notes)
     playbook = _ask(REDUCE_MODEL, REDUCE_PROMPT.format(
-        creator=source_name, n=len(notes), notes=combined[:180000]), 4000).strip()
+        creator=source_name, n=len(notes), notes=combined[:180000]), 6000).strip()
 
     out = PLAYBOOK_DIR / f"{slug}.md"
     out.write_text(f"# {source_name} - Deckbuilding Playbook\n\n"
@@ -202,7 +202,22 @@ def synthesize():
         parts.append(p.read_text(encoding="utf-8"))
     print(f"Synthesizing unified playbook from {len(parts)} creator playbooks...", flush=True)
     combined = "\n\n=====\n\n".join(parts)
-    unified = _ask(REDUCE_MODEL, UNIFIED_PROMPT.format(n=len(parts), playbooks=combined[:400000]), 6000).strip()
+
+    # Synthesis is non-deterministic and occasionally stops early; retry until the
+    # output is actually complete (has the worked-examples section, ends on a full
+    # sentence, and is long enough to contain all sections).
+    unified = ""
+    for attempt in range(4):
+        unified = _ask(REDUCE_MODEL, UNIFIED_PROMPT.format(
+            n=len(parts), playbooks=combined[:400000]), 9000).strip()
+        complete = ("WORKED EXAMPLES" in unified.upper()
+                    and len(unified) > 6000
+                    and unified[-1] in ".!?)\"'")
+        if complete:
+            break
+        print(f"  attempt {attempt + 1}: incomplete ({len(unified)} chars, "
+              f"worked-examples={'yes' if 'WORKED EXAMPLES' in unified.upper() else 'no'}); retrying",
+              flush=True)
     out = PLAYBOOK_DIR / "unified.md"
     out.write_text("# Unified Commander Deckbuilding Playbook\n\n"
                    "*Synthesized from the distilled playbooks of the corpus creators. "
