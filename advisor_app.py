@@ -21,13 +21,15 @@ import os
 import re
 import json
 import uuid
+import secrets
 import asyncio
 from pathlib import Path
 
 import httpx
 import anthropic
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -61,6 +63,33 @@ aclient = anthropic.AsyncAnthropic()
 # In-memory conversation store, keyed by session id. Fine for a local single
 # user; swap for something persistent if this ever gets hosted for many users.
 SESSIONS: dict[str, list] = {}
+
+# --- Optional password gate (for exposing the app via a tunnel) --------------
+# Auth is OFF when ADVISOR_PASSWORD is unset/empty (local single-user use is
+# unchanged). Set ADVISOR_PASSWORD (and optionally ADVISOR_USER) in .env before
+# exposing the app publicly so a leaked tunnel link alone can't spend API credits.
+ADVISOR_USER = os.getenv("ADVISOR_USER", "player")
+ADVISOR_PASSWORD = os.getenv("ADVISOR_PASSWORD", "")
+_basic = HTTPBasic(auto_error=False)
+
+
+async def require_auth(
+    credentials: HTTPBasicCredentials | None = Depends(_basic),
+) -> None:
+    """Enforce HTTP Basic auth iff ADVISOR_PASSWORD is set. Browsers cache the
+    credentials after the first prompt and resend them on same-origin /chat and
+    /reset requests automatically, so no UI changes are needed."""
+    if not ADVISOR_PASSWORD:
+        return  # local mode: no gate
+    ok = credentials is not None and secrets.compare_digest(
+        credentials.username, ADVISOR_USER
+    ) and secrets.compare_digest(credentials.password, ADVISOR_PASSWORD)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
 
 # =============================================================================
 # SYSTEM PROMPT - the deckbuilding backbone
@@ -659,12 +688,12 @@ app = FastAPI(title="MTG Deckbuilding Advisor", lifespan=lifespan)
 
 
 @app.get("/")
-async def index():
+async def index(_: None = Depends(require_auth)):
     return HTMLResponse(UI_FILE.read_text(encoding="utf-8"))
 
 
 @app.post("/chat")
-async def chat(request: Request):
+async def chat(request: Request, _: None = Depends(require_auth)):
     body = await request.json()
     user_message = (body.get("message") or "").strip()
     session_id = body.get("session_id") or str(uuid.uuid4())
@@ -682,7 +711,7 @@ async def chat(request: Request):
 
 
 @app.post("/reset")
-async def reset(request: Request):
+async def reset(request: Request, _: None = Depends(require_auth)):
     body = await request.json()
     session_id = body.get("session_id")
     if session_id:
