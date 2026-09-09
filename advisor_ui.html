@@ -103,6 +103,16 @@
   .card-tooltip img { width: 100%; display: block; }
   .card-tooltip .tt-loading { padding: 16px; font-size: 12px; color: var(--muted); text-align: center; }
 
+  /* Card lightbox (in-app enlarge; no navigation) */
+  .lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.78);
+    display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .lightbox .lb-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; max-height: 100%; }
+  .lightbox .lb-img { max-height: 80vh; max-width: 90vw; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .lightbox .lb-bar { display: flex; align-items: center; gap: 16px; color: var(--text); font-size: 14px; }
+  .lightbox .lb-name { font-weight: 600; }
+  .lightbox .lb-link { color: var(--accent); text-decoration: none; font-size: 13px; }
+  .lightbox .lb-link:hover { text-decoration: underline; }
+
   /* Input */
   #composer { border-top: 1px solid var(--border); padding: 12px; display: flex; gap: 10px; background: var(--panel); }
   #composer textarea {
@@ -187,6 +197,29 @@ const tooltip = document.createElement('div');
 tooltip.className = 'card-tooltip';
 document.body.appendChild(tooltip);
 let ttCard = null;
+
+// In-app card lightbox (click a card -> enlarge here, never navigate away).
+const lightbox = document.createElement('div');
+lightbox.className = 'lightbox';
+lightbox.hidden = true;
+lightbox.innerHTML = '<div class="lb-inner"><img class="lb-img" alt=""><div class="lb-bar">'
+  + '<span class="lb-name"></span><a class="lb-link" target="_blank" rel="noopener">View on Scryfall ↗</a>'
+  + '</div></div>';
+document.body.appendChild(lightbox);
+lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+
+function openLightbox(entry) {
+  hideTooltip();
+  if (!entry || !entry.img) return;
+  lightbox.querySelector('.lb-img').src = entry.img;
+  lightbox.querySelector('.lb-name').textContent = entry.canonical || '';
+  const link = lightbox.querySelector('.lb-link');
+  if (entry.scryfall) { link.href = entry.scryfall; link.hidden = false; }
+  else { link.hidden = true; }
+  lightbox.hidden = false;
+}
+function closeLightbox() { lightbox.hidden = true; }
 
 // Commander color-identity guardrail. deckIdentity is a Set of WUBRG letters
 // (empty = colorless); null until the advisor declares it via %%IDENTITY:XX%%.
@@ -391,10 +424,15 @@ async function fetchCard(name, key) {
     if (!img) throw new Error('no image');
     entry.canonical = data.name;
     entry.img = img;
+    entry.scryfall = data.scryfall_uri;
     entry.identity = data.color_identity || [];
     entry.status = 'ok';
     entry.tile.className = 'card-tile';
-    entry.tile.innerHTML = `<a href="${data.scryfall_uri}" target="_blank" rel="noopener" title="${data.name}"><img loading="lazy" src="${img}" alt="${data.name}"></a>`;
+    entry.tile.title = data.name;
+    entry.tile.innerHTML = `<img loading="lazy" src="${img}" alt="${data.name}">`;
+    // Click opens an in-app lightbox (NOT a navigation) so the chat is never lost.
+    entry.tile.style.cursor = 'zoom-in';
+    entry.tile.onclick = () => openLightbox(entry);
     // map canonical name too, so chips/hover using the exact name resolve correctly
     cardCache.set(keyFor(data.name), entry);
     evaluateTile(entry);  // flag if outside the commander's color identity
