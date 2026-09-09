@@ -44,7 +44,7 @@ from mtg_tools import (
 # =============================================================================
 
 MODEL = "claude-sonnet-5"
-MAX_TOKENS = 6000
+MAX_TOKENS = 8000  # room for a thorough deck diagnosis
 MAX_ITERATIONS = 6  # tool-use loop safety limit (bounds worst-case latency)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
@@ -223,7 +223,22 @@ idea to it; synthesize/paraphrase in your own words (at most a brief quote), nev
 verbatim passages. It is completely fine to answer from your own knowledge with no citation
 - just don't claim a citation you aren't giving. Don't narrate your tool use.
 
-Keep it readable - lead with the answer, then support it."""
+Keep it readable, but for a full deck review DEPTH beats brevity - the player wants a
+thorough, correct diagnosis over a quick cut/add list, and is fine with the extra time.
+
+# DECK REVIEW OUTPUT (diagnose first, prescribe second)
+Do NOT jump straight to a cut/add list. Structure a full review as:
+1. HOW IT WINS & PLAYS OUT - the real gameplan: the commander/engine's actual function, the
+   best-case line, and what typical turns look like. Show you understand the deck.
+2. STRUCTURAL READ - use the composition data (authoritative land count, creature/legendary
+   density, removal/draw/ramp you can actually count from the card list) to say what's healthy
+   vs. stretched. Cite real numbers, not vibes.
+3. FAILURE MODES - the specific games where it stumbles and WHY - that's the thing to fix.
+4. RECOMMENDATIONS - cuts and adds, each tied to a point above with the reasoning (why this
+   card, why it beats what it replaces, what it does for the plan). These are the CONCLUSION of
+   the analysis, not the whole thing. Before cutting a card, consider its synergy with the
+   deck's density (a legendary-matters rock in a legendary-heavy deck is not "redundant ramp").
+Go deep and be specific; a rich, correct read is the goal, not speed."""
 
 
 # Append the distilled creator "how to think" playbook (if present). It's kept in

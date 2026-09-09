@@ -305,7 +305,9 @@ async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: 
     q = query
     if allowed is not None:
         scope = f"id<={''.join(sorted(allowed)).lower()}" if allowed else "id:c"
-        q = f"({query}) {scope}"
+        # legal:commander excludes Alchemy/digital-only cards (e.g. "A-" rebalances)
+        # and Commander-banned cards, so recommendations are real, paper-legal cards.
+        q = f"({query}) {scope} legal:commander"
 
     async with httpx.AsyncClient() as client:
         try:
@@ -760,15 +762,28 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
         tls += [f.get("type_line", "") for f in (c.get("card_faces") or [])]
         return [t.lower() for t in tls if t]
 
-    # Deterministic mana-base count (basics x qty, nonbasics, AND MDFC land-backs).
+    # Deterministic composition counts (qty-weighted): lands (incl. MDFC land-backs),
+    # creatures, legendaries, and a type breakdown - so synergy density is visible
+    # (e.g. a legendary-heavy deck makes "ramp only for legendary spells" premium).
     land_count, mdfc_lands = 0, []
+    creature_count = legendary_count = 0
+    type_counts = {}
     for c in cards:
         tls = type_lines(c)
+        n = qty_for(c)
+        joined = " ".join(tls)
         if any("land" in t for t in tls):
-            land_count += qty_for(c)
+            land_count += n
             top = c.get("type_line", "").lower()
             if "//" in top and not top.strip().startswith("land"):
                 mdfc_lands.append(c.get("name", "?"))
+        if "creature" in joined:
+            creature_count += n
+        if "legendary" in joined:
+            legendary_count += n
+        for t in ("creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker", "battle"):
+            if t in joined:
+                type_counts[t] = type_counts.get(t, 0) + n
 
     def fmt(c):
         name = c.get("name", "?")
@@ -784,10 +799,17 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
         pt = f" [{c.get('power')}/{c.get('toughness')}]" if c.get("power") is not None else ""
         return f"[{ci}] {name} {cost} - {tl}{pt}: {' '.join(ot.split())}"
 
-    composition = f"MANA BASE: {land_count} land sources (this is the authoritative land count - use it, don't recount)."
+    composition = f"MANA BASE: {land_count} land sources (authoritative count - use this, don't recount)."
     if mdfc_lands:
-        composition += (f" Includes {len(mdfc_lands)} MDFC/flex land(s) that count toward the mana base: "
+        composition += (f" Includes {len(mdfc_lands)} MDFC/flex land(s) that count as lands: "
                         f"{', '.join(mdfc_lands[:8])}.")
+    breakdown = ", ".join(f"{t}s {type_counts[t]}" for t in
+                          ("creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker", "battle")
+                          if type_counts.get(t))
+    composition += (f"\nCOMPOSITION (qty-weighted): {creature_count} creatures "
+                    f"({legendary_count} legendary permanents) | {breakdown}. "
+                    "Use this density to judge synergy - e.g. a legendary-heavy deck makes "
+                    "'ramp/effects that only work for legendary spells' premium, not redundant.")
     lines = [composition,
              f"\nActual card details for {len(cards)}/{len(names)} cards (color identity in [brackets]):\n"]
     lines += [fmt(c) for c in sorted(cards, key=lambda x: x.get("name", ""))]
