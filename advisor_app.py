@@ -193,6 +193,20 @@ verbatim passages. It is completely fine to answer from your own knowledge with 
 
 Keep it readable - lead with the answer, then support it."""
 
+
+# Append the distilled creator "how to think" playbook (if present). It's kept in
+# a file so it can be re-distilled/edited without touching code. These are lenses
+# to reason WITH, not a procedure to follow.
+_PLAYBOOK_PATH = Path(__file__).parent / "playbooks" / "unified.md"
+if _PLAYBOOK_PATH.exists():
+    SYSTEM_PROMPT += (
+        "\n\n# HOW TO THINK (distilled from expert Commander deckbuilders)\n"
+        "Reason WITH the playbook below. These are LENSES to weigh with judgment, never a "
+        "checklist - diagnose what THIS deck actually needs and go deep on the few lenses that "
+        "matter, ignoring the rest. Attribute a distinctive idea to its creator when it helps.\n\n"
+        + _PLAYBOOK_PATH.read_text(encoding="utf-8")
+    )
+
 # =============================================================================
 # THEORY CORPUS (deckbuilding_search tool) - lazy loaded, mirrors rules pattern
 # =============================================================================
