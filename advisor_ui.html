@@ -106,6 +106,7 @@
   /* Card lightbox (in-app enlarge; no navigation) */
   .lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.78);
     display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .lightbox[hidden] { display: none; }  /* author display:flex would otherwise defeat the hidden attribute */
   .lightbox .lb-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; max-height: 100%; }
   .lightbox .lb-img { max-height: 80vh; max-width: 90vw; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
   .lightbox .lb-bar { display: flex; align-items: center; gap: 16px; color: var(--text); font-size: 14px; }
@@ -179,8 +180,23 @@
   </main>
 
 <script>
-const SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) ||
-                   (Date.now() + '-' + Math.random().toString(16).slice(2));
+let SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) ||
+                 (Date.now() + '-' + Math.random().toString(16).slice(2));
+
+// ---- chat persistence (survives page reloads) ----
+const STORE_KEY = 'mtg_advisor_chat_v1';
+let conversation = [];  // [{role, text}]
+function saveState() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({ sessionId: SESSION_ID, conversation }));
+  } catch (e) { /* private mode / quota - ignore */ }
+}
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
 
 const messagesEl = document.getElementById('messages');
 const cardsEl = document.getElementById('cards');
@@ -459,6 +475,7 @@ async function send() {
   if (!text || streaming) return;
   inputEl.value = ''; inputEl.style.height = 'auto';
   addMessage('user', text);
+  conversation.push({ role: 'user', text }); saveState();
   streaming = true; sendBtn.disabled = true;
 
   let bubble = null;
@@ -508,6 +525,7 @@ async function send() {
     addMessage('assistant', '⚠️ Connection error: ' + e.message);
   } finally {
     activity.finish();
+    if (acc.trim()) { conversation.push({ role: 'assistant', text: acc }); saveState(); }
     streaming = false; sendBtn.disabled = false;
     inputEl.focus();
   }
@@ -534,8 +552,29 @@ async function resetConversation() {
   messagesEl.innerHTML = '';
   cardsEl.innerHTML = '<div class="empty-note">Cards the advisor mentions will show up here.</div>';
   cardCache.clear(); seenNames.clear(); deckIdentity = null;
+  // fresh backend session + cleared persistence
+  conversation = [];
+  SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + '-' + Math.random().toString(16).slice(2));
+  try { localStorage.removeItem(STORE_KEY); } catch (e) {}
   addMessage('assistant', "Fresh start. What commander are we building around?");
 }
+
+// Restore a persisted conversation on load (survives page reloads / accidental navigation).
+(function restore() {
+  const saved = loadState();
+  if (!saved || !(saved.conversation || []).length) return;
+  SESSION_ID = saved.sessionId || SESSION_ID;
+  conversation = saved.conversation;
+  messagesEl.innerHTML = '';  // replace the default greeting
+  for (const m of conversation) {
+    addMessage(m.role, m.text);  // assistant render -> bindChips -> requestCard repopulates the canvas
+    if (m.role === 'assistant' && deckIdentity === null) {
+      const mm = m.text.match(/%%IDENTITY:([WUBRGC]+)%%/i);
+      if (mm) setDeckIdentity(mm[1].toUpperCase());
+    }
+  }
+  scrollToBottom();
+})();
 </script>
 </body>
 </html>
