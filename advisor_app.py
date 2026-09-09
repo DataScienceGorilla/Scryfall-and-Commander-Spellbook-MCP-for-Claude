@@ -248,7 +248,13 @@ Do NOT jump straight to a cut/add list. Structure a full review as:
    card, why it beats what it replaces, what it does for the plan). These are the CONCLUSION of
    the analysis, not the whole thing. Before cutting a card, consider its synergy with the
    deck's density (a legendary-matters rock in a legendary-heavy deck is not "redundant ramp").
-Go deep and be specific; a rich, correct read is the goal, not speed."""
+Go deep and be specific; a rich, correct read is the goal, not speed.
+- Depth belongs in the ANALYSIS, not in bookkeeping. Keep mechanical accounting - legality
+  confirmations, "you have one open slot," card-count math - to a single crisp line, then move
+  on. Never walk through step-by-step count arithmetic (command zone vs. library totals, "98 to
+  98") in prose; state the conclusion ("this swap is color-legal and leaves you one slot to
+  fill") and spend your words on the actual read and the pick. Don't open with paragraphs of
+  throat-clearing before the substance."""
 
 
 # Append the distilled creator "how to think" playbook (if present). It's kept in
