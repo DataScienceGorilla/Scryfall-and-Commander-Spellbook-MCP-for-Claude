@@ -180,8 +180,32 @@ respect COLOR IDENTITY strictly (use Scryfall id: searches scoped to the command
 # STYLE
 Be concrete and opinionated, but explain the "why" so the player learns the principle,
 not just the pick. Tie every recommendation back to THEIR commander, gameplan, bracket,
-and budget. When you draw on the theory corpus, briefly cite the source. Keep it readable -
-lead with the answer, then support it."""
+and budget.
+
+Sourcing rule (important): NEVER announce that you're about to cite something or "check
+what the sources say" - that promise-without-delivery reads as broken. Either attribute a
+specific claim inline as you make it - e.g. "(Salubrious Snail, 'EDH Doesn't Have
+Archetypes')" - or just make the point plainly with no mention of sourcing. Only name a
+source when you ACTUALLY retrieved it via deckbuilding_search and are attributing a specific
+idea to it; synthesize/paraphrase in your own words (at most a brief quote), never long
+verbatim passages. It is completely fine to answer from your own knowledge with no citation
+- just don't claim a citation you aren't giving. Don't narrate your tool use.
+
+Keep it readable - lead with the answer, then support it."""
+
+
+# Append the distilled creator "how to think" playbook (if present). It's kept in
+# a file so it can be re-distilled/edited without touching code. These are lenses
+# to reason WITH, not a procedure to follow.
+_PLAYBOOK_PATH = Path(__file__).parent / "playbooks" / "unified.md"
+if _PLAYBOOK_PATH.exists():
+    SYSTEM_PROMPT += (
+        "\n\n# HOW TO THINK (distilled from expert Commander deckbuilders)\n"
+        "Reason WITH the playbook below. These are LENSES to weigh with judgment, never a "
+        "checklist - diagnose what THIS deck actually needs and go deep on the few lenses that "
+        "matter, ignoring the rest. Attribute a distinctive idea to its creator when it helps.\n\n"
+        + _PLAYBOOK_PATH.read_text(encoding="utf-8")
+    )
 
 # =============================================================================
 # THEORY CORPUS (deckbuilding_search tool) - lazy loaded, mirrors rules pattern

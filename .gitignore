@@ -3,3 +3,4 @@
 __pycache__/
 *.pyc
 mtg_rules_data/
+mtg_theory_data/
