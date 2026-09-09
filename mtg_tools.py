@@ -742,6 +742,34 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
             not_found.extend(nf.get("name", "?") for nf in data.get("not_found", []))
             await asyncio.sleep(0.1)
 
+    # Quantities (per pasted name), robust to MDFC front/full-name mismatches.
+    qty = {}
+    for e in main:
+        qty[e["card"].lower()] = qty.get(e["card"].lower(), 0) + int(e.get("quantity", 1))
+
+    def qty_for(c):
+        keys = [c.get("name", "").lower(), c.get("name", "").split("//")[0].strip().lower()]
+        keys += [(f.get("name", "") or "").lower() for f in (c.get("card_faces") or [])]
+        for k in keys:
+            if k in qty:
+                return qty[k]
+        return 1
+
+    def type_lines(c):
+        tls = [c.get("type_line", "")]
+        tls += [f.get("type_line", "") for f in (c.get("card_faces") or [])]
+        return [t.lower() for t in tls if t]
+
+    # Deterministic mana-base count (basics x qty, nonbasics, AND MDFC land-backs).
+    land_count, mdfc_lands = 0, []
+    for c in cards:
+        tls = type_lines(c)
+        if any("land" in t for t in tls):
+            land_count += qty_for(c)
+            top = c.get("type_line", "").lower()
+            if "//" in top and not top.strip().startswith("land"):
+                mdfc_lands.append(c.get("name", "?"))
+
     def fmt(c):
         name = c.get("name", "?")
         ci = "".join(c.get("color_identity", [])) or "C"
@@ -756,7 +784,12 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
         pt = f" [{c.get('power')}/{c.get('toughness')}]" if c.get("power") is not None else ""
         return f"[{ci}] {name} {cost} - {tl}{pt}: {' '.join(ot.split())}"
 
-    lines = [f"Actual card details for {len(cards)}/{len(names)} cards (color identity in [brackets]):\n"]
+    composition = f"MANA BASE: {land_count} land sources (this is the authoritative land count - use it, don't recount)."
+    if mdfc_lands:
+        composition += (f" Includes {len(mdfc_lands)} MDFC/flex land(s) that count toward the mana base: "
+                        f"{', '.join(mdfc_lands[:8])}.")
+    lines = [composition,
+             f"\nActual card details for {len(cards)}/{len(names)} cards (color identity in [brackets]):\n"]
     lines += [fmt(c) for c in sorted(cards, key=lambda x: x.get("name", ""))]
     if not_found:
         lines.append(f"\nNot resolved (check exact names): {', '.join(not_found[:25])}")
