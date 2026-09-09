@@ -44,7 +44,8 @@ from mtg_tools import (
 # =============================================================================
 
 MODEL = "claude-sonnet-5"
-MAX_TOKENS = 8000  # room for a thorough deck diagnosis
+THINKING_EFFORT = "high"  # adaptive-thinking effort for Sonnet 5 (reason through card interactions)
+MAX_TOKENS = 12000  # room for thinking + a full deck diagnosis
 MAX_ITERATIONS = 6  # tool-use loop safety limit (bounds worst-case latency)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
@@ -509,7 +510,12 @@ async def agent_stream(session_id: str, messages: list):
                 system=SYSTEM_PROMPT,
                 tools=TOOLS,
                 messages=messages,
-                thinking={"type": "disabled"},
+                # Sonnet 5 adaptive thinking; passed via extra_body since SDK 0.75
+                # doesn't yet type these params.
+                extra_body={
+                    "thinking": {"type": "adaptive"},
+                    "output_config": {"effort": THINKING_EFFORT},
+                },
             ) as stream:
                 async for event in stream:
                     if (
