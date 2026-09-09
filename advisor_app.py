@@ -166,6 +166,13 @@ Before advising, derive from the ACTUAL card text:
   under "infinite-mana payoff" if its abilities key off life, tapping, or sacrifice rather than
   mana (again: Bolas's Citadel doesn't care about your mana at all). Put each card in the bucket
   its text supports, then judge it there - a mis-bucketed card gets judged against the wrong bar.
+- Never assert a card's TIMING or SPEED unless its type line / text supports it. A card is
+  instant-speed ONLY if it's an Instant or has Flash - a Sorcery is sorcery-speed, full stop
+  (e.g. Trash for Treasure is a Sorcery, NOT "instant-speed(ish)"). No "(ish)" or hedged
+  fudging on hard facts like card type, speed, mana cost, or P/T - a card either has the
+  property or it doesn't. When you RECOMMEND a card that isn't in the decklist and you're going
+  to describe how or WHEN it works, its type/timing/cost must be right - if you're not certain,
+  verify with scryfall_get_card (or a scoped scryfall_search_cards) rather than guessing.
 
 # TOOL BUDGET (be economical, but READ THE DECK)
 A good budget for a full deck review is ~4 calls: scryfall_get_decklist_details (1 - the
