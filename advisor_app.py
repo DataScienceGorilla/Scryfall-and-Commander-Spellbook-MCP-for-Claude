@@ -213,6 +213,20 @@ if _PLAYBOOK_PATH.exists():
         + _PLAYBOOK_PATH.read_text(encoding="utf-8")
     )
 
+# Re-assert the machine-critical formatting rules AFTER the playbook so recency keeps
+# them salient (the long playbook otherwise drowns out the top-of-prompt rules).
+SYSTEM_PROMPT += (
+    "\n\n# NON-NEGOTIABLE FORMATTING (overrides any habit from the playbook above)\n"
+    "1. Wrap EVERY specific Magic card name in [[double brackets]] - e.g. [[Sneak Attack]], "
+    "[[Ram Through]], [[Ghalta, Stampede Tyrant]]. NEVER use bold or plain text for a card "
+    "name; the [[ ]] markers are what render it on the card canvas, so bolding a card instead "
+    "silently breaks the UI.\n"
+    "2. Emit the `%%IDENTITY:XX%%` marker as the very first line of your first response about a "
+    "deck.\n"
+    "3. Do NOT narrate your tool use or 'think out loud' about refining searches - just make "
+    "the calls silently and write the finished answer."
+)
+
 # =============================================================================
 # THEORY CORPUS (deckbuilding_search tool) - lazy loaded, mirrors rules pattern
 # =============================================================================
@@ -453,10 +467,9 @@ async def agent_stream(session_id: str, messages: list):
             messages.append({"role": "assistant", "content": final.content})
 
             if final.stop_reason == "tool_use":
-                # Emit any preamble text, then run the tools.
-                preamble = "".join(turn_parts)
-                if preamble.strip():
-                    yield _sse("text", {"text": preamble})
+                # Suppress the model's mid-process narration on tool-call turns
+                # (the "let me refine this search" chatter) - the tool trace shows
+                # what's happening; only the final answer turn streams to the user.
 
                 tool_blocks = [b for b in final.content if b.type == "tool_use"]
                 for block in tool_blocks:
