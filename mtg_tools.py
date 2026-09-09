@@ -229,6 +229,20 @@ TOOLS = [
         }
     },
     {
+        "name": "scryfall_get_decklist_details",
+        "description": "Fetch the ACTUAL oracle text, type line, mana cost and color identity for every card in a pasted decklist, in one batch. Call this FIRST when reviewing a decklist so your evaluation is grounded in what the cards really do - do NOT guess a card's function from its name, especially for crossover/Universes Beyond/precon/obscure cards where your memory is often wrong.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decklist_text": {
+                    "type": "string",
+                    "description": "Pasted decklist as text, one card per line (quantity optional)."
+                }
+            },
+            "required": ["decklist_text"]
+        }
+    },
+    {
         "name": "spellbook_estimate_bracket",
         "description": "Estimate the Commander bracket (power level 1-4) for a decklist based on its combos. Bracket 1 = Casual, Bracket 2 = Precon-appropriate, Bracket 3 = Powerful, Bracket 4 = Ruthless/cEDH.",
         "input_schema": {
@@ -696,6 +710,59 @@ async def _decklist_to_main(client, decklist_url, decklist_text):
     ]
 
 
+async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
+    """
+    Fetch the ACTUAL oracle text, type, mana cost and color identity for every card
+    in a pasted decklist, in one batch (Scryfall /cards/collection). Lets the advisor
+    reason from what cards really do instead of guessing from names.
+    """
+    if not decklist_text:
+        return "Provide the decklist as pasted text (one card per line) to read its cards."
+    main = _parse_decklist_to_main(decklist_text)
+    names, seen = [], set()
+    for e in main:
+        k = e["card"].lower()
+        if k not in seen:
+            seen.add(k)
+            names.append(e["card"])
+    if not names:
+        return "Couldn't parse any cards from that decklist."
+
+    cards, not_found = [], []
+    async with httpx.AsyncClient(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
+        for i in range(0, len(names), 75):  # Scryfall collection endpoint caps at 75
+            batch = [{"name": n} for n in names[i:i + 75]]
+            try:
+                resp = await client.post(f"{SCRYFALL_API}/cards/collection", json={"identifiers": batch})
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                return f"Error fetching card details: {e}"
+            cards.extend(data.get("data", []))
+            not_found.extend(nf.get("name", "?") for nf in data.get("not_found", []))
+            await asyncio.sleep(0.1)
+
+    def fmt(c):
+        name = c.get("name", "?")
+        ci = "".join(c.get("color_identity", [])) or "C"
+        tl = c.get("type_line", "")
+        if c.get("card_faces") and not c.get("oracle_text"):
+            faces = c["card_faces"]
+            cost = faces[0].get("mana_cost", "")
+            ot = " // ".join(f.get("oracle_text", "") for f in faces)
+        else:
+            cost = c.get("mana_cost", "")
+            ot = c.get("oracle_text", "")
+        pt = f" [{c.get('power')}/{c.get('toughness')}]" if c.get("power") is not None else ""
+        return f"[{ci}] {name} {cost} - {tl}{pt}: {' '.join(ot.split())}"
+
+    lines = [f"Actual card details for {len(cards)}/{len(names)} cards (color identity in [brackets]):\n"]
+    lines += [fmt(c) for c in sorted(cards, key=lambda x: x.get("name", ""))]
+    if not_found:
+        lines.append(f"\nNot resolved (check exact names): {', '.join(not_found[:25])}")
+    return "\n".join(lines)
+
+
 async def spellbook_find_combos_in_decklist(
     decklist_url: str = None,
     decklist_text: str = None,
@@ -879,5 +946,6 @@ TOOL_FUNCTIONS = {
     "spellbook_find_combos_for_cards": spellbook_find_combos_for_cards,
     "spellbook_find_combos_in_decklist": spellbook_find_combos_in_decklist,
     "spellbook_estimate_bracket": spellbook_estimate_bracket,
+    "scryfall_get_decklist_details": scryfall_get_decklist_details,
     "mtg_rules_search": mtg_rules_search,
 }
