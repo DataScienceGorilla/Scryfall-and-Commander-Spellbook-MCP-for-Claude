@@ -23,6 +23,7 @@ import json
 import uuid
 import secrets
 import asyncio
+import datetime
 from pathlib import Path
 
 import httpx
@@ -63,6 +64,26 @@ aclient = anthropic.AsyncAnthropic()
 # In-memory conversation store, keyed by session id. Fine for a local single
 # user; swap for something persistent if this ever gets hosted for many users.
 SESSIONS: dict[str, list] = {}
+
+# --- Activity log (watch who's using it, what they ask, and the token spend) --
+# One human-readable line per event, appended to a gitignored file AND echoed to
+# the server console. Tail it live with:  tail -f advisor_activity.log
+ACTIVITY_LOG = Path(__file__).parent / "advisor_activity.log"
+# Sonnet 5 rates ($/token). Used only for a rough per-query cost estimate;
+# treats all input as uncached, so it slightly OVER-estimates (cache reads are
+# cheaper) - the Anthropic Console remains the source of truth for billing.
+PRICE_IN_PER_TOKEN = 2.0 / 1_000_000
+PRICE_OUT_PER_TOKEN = 10.0 / 1_000_000
+
+
+def log_activity(event: str) -> None:
+    line = f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} | {event}"
+    print(line, flush=True)
+    try:
+        with open(ACTIVITY_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass  # logging must never break a request
 
 # --- Optional password gate (for exposing the app via a tunnel) --------------
 # Auth is OFF when ADVISOR_PASSWORD is unset/empty (local single-user use is
@@ -550,6 +571,8 @@ async def agent_stream(session_id: str, messages: list):
     yield _sse("session", {"session_id": session_id})
     identity_retries = 0
     deck_identity = None  # authoritative commander identity, captured from tool args
+    usage_in = usage_out = 0  # accumulated across every turn of this query
+    tools_used: list[str] = []
     try:
         for _ in range(MAX_ITERATIONS + MAX_IDENTITY_RETRIES):
             turn_parts = []
@@ -574,6 +597,13 @@ async def agent_stream(session_id: str, messages: list):
                         turn_parts.append(event.delta.text)
                 final = await stream.get_final_message()
 
+            u = getattr(final, "usage", None)
+            if u:
+                usage_in += (getattr(u, "input_tokens", 0) or 0) + (
+                    getattr(u, "cache_read_input_tokens", 0) or 0
+                ) + (getattr(u, "cache_creation_input_tokens", 0) or 0)
+                usage_out += getattr(u, "output_tokens", 0) or 0
+
             messages.append({"role": "assistant", "content": final.content})
 
             if final.stop_reason == "tool_use":
@@ -582,6 +612,7 @@ async def agent_stream(session_id: str, messages: list):
                 # what's happening; only the final answer turn streams to the user.
 
                 tool_blocks = [b for b in final.content if b.type == "tool_use"]
+                tools_used.extend(b.name for b in tool_blocks)
                 for block in tool_blocks:
                     # Capture the commander identity the model passes to its tools -
                     # authoritative for the color-identity guardrail (doesn't depend on
@@ -652,6 +683,12 @@ async def agent_stream(session_id: str, messages: list):
         else:
             yield _sse("text", {"text": "\n\n_(Stopped after too many steps.)_"})
 
+        cost = usage_in * PRICE_IN_PER_TOKEN + usage_out * PRICE_OUT_PER_TOKEN
+        tool_summary = ", ".join(f"{t}x{tools_used.count(t)}" for t in dict.fromkeys(tools_used)) or "none"
+        log_activity(
+            f"ANSWER sid={session_id[:8]} in={usage_in} out={usage_out} "
+            f"~${cost:.4f} | tools: {tool_summary}"
+        )
         yield _sse("done", {})
     except anthropic.APIError as e:
         yield _sse("error", {"message": f"API error: {e}"})
@@ -702,6 +739,16 @@ async def chat(request: Request, _: None = Depends(require_auth)):
 
     messages = SESSIONS.setdefault(session_id, [])
     messages.append({"role": "user", "content": user_message})
+
+    # Real client IP through the Cloudflare tunnel (falls back to socket peer).
+    xff = request.headers.get("x-forwarded-for", "")
+    client_ip = (
+        request.headers.get("cf-connecting-ip")
+        or (xff.split(",")[0].strip() if xff else "")
+        or (request.client.host if request.client else "?")
+    )
+    preview = user_message.replace("\n", " ")[:200]
+    log_activity(f"QUERY  sid={session_id[:8]} ip={client_ip} | {preview}")
 
     return StreamingResponse(
         agent_stream(session_id, messages),

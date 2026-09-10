@@ -3,4 +3,5 @@
 __pycache__/
 *.pyc
 mtg_rules_data/
-mtg_theory_data/
+mtg_theory_data/cloudflared.exe
+advisor_activity.log
