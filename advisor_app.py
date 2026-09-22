@@ -29,7 +29,7 @@ from pathlib import Path
 import httpx
 import anthropic
 from fastapi import FastAPI, Request, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from dotenv import load_dotenv
 
@@ -40,6 +40,8 @@ from mtg_tools import (
     TOOLS as BASE_TOOLS,
     TOOL_FUNCTIONS as BASE_TOOL_FUNCTIONS,
     get_rules_collection_async,
+    SCRYFALL_API,
+    SCRYFALL_HEADERS,
 )
 
 # =============================================================================
@@ -809,6 +811,67 @@ async def reset(request: Request, _: None = Depends(require_auth)):
     if session_id:
         SESSIONS.pop(session_id, None)
     return {"ok": True}
+
+
+# --- Card image proxy (cached) -----------------------------------------------
+# The canvas used to fetch api.scryfall.com directly from every browser, one
+# request per card. A full decklist (~100 cards) x several friends blew past
+# Scryfall's rate limit -> 429s that render as "not found" tiles. This proxy
+# resolves each name ONCE, server-side, with a proper User-Agent, and caches the
+# result so the whole playgroup shares it (the Nth viewer never hits Scryfall).
+CARD_IMG_CACHE: dict[str, dict | None] = {}  # lower(name) -> slim card | None (miss)
+_scry_sem = asyncio.Semaphore(5)  # cap concurrent Scryfall fetches (stay under its limit)
+
+
+def _slim_card(data: dict) -> dict:
+    """Keep only the fields the canvas reads, in the same shape Scryfall returns."""
+    faces = None
+    if data.get("card_faces"):
+        faces = [
+            {"image_uris": {"normal": (f.get("image_uris") or {}).get("normal")}}
+            for f in data["card_faces"]
+        ]
+    return {
+        "name": data.get("name"),
+        "scryfall_uri": data.get("scryfall_uri"),
+        "color_identity": data.get("color_identity", []),
+        "image_uris": ({"normal": data["image_uris"].get("normal")}
+                       if data.get("image_uris") else None),
+        "card_faces": faces,
+    }
+
+
+async def _resolve_card(name: str) -> dict | None:
+    """Fuzzy-resolve a card via Scryfall with correct headers + one 429 retry."""
+    async with _scry_sem:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for attempt in range(2):
+                try:
+                    r = await client.get(
+                        f"{SCRYFALL_API}/cards/named",
+                        params={"fuzzy": name},
+                        headers=SCRYFALL_HEADERS,
+                    )
+                except httpx.HTTPError:
+                    return None
+                if r.status_code == 429 and attempt == 0:
+                    await asyncio.sleep(float(r.headers.get("retry-after", "0.5")) or 0.5)
+                    continue
+                if r.status_code != 200:
+                    return None
+                return _slim_card(r.json())
+    return None
+
+
+@app.get("/card")
+async def card(name: str, _: None = Depends(require_auth)):
+    key = name.strip().lower()
+    if key not in CARD_IMG_CACHE:
+        CARD_IMG_CACHE[key] = await _resolve_card(name)
+    slim = CARD_IMG_CACHE[key]
+    if slim is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(slim)
 
 
 if __name__ == "__main__":

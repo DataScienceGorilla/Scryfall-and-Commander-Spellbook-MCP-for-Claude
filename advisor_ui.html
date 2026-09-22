@@ -550,7 +550,9 @@ function requestCard(name) {
 async function fetchCard(name, key) {
   const entry = cardCache.get(key);
   try {
-    const resp = await fetch('https://api.scryfall.com/cards/named?fuzzy=' + encodeURIComponent(name));
+    // Go through our cached backend proxy (not Scryfall directly) so a full
+    // decklist across several viewers doesn't trip Scryfall's rate limit.
+    const resp = await fetch('/card?name=' + encodeURIComponent(name));
     if (!resp.ok) throw new Error('not found');
     const data = await resp.json();
     const img = (data.image_uris && data.image_uris.normal) ||
