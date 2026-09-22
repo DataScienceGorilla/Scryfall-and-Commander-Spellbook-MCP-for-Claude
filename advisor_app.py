@@ -806,8 +806,23 @@ async def chat(request: Request, _: None = Depends(require_auth)):
     if not user_message:
         return HTMLResponse("Empty message", status_code=400)
 
-    messages = SESSIONS.setdefault(session_id, [])
-    messages.append({"role": "user", "content": user_message})
+    # The client sends its full transcript as `history` (browser is the source of
+    # truth), so conversation memory survives server restarts instead of living
+    # only in the in-memory SESSIONS dict. Rebuild the message list from it; fall
+    # back to the in-memory store for older clients that don't send history.
+    history = body.get("history")
+    if isinstance(history, list) and history:
+        messages = [
+            {"role": m["role"], "content": (m.get("text") or "").strip()}
+            for m in history
+            if m.get("role") in ("user", "assistant") and (m.get("text") or "").strip()
+        ]
+        if not messages or messages[-1]["role"] != "user":
+            messages.append({"role": "user", "content": user_message})
+        SESSIONS[session_id] = messages
+    else:
+        messages = SESSIONS.setdefault(session_id, [])
+        messages.append({"role": "user", "content": user_message})
 
     # Real client IP through the Cloudflare tunnel (falls back to socket peer).
     xff = request.headers.get("x-forwarded-for", "")

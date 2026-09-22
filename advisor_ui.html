@@ -606,7 +606,10 @@ async function send() {
     const resp = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: SESSION_ID, message: text }),
+      // Send the full transcript (this browser is the source of truth), so the
+      // model keeps context even if the server restarted since the last message.
+      // `conversation` already includes the just-added user turn as its last entry.
+      body: JSON.stringify({ session_id: SESSION_ID, message: text, history: conversation }),
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
