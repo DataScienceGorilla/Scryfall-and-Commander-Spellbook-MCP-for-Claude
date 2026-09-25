@@ -810,6 +810,34 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
                     f"({legendary_count} legendary permanents) | {breakdown}. "
                     "Use this density to judge synergy - e.g. a legendary-heavy deck makes "
                     "'ramp/effects that only work for legendary spells' premium, not redundant.")
+
+    # CONCRETE role composition from the Scryfall otag index (deterministic skeleton).
+    # Contextual roles (Enabler/Payoff/Force Multiplier/Engine Piece/Threats/Alt Wincon/
+    # Misc Value) are NOT here - the advisor assigns those holistically from the gameplan.
+    try:
+        import role_index
+        nonland_qty = {}
+        for c in cards:
+            if any("land" in t for t in type_lines(c)):
+                continue
+            nm = c.get("name", "")
+            nonland_qty[nm] = nonland_qty.get(nm, 0) + qty_for(c)
+        rc = role_index.deck_concrete_roles(list(nonland_qty))
+        counts = {}
+        for nm, rs in rc["per_card"].items():
+            for r in rs:
+                counts[r] = counts.get(r, 0) + nonland_qty.get(nm, 1)
+        n_ctx = sum(1 for nm, rs in rc["per_card"].items() if not rs)
+        if counts:
+            concrete_line = ", ".join(f"{r} {counts[r]}" for r in sorted(counts, key=lambda k: -counts[k]))
+            composition += (
+                "\nCONCRETE ROLES (Scryfall otags - authoritative counts, use these): " + concrete_line + ". "
+                f"The other ~{n_ctx} nonland cards carry CONTEXTUAL roles you must assign yourself from "
+                "the deck's gameplan (Enabler / Payoff / Force Multiplier / Engine Piece / Threats / "
+                "Alternate Wincon / Misc Value) - a card can hold a concrete role AND a contextual one.")
+    except Exception:
+        pass
+
     lines = [composition,
              f"\nActual card details for {len(cards)}/{len(names)} cards (color identity in [brackets]):\n"]
     lines += [fmt(c) for c in sorted(cards, key=lambda x: x.get("name", ""))]

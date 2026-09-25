@@ -373,11 +373,25 @@ thorough, correct diagnosis over a quick cut/add list, and is fine with the extr
 Do NOT jump straight to a cut/add list. Structure a full review as:
 1. HOW IT WINS & PLAYS OUT - the real gameplan: the commander/engine's actual function, the
    best-case line, and what typical turns look like. Show you understand the deck.
-2. STRUCTURAL READ - use the composition data (authoritative land count, creature/legendary
-   density, removal/draw/ramp you can actually count from the card list) to say what's healthy
-   vs. stretched. Cite real numbers, not vibes.
-3. FAILURE MODES - the specific games where it stumbles and WHY - that's the thing to fix.
-4. RECOMMENDATIONS - cuts and adds, each tied to a point above with the reasoning (why this
+2. THE ENGINE MAP (the core of the read - this is what interpreting a deck actually means):
+   lay out, holistically, what the deck WANTS TO DO, what ENABLES that, and what BENEFITS from
+   it. Concretely, assign the CONTEXTUAL roles by reasoning over the whole list:
+   - ENABLERS - cards that let the deck do its thing (make the tokens, fill the yard, go wide).
+   - PAYOFFS - cards that turn that activity into advantage or a win (the other side of the coin).
+   - FORCE MULTIPLIERS - doublers / turbochargers that amplify the ENABLERS themselves (not the
+     output): Doubling Season, extra combats.
+   - ENGINE - the 2-3 card combination(s) that generate repeatable value together (name the
+     pieces; this is combinatorial, so read it from the whole list).
+   - THREATS / FINISHERS - the clocks and the cards you expect to close the game.
+   The CONCRETE roles (Ramp/Draw/Target & Mass Interaction/Recursion/Tutor/Protection/Stax) are
+   already counted for you in the deck details (from Scryfall's tags) - trust those numbers and
+   spend your reasoning on the contextual map above, which is the part only whole-deck judgment
+   can do. A card can be both (a Ramp card that's also your key Enabler).
+3. STRUCTURAL READ - use the composition data (authoritative land count, the CONCRETE ROLE
+   counts, creature/legendary density) to say what's healthy vs. stretched. Cite real numbers,
+   not vibes - e.g. "6 pieces of targeted interaction but only 1 board wipe," using the counts given.
+4. FAILURE MODES - the specific games where it stumbles and WHY - that's the thing to fix.
+5. RECOMMENDATIONS - cuts and adds, each tied to a point above with the reasoning (why this
    card, why it beats what it replaces, what it does for the plan). These are the CONCLUSION of
    the analysis, not the whole thing. Before cutting a card, consider its synergy with the
    deck's density (a legendary-matters rock in a legendary-heavy deck is not "redundant ramp").

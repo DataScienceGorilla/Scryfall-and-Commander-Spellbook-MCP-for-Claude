@@ -5,3 +5,16 @@ __pycache__/
 mtg_rules_data/
 mtg_theory_data/cloudflared.exe
 advisor_activity.log
+.laya-venv/
+role_index.json
+archidekt_labeled.json
+training_labels.json
+gold_certified.json
+gold_full.json
+gold_sample.csv
+gold_supplement.csv
+folder_next.json
+mem_conv.json
+label_validation_out.json
+cloudflared.exe
+mtg_theory_data/
