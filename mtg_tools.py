@@ -342,7 +342,8 @@ async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: 
                 mana = card.get("mana_cost", "")
                 type_line = card.get("type_line", "")
                 ci = "".join(card.get("color_identity", [])) or "C"
-                lines.append(f"**{name}** {mana} - {type_line} [id:{ci}]")
+                gc = " [GAME CHANGER]" if card.get("game_changer") else ""
+                lines.append(f"**{name}** {mana} - {type_line} [id:{ci}]{gc}")
 
             return "\n".join(lines)
 
@@ -797,7 +798,8 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
             cost = c.get("mana_cost", "")
             ot = c.get("oracle_text", "")
         pt = f" [{c.get('power')}/{c.get('toughness')}]" if c.get("power") is not None else ""
-        return f"[{ci}] {name} {cost} - {tl}{pt}: {' '.join(ot.split())}"
+        gc = " [GAME CHANGER]" if c.get("game_changer") else ""
+        return f"[{ci}] {name}{gc} {cost} - {tl}{pt}: {' '.join(ot.split())}"
 
     composition = f"MANA BASE: {land_count} land sources (authoritative count - use this, don't recount)."
     if mdfc_lands:
@@ -837,6 +839,18 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
                 "Alternate Wincon / Misc Value) - a card can hold a concrete role AND a contextual one.")
     except Exception:
         pass
+
+    # Game changers in the deck (official Commander bracket list, via Scryfall's flag).
+    # Bracket 2 allows 0, Bracket 3 allows up to 3, Bracket 4-5 unlimited - the advisor
+    # must respect this when recommending, since GC adds change the deck's bracket.
+    gc_cards = sorted(c.get("name", "?") for c in cards if c.get("game_changer"))
+    if gc_cards:
+        composition += (f"\nGAME CHANGERS in deck: {len(gc_cards)} ({', '.join(gc_cards)}). "
+                        "Bracket limits: B2=0, B3=up to 3, B4-5=unlimited. Count these against the "
+                        "target bracket before recommending any card also marked [GAME CHANGER].")
+    else:
+        composition += ("\nGAME CHANGERS in deck: 0. (Bracket limits: B2=0, B3=up to 3, "
+                        "B4-5=unlimited - stay within the target bracket when recommending.)")
 
     lines = [composition,
              f"\nActual card details for {len(cards)}/{len(names)} cards (color identity in [brackets]):\n"]
