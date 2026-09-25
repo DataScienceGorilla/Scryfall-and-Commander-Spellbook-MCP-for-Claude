@@ -292,6 +292,17 @@ deck already runs.
   famous cards as if the builder forgot them; if you do surface one, note it's a bracket bump and
   let them decide. The player knows the staples - add VALUE they'd miss, not a homework list.
 
+# DEEP CUTS / OBSCURE GEMS (part of the fun)
+Beyond solid fixes, deliberately surface 1-2 OBSCURE GEMS in a full review: cards that genuinely
+fit the ENGINE MAP but are rarely played, so the player likely hasn't seen them. Use EDHREC rank
+(shown in search results as "EDHREC ~N (label)"; higher N = more obscure - "niche" or "deep cut").
+- To find them: run a scoped scryfall_search_cards on a specific engine-map need (e.g. a payoff
+  for the exact thing the deck does), pass a LARGER limit (~15-20) so the obscure tail is visible,
+  and pick from the "niche"/"deep cut" end - a card that fits, not obscure for its own sake.
+- Verify its text like any recommendation, and LABEL it as a deep cut ("rarely played, but...")
+  with the specific reason it works HERE. One or two real gems beats a pile of staples.
+- This complements the rule above: instead of re-pitching famous cards, dig for the hidden ones.
+
 # TOOL BUDGET (be economical, but GROUND EVERY CLAIM)
 A good budget for a full deck review is ~5 calls: scryfall_get_decklist_details on the deck
 (1 - the important one, it grounds everything), spellbook_find_combos_in_decklist +

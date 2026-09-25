@@ -292,6 +292,19 @@ def _identity_letters(commander_identity):
     return set(commander_identity.upper().replace("C", ""))
 
 
+def _pop_label(rank) -> str:
+    """Rough popularity bucket from EDHREC rank (lower = more played)."""
+    if not rank:
+        return "unranked"
+    if rank <= 300:
+        return "staple"
+    if rank <= 2000:
+        return "common"
+    if rank <= 6000:
+        return "niche"
+    return "deep cut"
+
+
 async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: str = None) -> str:
     """
     Search for cards on Scryfall.
@@ -313,7 +326,7 @@ async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: 
         try:
             response = await client.get(
                 f"{SCRYFALL_API}/cards/search",
-                params={"q": q},
+                params={"q": q, "order": "edhrec"},  # popular -> obscure; lets us spot deep cuts
                 headers=SCRYFALL_HEADERS,
                 timeout=30.0
             )
@@ -343,7 +356,9 @@ async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: 
                 type_line = card.get("type_line", "")
                 ci = "".join(card.get("color_identity", [])) or "C"
                 gc = " [GAME CHANGER]" if card.get("game_changer") else ""
-                lines.append(f"**{name}** {mana} - {type_line} [id:{ci}]{gc}")
+                rank = card.get("edhrec_rank")
+                pop = f" · EDHREC ~{rank} ({_pop_label(rank)})" if rank else " · EDHREC unranked"
+                lines.append(f"**{name}** {mana} - {type_line} [id:{ci}]{gc}{pop}")
 
             return "\n".join(lines)
 
