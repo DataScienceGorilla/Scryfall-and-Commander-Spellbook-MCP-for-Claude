@@ -594,8 +594,15 @@ async function send() {
   const text = inputEl.value.trim();
   if (!text || streaming) return;
   inputEl.value = ''; inputEl.style.height = 'auto';
+  // Bind this stream to the chat that started it, so switching tabs mid-stream
+  // never misfiles the answer. All persistence targets originConv; DOM updates
+  // only happen while that chat is the one on screen.
+  const originId = activeId;
+  const originSession = SESSION_ID;
+  const originConv = chats[originId].conversation;
+  const onScreen = () => activeId === originId;
   addMessage('user', text);
-  conversation.push({ role: 'user', text }); saveState();
+  originConv.push({ role: 'user', text }); saveState();
   streaming = true; sendBtn.disabled = true;
 
   let bubble = null;
@@ -608,8 +615,8 @@ async function send() {
       headers: { 'Content-Type': 'application/json' },
       // Send the full transcript (this browser is the source of truth), so the
       // model keeps context even if the server restarted since the last message.
-      // `conversation` already includes the just-added user turn as its last entry.
-      body: JSON.stringify({ session_id: SESSION_ID, message: text, history: conversation }),
+      // `originConv` already includes the just-added user turn as its last entry.
+      body: JSON.stringify({ session_id: originSession, message: text, history: originConv }),
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -625,34 +632,42 @@ async function send() {
         const ev = parseFrame(frame);
         if (!ev) continue;
         if (ev.event === 'text') {
-          if (!bubble) { activity.stopSpinner(); bubble = addMessage('assistant', ''); }
           acc += ev.data.text;
-          if (deckIdentity === null) {
-            const m = acc.match(/%%IDENTITY:([WUBRGC]+)%%/i);
-            if (m) setDeckIdentity(m[1].toUpperCase());
+          if (onScreen()) {
+            if (!bubble) { activity.stopSpinner(); bubble = addMessage('assistant', ''); }
+            if (deckIdentity === null) {
+              const m = acc.match(/%%IDENTITY:([WUBRGC]+)%%/i);
+              if (m) setDeckIdentity(m[1].toUpperCase());
+            }
+            bubble.innerHTML = renderMarkdown(acc);
+            bindChips(bubble);
+            scrollToBottom();
           }
-          bubble.innerHTML = renderMarkdown(acc);
-          bindChips(bubble);
-          scrollToBottom();
         } else if (ev.event === 'status') {
-          activity.addTool(ev.data.tool, ev.data.input || '');
+          if (onScreen()) activity.addTool(ev.data.tool, ev.data.input || '');
         } else if (ev.event === 'identity') {
           // authoritative commander identity from the backend (tool args) -
           // drives off-color canvas flagging even if the model drops the marker
-          if (ev.data.identity) setDeckIdentity(ev.data.identity.toUpperCase());
+          if (onScreen() && ev.data.identity) setDeckIdentity(ev.data.identity.toUpperCase());
         } else if (ev.event === 'warning') {
-          renderWarning(ev.data.cards);
+          if (onScreen()) renderWarning(ev.data.cards);
         } else if (ev.event === 'error') {
-          activity.stopSpinner();
-          addMessage('assistant', '⚠️ ' + ev.data.message);
+          if (onScreen()) { activity.stopSpinner(); addMessage('assistant', '⚠️ ' + ev.data.message); }
         }
       }
     }
   } catch (e) {
-    addMessage('assistant', '⚠️ Connection error: ' + e.message);
+    if (onScreen()) addMessage('assistant', '⚠️ Connection error: ' + e.message);
   } finally {
-    activity.finish();
-    if (acc.trim()) { conversation.push({ role: 'assistant', text: acc }); saveState(); }
+    if (onScreen()) activity.finish();
+    // Always persist the answer to the chat that ASKED, wherever the user is now.
+    if (acc.trim()) {
+      originConv.push({ role: 'assistant', text: acc });
+      saveState();
+      // If that chat is on screen but the live bubble was lost to a tab-switch
+      // (or was never drawn), re-render it so the finished answer shows.
+      if (onScreen() && (!bubble || !bubble.isConnected)) loadActiveIntoUI();
+    }
     streaming = false; sendBtn.disabled = false;
     inputEl.focus();
   }
