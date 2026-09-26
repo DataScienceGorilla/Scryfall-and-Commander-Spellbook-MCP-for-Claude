@@ -951,7 +951,14 @@ async def card(name: str, _: None = Depends(require_auth)):
     slim = CARD_IMG_CACHE[key]
     if slim is None:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return JSONResponse(slim)
+    # Attach concrete roles (otag index) so the canvas can group cards by role.
+    out = dict(slim)
+    try:
+        import role_index
+        out["roles"] = role_index.roles_for(slim.get("name") or name)
+    except Exception:
+        out["roles"] = []
+    return JSONResponse(out)
 
 
 if __name__ == "__main__":
