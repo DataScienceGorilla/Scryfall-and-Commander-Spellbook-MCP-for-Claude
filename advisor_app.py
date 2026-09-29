@@ -68,11 +68,14 @@ PRICES = {
 _DECK_LINE = re.compile(r"^\s*\d+\s+\S", re.M)
 _DECK_URL = re.compile(r"(moxfield\.com|archidekt\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net)", re.I)
 
-def pick_model(user_message: str):
-    """Route to Sonnet for a full review (decklist present), Haiku for everything else."""
-    text = user_message or ""
-    is_review = bool(_DECK_URL.search(text)) or len(_DECK_LINE.findall(text)) >= 15
-    return (REVIEW_MODEL, REVIEW_EXTRA) if is_review else (QUICK_MODEL, QUICK_EXTRA)
+def pick_model(convo_text: str):
+    """Sonnet whenever the CONVERSATION involves a deck (a decklist or deck URL appeared
+    anywhere in it) - so deckbuilding follow-ups stay smart, not just the message that
+    pasted the list. Haiku only for genuinely deck-free trivia. Caching keeps Sonnet
+    follow-ups cheap, so this restores quality at little cost."""
+    text = convo_text or ""
+    has_deck = bool(_DECK_URL.search(text)) or len(_DECK_LINE.findall(text)) >= 15
+    return (REVIEW_MODEL, REVIEW_EXTRA) if has_deck else (QUICK_MODEL, QUICK_EXTRA)
 MAX_ITERATIONS = 12  # tool-use turns before forcing a final answer (richer review workflow)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
@@ -957,9 +960,11 @@ async def chat(request: Request, _: None = Depends(require_auth)):
         or (xff.split(",")[0].strip() if xff else "")
         or (request.client.host if request.client else "?")
     )
-    # Tier the model: a decklist means a full review (Sonnet); otherwise Haiku for
-    # quick questions / follow-ups. Big credit saver alongside prompt caching.
-    model, extra = pick_model(user_message)
+    # Tier the model over the WHOLE conversation: once a deck is in the chat, stay on
+    # Sonnet for every follow-up (they're substantive deck reasoning); Haiku only for
+    # deck-free trivia. Caching keeps Sonnet follow-ups cheap.
+    convo_text = "\n".join(m["content"] for m in messages if isinstance(m.get("content"), str))
+    model, extra = pick_model(convo_text)
     preview = user_message.replace("\n", " ")[:200]
     log_activity(f"QUERY  sid={session_id[:8]} ip={client_ip} [{model.replace('claude-','')}] | {preview}")
 
