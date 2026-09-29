@@ -48,9 +48,31 @@ from mtg_tools import (
 # CONFIGURATION
 # =============================================================================
 
-MODEL = "claude-sonnet-5"
-THINKING_EFFORT = "high"  # adaptive-thinking effort for Sonnet 5 (reason through card interactions)
+# Model tiering: full deck reviews get Sonnet 5 (deep reasoning); quick questions /
+# follow-ups get Haiku 4.5 (cheap). The picker keys off whether the message carries a
+# decklist. Sonnet 5 uses adaptive thinking + effort (via extra_body on SDK 0.75);
+# Haiku 4.5 does not support those params, so it gets an empty extra_body.
+REVIEW_MODEL = "claude-sonnet-5"
+QUICK_MODEL = "claude-haiku-4-5"
+THINKING_EFFORT = "high"
 MAX_TOKENS = 12000  # room for thinking + a full deck diagnosis
+REVIEW_EXTRA = {"thinking": {"type": "adaptive"}, "output_config": {"effort": THINKING_EFFORT}}
+QUICK_EXTRA: dict = {}
+
+# per-model ($/token in, $/token out) for the activity-log cost estimate
+PRICES = {
+    "claude-sonnet-5": (2.0 / 1_000_000, 10.0 / 1_000_000),
+    "claude-haiku-4-5": (1.0 / 1_000_000, 5.0 / 1_000_000),
+}
+
+_DECK_LINE = re.compile(r"^\s*\d+\s+\S", re.M)
+_DECK_URL = re.compile(r"(moxfield\.com|archidekt\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net)", re.I)
+
+def pick_model(user_message: str):
+    """Route to Sonnet for a full review (decklist present), Haiku for everything else."""
+    text = user_message or ""
+    is_review = bool(_DECK_URL.search(text)) or len(_DECK_LINE.findall(text)) >= 15
+    return (REVIEW_MODEL, REVIEW_EXTRA) if is_review else (QUICK_MODEL, QUICK_EXTRA)
 MAX_ITERATIONS = 12  # tool-use turns before forcing a final answer (richer review workflow)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
@@ -71,11 +93,8 @@ SESSIONS: dict[str, list] = {}
 # One human-readable line per event, appended to a gitignored file AND echoed to
 # the server console. Tail it live with:  tail -f advisor_activity.log
 ACTIVITY_LOG = Path(__file__).parent / "advisor_activity.log"
-# Sonnet 5 rates ($/token). Used only for a rough per-query cost estimate;
-# treats all input as uncached, so it slightly OVER-estimates (cache reads are
-# cheaper) - the Anthropic Console remains the source of truth for billing.
-PRICE_IN_PER_TOKEN = 2.0 / 1_000_000
-PRICE_OUT_PER_TOKEN = 10.0 / 1_000_000
+# Per-query cost estimate uses per-model PRICES (above) and accounts for prompt-cache
+# reads (~0.1x) and writes (~1.25x); the Anthropic Console remains the billing source of truth.
 
 
 def log_activity(event: str) -> None:
@@ -678,7 +697,35 @@ def _short_input(tool_input: dict) -> str:
 MAX_IDENTITY_RETRIES = 2  # regenerate the answer this many times if off-color cards slip in
 
 
-async def agent_stream(session_id: str, messages: list):
+def _cached_system():
+    """System prompt as a cached block (stable per process) - big recurring input saving."""
+    return [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+
+
+def _cache_last(messages: list) -> list:
+    """Return messages with a cache breakpoint on the last block, so the whole conversation
+    prefix (system + tools + prior turns, incl. big deck details) is read from cache on the
+    next call instead of re-billed. messages[-1] is always a user message at call time."""
+    if not messages:
+        return messages
+    out = list(messages)
+    last = dict(out[-1])
+    content = last.get("content")
+    if isinstance(content, str):
+        last["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        nc = [dict(b) if isinstance(b, dict) else b for b in content]
+        nc[-1] = {**nc[-1], "cache_control": {"type": "ephemeral"}}
+        last["content"] = nc
+    else:
+        return messages
+    out[-1] = last
+    return out
+
+
+async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODEL, extra: dict = None):
+    if extra is None:
+        extra = REVIEW_EXTRA
     """
     Drives the Claude tool-use loop. Tool-call turns stream status live; the FINAL
     answer is buffered and validated for color-identity legality BEFORE it is shown,
@@ -688,23 +735,28 @@ async def agent_stream(session_id: str, messages: list):
     yield _sse("session", {"session_id": session_id})
     identity_retries = 0
     deck_identity = None  # authoritative commander identity, captured from tool args
-    usage_in = usage_out = 0  # accumulated across every turn of this query
+    usage_in = usage_out = usage_cr = usage_cw = 0  # uncached in / out / cache-read / cache-write
     tools_used: list[str] = []
+
+    def _tally(u):
+        nonlocal usage_in, usage_out, usage_cr, usage_cw
+        if not u:
+            return
+        usage_in += getattr(u, "input_tokens", 0) or 0
+        usage_cr += getattr(u, "cache_read_input_tokens", 0) or 0
+        usage_cw += getattr(u, "cache_creation_input_tokens", 0) or 0
+        usage_out += getattr(u, "output_tokens", 0) or 0
+
     try:
         for _ in range(MAX_ITERATIONS + MAX_IDENTITY_RETRIES):
             turn_parts = []
             async with aclient.messages.stream(
-                model=MODEL,
+                model=model,
                 max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
+                system=_cached_system(),   # cache system+tools prefix
                 tools=TOOLS,
-                messages=messages,
-                # Sonnet 5 adaptive thinking; passed via extra_body since SDK 0.75
-                # doesn't yet type these params.
-                extra_body={
-                    "thinking": {"type": "adaptive"},
-                    "output_config": {"effort": THINKING_EFFORT},
-                },
+                messages=_cache_last(messages),  # cache the conversation prefix
+                extra_body=extra,
             ) as stream:
                 async for event in stream:
                     if (
@@ -714,12 +766,7 @@ async def agent_stream(session_id: str, messages: list):
                         turn_parts.append(event.delta.text)
                 final = await stream.get_final_message()
 
-            u = getattr(final, "usage", None)
-            if u:
-                usage_in += (getattr(u, "input_tokens", 0) or 0) + (
-                    getattr(u, "cache_read_input_tokens", 0) or 0
-                ) + (getattr(u, "cache_creation_input_tokens", 0) or 0)
-                usage_out += getattr(u, "output_tokens", 0) or 0
+            _tally(getattr(final, "usage", None))
 
             messages.append({"role": "assistant", "content": final.content})
 
@@ -805,18 +852,15 @@ async def agent_stream(session_id: str, messages: list):
                 "you've already gathered above.")})
             final_parts = []
             async with aclient.messages.stream(
-                model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM_PROMPT, messages=messages,
-                extra_body={"thinking": {"type": "adaptive"}, "output_config": {"effort": THINKING_EFFORT}},
+                model=model, max_tokens=MAX_TOKENS, system=_cached_system(),
+                messages=_cache_last(messages), extra_body=extra,
             ) as stream:
                 async for event in stream:
                     if (event.type == "content_block_delta"
                             and getattr(event.delta, "type", None) == "text_delta"):
                         final_parts.append(event.delta.text)
                 fmsg = await stream.get_final_message()
-            fu = getattr(fmsg, "usage", None)
-            if fu:
-                usage_in += (getattr(fu, "input_tokens", 0) or 0) + (getattr(fu, "cache_read_input_tokens", 0) or 0)
-                usage_out += getattr(fu, "output_tokens", 0) or 0
+            _tally(getattr(fmsg, "usage", None))
             answer_text = "".join(final_parts)
             try:
                 off = await _check_off_color(answer_text, deck_identity)
@@ -832,11 +876,13 @@ async def agent_stream(session_id: str, messages: list):
             if off:
                 yield _sse("warning", {"cards": off})
 
-        cost = usage_in * PRICE_IN_PER_TOKEN + usage_out * PRICE_OUT_PER_TOKEN
+        pin, pout = PRICES.get(model, PRICES[REVIEW_MODEL])
+        cost = usage_in * pin + usage_cr * pin * 0.1 + usage_cw * pin * 1.25 + usage_out * pout
         tool_summary = ", ".join(f"{t}x{tools_used.count(t)}" for t in dict.fromkeys(tools_used)) or "none"
+        short_model = model.replace("claude-", "")
         log_activity(
-            f"ANSWER sid={session_id[:8]} in={usage_in} out={usage_out} "
-            f"~${cost:.4f} | tools: {tool_summary}"
+            f"ANSWER sid={session_id[:8]} [{short_model}] in={usage_in} cache_r={usage_cr} "
+            f"cache_w={usage_cw} out={usage_out} ~${cost:.4f} | tools: {tool_summary}"
         )
         yield _sse("done", {})
     except anthropic.APIError as e:
@@ -911,11 +957,14 @@ async def chat(request: Request, _: None = Depends(require_auth)):
         or (xff.split(",")[0].strip() if xff else "")
         or (request.client.host if request.client else "?")
     )
+    # Tier the model: a decklist means a full review (Sonnet); otherwise Haiku for
+    # quick questions / follow-ups. Big credit saver alongside prompt caching.
+    model, extra = pick_model(user_message)
     preview = user_message.replace("\n", " ")[:200]
-    log_activity(f"QUERY  sid={session_id[:8]} ip={client_ip} | {preview}")
+    log_activity(f"QUERY  sid={session_id[:8]} ip={client_ip} [{model.replace('claude-','')}] | {preview}")
 
     return StreamingResponse(
-        agent_stream(session_id, messages),
+        agent_stream(session_id, messages, model, extra),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
