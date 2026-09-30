@@ -708,34 +708,76 @@ async def spellbook_find_combos_for_cards(cards: list, limit: int = 5) -> str:
     return await spellbook_search_combos(combined_query, limit=limit)
 
 
-def _parse_decklist_to_main(text: str) -> list[dict]:
-    """
-    Parse a pasted decklist into the Commander Spellbook 'main' format:
-    [{"card": name, "quantity": n}, ...].
+# A decklist line: "1 Sol Ring", "1x Sol Ring", "12x Plains" (quantity first).
+DECK_LINE_RE = re.compile(r"^\s*\d+\s*[xX]?\s+\S", re.M)
 
-    Handles lines like "1 Sol Ring", "12 Plains", "Sol Ring", and strips
-    trailing set/collector annotations like " (C21) 263". Section headers
-    (Commander, Deck, Mainboard, etc.) are skipped.
-    """
-    main = []
-    skip = {"commander", "deck", "mainboard", "sideboard", "companion", "maybeboard"}
-    for raw in text.splitlines():
+# Section headers and per-card categories that mean "not in the 99".
+_SECTION_COMMANDER = {"commander", "commanders", "companion"}
+_SECTION_MAIN = {"deck", "main", "mainboard", "main deck", "the 99"}
+_SECTION_SKIP = {"sideboard", "maybeboard", "maybe", "considering", "tokens", "token", "attractions",
+                 "stickers", "contraptions"}
+_LINE_RE = re.compile(r"^\s*(\d+)\s*[xX]?\s+(.+?)\s*$")
+
+
+def parse_decklist(text: str) -> dict:
+    """Parse a pasted decklist in any common export format into
+    {"main": [{"card", "quantity"}] (the playable deck INCLUDING commanders),
+     "commanders": [names], "skipped": n (maybe/side-board cards left out)}.
+
+    Understands: plain "1 Sol Ring" / "1x Sol Ring"; set/collector suffixes "(C21) 263";
+    section headers ("Commander", "// Sideboard", "MAYBEBOARD:", "Deck (99)"); and
+    Archidekt's text export, where each line carries its categories and tags:
+    "1x Agent of the Iron Throne (clb) 107 [Commander{top}] ^Sleeved,#fb00e5^"."""
+    main, commanders, skipped = [], [], 0
+    section = "main"
+    # Bare names (no quantity) only count in a names-only list or under a Commander
+    # header - otherwise the chat text around a pasted list would become "cards".
+    names_only = not DECK_LINE_RE.search(text or "")
+    for raw in (text or "").splitlines():
         line = raw.strip()
-        if not line or line.lower().rstrip(":") in skip:
+        if not line:
             continue
-        qty = 1
-        parts = line.split(None, 1)
-        if len(parts) == 2 and parts[0].rstrip("xX").isdigit():
-            qty = int(parts[0].rstrip("xX"))
-            name = parts[1].strip()
-        else:
-            name = line
-        # Drop trailing set-code / collector-number annotations, e.g. "Sol Ring (C21) 263"
-        if " (" in name:
-            name = name.split(" (", 1)[0].strip()
-        if name:
-            main.append({"card": name, "quantity": qty})
-    return main
+        m = _LINE_RE.match(line)
+        if not m:
+            header = re.sub(r"\(\d+\)|[:/#*\-]", " ", line).strip().lower()
+            header = " ".join(header.split())
+            if header in _SECTION_COMMANDER:
+                section = "commander"
+            elif header in _SECTION_SKIP:
+                section = "skip"
+            elif header in _SECTION_MAIN:
+                section = "main"
+            elif (names_only or section == "commander") and len(line) < 60 and not re.search(r"https?://", line):
+                # a bare card name (quantity 1) - old behavior kept for "Sol Ring" lines
+                name = re.split(r"\s\(|\s\[|\s\^", line)[0].strip()
+                if name and section != "skip" and not header.endswith("board"):
+                    main.append({"card": name, "quantity": 1})
+                    if section == "commander":
+                        commanders.append(name)
+            continue
+        qty, rest = int(m.group(1)), m.group(2)
+        cats = []
+        for c in re.findall(r"\[([^\]]*)\]", rest):  # Archidekt categories
+            cats += [re.sub(r"\{.*?\}", "", x).strip().lower() for x in c.split(",")]
+        name = re.sub(r"\^[^^]*\^", "", rest)          # ^tags^
+        name = re.sub(r"\[[^\]]*\]", "", name)          # [categories]
+        name = re.sub(r"\*[A-Za-z]+\*", "", name)       # *F* foil / *E* etched markers
+        name = re.split(r"\s\(", name, 1)[0].strip()    # (set) collector#
+        if not name:
+            continue
+        if section == "skip" or any(c in _SECTION_SKIP for c in cats):
+            skipped += qty
+            continue
+        if section == "commander" or "commander" in cats:
+            commanders.append(name)
+        main.append({"card": name, "quantity": qty})
+    return {"main": main, "commanders": commanders, "skipped": skipped}
+
+
+def _parse_decklist_to_main(text: str) -> list[dict]:
+    """The playable deck (incl. commanders) as Spellbook 'main' entries:
+    [{"card": name, "quantity": n}, ...]. Maybe/side boards are left out."""
+    return parse_decklist(text)["main"]
 
 
 def _collection_name(name: str) -> str:

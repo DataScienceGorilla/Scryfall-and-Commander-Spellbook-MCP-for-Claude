@@ -89,6 +89,17 @@ def main():
     check("/deck/parse (incl. MDFC)", r.status_code == 200 and len(d.get("cards", [])) == 3 and not d.get("not_found"),
           str(d.get("not_found")))
 
+    arch = ("1x Krenko, Mob Boss (m13) 138 [Commander{top}] ^Sleeved,#fb00e5^\n"
+            "1x Sol Ring (c21) 263 *F* [Ramp] ^Sleeved^\n"
+            "1x Skullclamp (c20) 252 [Draw]\n"
+            "1x Umbral Mantle (shm) 267 [Maybeboard]")
+    d = c.post("/deck/parse", json={"text": arch}).json()
+    check("/deck/parse Archidekt export (commander, maybeboard)",
+          d.get("commander") == ["Krenko, Mob Boss"] and d.get("skipped") == 1 and len(d.get("cards", [])) == 3,
+          str({k: d.get(k) for k in ("commander", "skipped", "not_found")}))
+    many = "\n".join(f"1x Card {i} (set) {i} [Other]" for i in range(16))
+    check("'1x' pastes route to the review model", a.pick_model(many)[0] == a.REVIEW_MODEL)
+
     print(f"Done in {time.time() - t0:.0f}s")
 
 

@@ -545,7 +545,7 @@ let undoStack = [];
 
 function looksLikeDeck(text) {
   if (/moxfield\.com|archidekt\.com|commandertemplate\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net/i.test(text)) return true;
-  return (text.match(/^\s*\d+\s+\S/gm) || []).length >= 15;
+  return (text.match(/^\s*\d+\s*[xX]?\s+\S/gm) || []).length >= 15;  // "1 Sol Ring" or "1x Sol Ring"
 }
 async function loadDeckFromText(text) {
   try {
@@ -570,7 +570,11 @@ async function loadDeckFromText(text) {
       showToast(`Imported "${data.name || 'deck'}" from ${data.source}`
         + (data.skipped ? ` (${data.skipped} maybeboard/sideboard cards left out)` : '')
         + (deck.not_found.length ? ` - ${deck.not_found.length} unresolved` : ''));
-    } else if (deck.not_found.length) showToast(`${deck.not_found.length} card(s) couldn't be resolved - see the deck header`);
+    } else if (data.skipped || deck.not_found.length) {
+      showToast([data.skipped ? `${data.skipped} maybeboard/sideboard cards left out` : '',
+                 deck.not_found.length ? `${deck.not_found.length} card(s) couldn't be resolved - see the deck header` : '']
+                .filter(Boolean).join(' · '));
+    }
     return true;
   } catch (e) { return false; }
 }

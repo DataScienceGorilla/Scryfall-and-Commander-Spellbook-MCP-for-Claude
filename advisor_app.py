@@ -45,6 +45,8 @@ from mtg_tools import (
     SCRYFALL_API,
     SCRYFALL_HEADERS,
     _parse_decklist_to_main,
+    parse_decklist,
+    DECK_LINE_RE,
     _collection_name,
     find_deck_url,
     import_deck_url,
@@ -73,7 +75,7 @@ PRICES = {
     "claude-haiku-4-5": (1.0 / 1_000_000, 5.0 / 1_000_000),
 }
 
-_DECK_LINE = re.compile(r"^\s*\d+\s+\S", re.M)
+_DECK_LINE = DECK_LINE_RE  # "1 Sol Ring" / "1x Sol Ring" (Archidekt exports use "1x")
 _DECK_URL = re.compile(r"(moxfield\.com|archidekt\.com|commandertemplate\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net)", re.I)
 
 def pick_model(convo_text: str):
@@ -83,6 +85,9 @@ def pick_model(convo_text: str):
     follow-ups cheap, so this restores quality at little cost."""
     text = convo_text or ""
     has_deck = bool(_DECK_URL.search(text)) or len(_DECK_LINE.findall(text)) >= 15
+    # Safety net: a long conversation is never "trivia", whatever format a pasted list is in
+    # (an unrecognised export once routed a whole deck review to Haiku).
+    has_deck = has_deck or len(text) > 1500
     return (REVIEW_MODEL, REVIEW_EXTRA) if has_deck else (QUICK_MODEL, QUICK_EXTRA)
 MAX_ITERATIONS = 12  # tool-use turns before forcing a final answer (richer review workflow)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -1475,7 +1480,10 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
         text = "\n".join(f"{q} {n}" for q, n in imp["cards"])
         meta = {"commander": imp["commanders"], "bracket": imp["bracket"], "source": imp["source"],
                 "name": imp["name"], "skipped": imp["skipped"]}
-    main = _parse_decklist_to_main(text)
+    parsed = parse_decklist(text)
+    main = parsed["main"]
+    if not url:  # a pasted export can name its commander and board sections too
+        meta = {"commander": parsed["commanders"], "skipped": parsed["skipped"]}
     qty_by_name = {}
     for e in main:
         qty_by_name[e["card"]] = qty_by_name.get(e["card"], 0) + e["quantity"]

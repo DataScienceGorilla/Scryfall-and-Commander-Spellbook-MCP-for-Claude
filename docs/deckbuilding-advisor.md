@@ -55,23 +55,16 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   Used by the AI's `scryfall_get_card`, the MCP server, and the app's `/card` + `/deck/card`.
 - [x] **Multi-face cards dropped from batch lookups** (2026-09-30): Scryfall `/cards/collection`
   rejects "Front // Back" names → `_collection_name()` sends the front face (tool + `/deck/parse`).
-- [ ] **Respect export sections when parsing pastes** — now the main path for Moxfield/Commander
-  Template decks (their pastes are the fallback for blocked links) (seen live 2026-09-30): a friend's Archidekt
-  paste included the **maybeboard**, so the first full review (~$0.15) judged the wrong 99; the AI also
-  didn't identify the commander (Atraxa) until told. Archidekt/Moxfield exports label sections
-  (Commander / Maybeboard / Sideboard / Considering) — `_parse_decklist_to_main` should drop
-  maybe/side sections and set `deck.commander` from the Commander section, and the advisor should get
-  the same cleaned list.
-  - **No Commander section → ask, don't guess.** A 99 often holds several legendary creatures, and
-    some commanders aren't creatures at all, so pick candidates and let the user choose. Use Scryfall's
-    **`is:commander`** filter to get the real candidate set (covers legendary creatures plus the
-    exceptions: "can be your commander" planeswalkers/others, Backgrounds, etc.) — e.g. batch the
-    deck's names into `is:commander (!"Name A" or !"Name B" …)` searches. Then prompt the user in the
-    deck panel ("Which is your commander?" with those candidates; partners allowed), and have the
-    advisor ask too instead of assuming.
-  - The editor's current `can_command` flag is a type-line/oracle heuristic
-    (`advisor_app._slim_deck_card`) — replace it with the `is:commander` result so the commander
-    dropdown and "can't normally be a commander" warning use Scryfall's rules, not ours.
+- [x] **Export-aware paste parsing** (2026-09-30): `mtg_tools.parse_decklist` handles "1x" quantities,
+  set/collector suffixes, `*F*` markers, section headers (Commander / Deck / Sideboard / Maybeboard,
+  "// X (n)", "X:"), and Archidekt's per-line `[Categories{top}] ^tags^` - commander from a Commander
+  header/category, maybe/side boards dropped (the old parser kept them!). Bare names count only in
+  names-only lists or under a Commander header. `/deck/parse` returns `commander` + `skipped` for pastes.
+  **Root cause of a live regression:** Archidekt's "1x" lines didn't match the deck-line regex, so the
+  paste was treated as no deck -> routed to **Haiku** (misread cards, missed synergies) and never
+  loaded into the editor. `pick_model` now also sends any conversation over 1,500 chars to Sonnet.
+  Still open: a commander-picker prompt when a paste has no Commander section (Moxfield plain text) -
+  use `is:commander` candidates as planned above.
 - [ ] Nice-to-haves: compact
   `mtg_rules_data/` (7 stale segment dirs from past re-ingests).
 
