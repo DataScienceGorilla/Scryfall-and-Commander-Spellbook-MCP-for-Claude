@@ -20,7 +20,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py", "accounts.py"]
 UI_MARKERS = ["function send(", "function renderDeck(", "function initChats(", "initChats();",
-              "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "function openIntake(", "</html>"]
+              "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "function openIntake(",
+              "function renderTurnExtras(", "function acceptProposal(", "</html>"]
 
 failures = []
 
@@ -122,6 +123,14 @@ def main():
     check("commander eligibility via Scryfall (Background ok, Sol Ring not)",
           elig.get("Agent of the Iron Throne") is True and elig.get("Wilson, Refined Grizzly") is True
           and elig.get("Sol Ring") is False, str(elig))
+    import asyncio
+    pdeck = {"commander": ["Krenko, Mob Boss"], "cards": [{"name": n, "qty": 1} for n in
+             ("Krenko, Mob Boss", "Sol Ring", "Skullclamp", "Goblin Chieftain")], "intake": {"keep": ["Skullclamp"]}}
+    shown, refused = asyncio.run(a._validate_proposals(
+        [{"cut": "Goblin Chieftain", "add": "Goblin Warchief", "reason": "r"}, {"add": "Counterspell", "reason": "r"},
+         {"cut": "Skullclamp", "reason": "r"}], pdeck, "R"))
+    check("proposals: valid swap shown; off-color add + must-keep cut refused",
+          len(shown) == 1 and shown[0].get("add") == "Goblin Warchief" and len(refused) == 2, str(refused))
     many = "\n".join(f"1x Card {i} (set) {i} [Other]" for i in range(16))
     check("'1x' pastes route to the review model", a.pick_model(many)[0] == a.REVIEW_MODEL)
 

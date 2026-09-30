@@ -65,6 +65,44 @@
     cursor: pointer; font-weight: 550;
   }
   .chip:hover { color: #f0c874; }
+  /* Advisor proposals (accept/reject) + questions */
+  .turn-extras { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
+  .prop-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: .6px; color: var(--muted); font-weight: 650; }
+  .prop-head span { flex: 1; }
+  .prop-card { display: flex; gap: 12px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px; align-items: flex-start; }
+  .prop-card.accepted { border-color: rgba(96,170,110,.6); }
+  .prop-card.rejected { opacity: .55; }
+  .prop-thumbs { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .prop-thumb { width: 64px; aspect-ratio: 63/88; object-fit: cover; border-radius: 5px; cursor: zoom-in; }
+  .prop-thumb.out { filter: grayscale(.7) brightness(.8); }
+  .prop-arrow { color: var(--muted); font-size: 14px; }
+  .prop-body { flex: 1; min-width: 0; }
+  .prop-title { font-size: 13.5px; }
+  .prop-title s { color: #f2b8b4; }
+  .prop-title b { color: #b8e0bf; }
+  .prop-verb { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 8px; padding: 0 6px; margin-right: 4px; }
+  .prop-gc { font-size: 10.5px; color: var(--accent); margin-left: 6px; }
+  .prop-reason { font-size: 12.5px; color: var(--muted); margin: 4px 0 8px; }
+  .prop-actions { display: flex; gap: 6px; align-items: center; }
+  .prop-btn { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 7px;
+    padding: 4px 12px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .prop-btn:hover { border-color: var(--accent); }
+  .prop-btn.ok { background: var(--accent); color: #1a1400; border-color: var(--accent); font-weight: 650; }
+  .prop-status { font-size: 12.5px; color: var(--muted); }
+  .prop-card.accepted .prop-status { color: #8fcf9b; }
+  .q-card { background: var(--panel-2); border: 1px solid var(--accent); border-radius: 10px; padding: 12px; }
+  .q-title { font-weight: 600; margin-bottom: 8px; }
+  .q-options { display: flex; flex-wrap: wrap; gap: 6px; }
+  .q-opt { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 16px;
+    padding: 6px 13px; font: inherit; font-size: 13px; cursor: pointer; }
+  .q-opt:hover:not(:disabled) { border-color: var(--accent); }
+  .q-opt.sel { background: var(--chip); color: var(--accent); border-color: var(--accent); }
+  .q-opt:disabled:not(.sel) { opacity: .45; }
+  .q-foot { display: flex; gap: 6px; margin-top: 8px; }
+  @media (max-width: 560px) { .prop-thumb { width: 48px; } }
   .export-menu { position: absolute; z-index: 40; background: var(--panel-2); border: 1px solid var(--border);
     border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; display: flex; flex-direction: column; min-width: 240px; }
   .export-menu button { background: none; border: none; color: var(--text); text-align: left; padding: 7px 10px;
@@ -443,7 +481,8 @@ function loadActiveIntoUI() {
     addMessage('assistant', "Tell me your commander and what you're working on — a decklist to tune, a brand-new build, or a specific problem (curve, mana, a matchup). Cards I mention appear on the right.");
   } else {
     for (const m of conversation) {
-      addMessage(m.role, m.text, m.note);
+      const b = addMessage(m.role, m.text, m.note);
+      if (m.role === 'assistant') renderTurnExtras(m, b);
       if (m.role === 'assistant' && deckIdentity === null) {
         const mm = m.text.match(/%%IDENTITY:([WUBRGC]+)%%/i);
         if (mm) setDeckIdentity(mm[1].toUpperCase());
@@ -1173,6 +1212,119 @@ function renderIntake(opts) {
 intakeEl.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeIntake(false); } });
 intakeEl.addEventListener('click', e => { if (e.target === intakeEl) closeIntake(false); });
 
+// ---- advisor proposals (accept/reject) + questions (answer buttons) - workbench phase 3 ----
+// Rendered under the assistant message that made them; stored on that conversation entry
+// (entry.proposals[].status, entry.question.answer) so decisions persist and go back to the
+// advisor with the history.
+function renderTurnExtras(entry, bubble) {
+  const msg = bubble && bubble.closest('.msg');
+  if (!msg || (!(entry.proposals || []).length && !entry.question)) return;
+  let box = msg.querySelector('.turn-extras');
+  if (!box) { box = document.createElement('div'); box.className = 'turn-extras'; msg.appendChild(box); }
+  box.innerHTML = '';
+  const props = entry.proposals || [];
+  if (props.length) {
+    const pending = props.filter(p => p.status === 'pending');
+    const head = document.createElement('div'); head.className = 'prop-head';
+    head.innerHTML = `<span>Proposed changes · ${props.length}</span>`;
+    if (pending.length > 1 && deck) {
+      const all = document.createElement('button'); all.className = 'prop-btn ok'; all.textContent = 'Accept all';
+      all.onclick = async () => { pushUndo(); for (const p of pending) await acceptProposal(p, true); afterDecision(entry, bubble, `Accepted ${pending.length} changes`); };
+      const none = document.createElement('button'); none.className = 'prop-btn'; none.textContent = 'Reject all';
+      none.onclick = () => { pending.forEach(p => { p.status = 'rejected'; }); afterDecision(entry, bubble); };
+      head.append(all, none);
+    }
+    box.appendChild(head);
+    for (const p of props) box.appendChild(proposalCard(p, entry, bubble));
+  }
+  if (entry.question) box.appendChild(questionCard(entry.question));
+}
+function proposalCard(p, entry, bubble) {
+  const card = document.createElement('div');
+  card.className = 'prop-card ' + p.status;
+  const cutCard = p.cut && deckFind(p.cut);
+  if (cutCard && cutCard.image) p.cutImage = cutCard.image;  // remember it for after the cut
+  const thumb = (src, cls) => src ? `<img class="prop-thumb ${cls}" src="${escapeHtml(src)}" alt="">` : '';
+  const verb = p.cut && p.add ? 'Swap' : p.add ? 'Add' : 'Cut';
+  card.innerHTML = `<div class="prop-thumbs">${thumb(p.cutImage, 'out')}${p.cut && p.add ? '<span class="prop-arrow">→</span>' : ''}${thumb(p.addCard && p.addCard.image, 'in')}</div>
+    <div class="prop-body"><div class="prop-title"><span class="prop-verb">${verb}</span> ${p.cut ? `<s>${escapeHtml(p.cut)}</s>` : ''}${p.cut && p.add ? ' → ' : ''}${p.add ? `<b>${escapeHtml(p.add)}</b>` : ''}
+      ${p.addCard && p.addCard.game_changer ? '<span class="prop-gc">game changer</span>' : ''}</div>
+      <div class="prop-reason"></div><div class="prop-actions"></div></div>`;
+  card.querySelector('.prop-reason').textContent = p.reason || '';
+  const actions = card.querySelector('.prop-actions');
+  if (p.status === 'pending' && deck) {
+    const ok = document.createElement('button'); ok.className = 'prop-btn ok'; ok.textContent = 'Accept';
+    ok.onclick = async () => { ok.disabled = true; await acceptProposal(p); afterDecision(entry, bubble, verb === 'Swap' ? `Swapped ${p.cut} → ${p.add}` : `${verb === 'Add' ? 'Added' : 'Cut'} ${p.add || p.cut}`); };
+    const no = document.createElement('button'); no.className = 'prop-btn'; no.textContent = 'Reject';
+    no.onclick = () => { p.status = 'rejected'; afterDecision(entry, bubble); };
+    actions.append(ok, no);
+  } else {
+    actions.innerHTML = `<span class="prop-status">${p.status === 'accepted' ? '✓ Accepted' : p.status === 'rejected' ? '✗ Rejected' : 'No deck loaded'}</span>`;
+  }
+  card.querySelectorAll('.prop-thumb').forEach(img => img.addEventListener('click', () => openLightbox({ img: img.src, canonical: '' })));
+  return card;
+}
+// Apply one proposal to the deck. `quiet` = the caller already took the undo snapshot (Accept all).
+async function acceptProposal(p, quiet) {
+  if (!deck || p.status !== 'pending') return;
+  if (!quiet) pushUndo();  // Accept all takes one snapshot for the whole batch
+  if (p.cut) {
+    const c = deckFind(p.cut);
+    if (c) {
+      deck.cards = deck.cards.filter(x => x !== c);
+      deck.commander = (deck.commander || []).filter(n => lc(n) !== lc(c.name));
+    }
+  }
+  if (p.add && !deckFind(p.add)) {
+    try {
+      const r = await fetch('/deck/card?name=' + encodeURIComponent(p.add));
+      if (r.ok) deck.cards.push(await r.json());
+    } catch (e) {}
+  }
+  p.status = 'accepted';
+}
+function afterDecision(entry, bubble, toastText) {
+  deckChanged();  // persists (incl. the entry's statuses) + re-renders the deck panel
+  renderTurnExtras(entry, bubble);
+  if (toastText) showToast(toastText, true);
+}
+function questionCard(q) {
+  const box = document.createElement('div'); box.className = 'q-card';
+  const title = document.createElement('div'); title.className = 'q-title'; title.textContent = q.question;
+  box.appendChild(title);
+  const row = document.createElement('div'); row.className = 'q-options';
+  const picked = new Set();
+  for (const opt of q.options || []) {
+    const b = document.createElement('button'); b.className = 'q-opt'; b.textContent = opt;
+    if (q.answer) { b.disabled = true; if (String(q.answer).split(' · ').includes(opt)) b.classList.add('sel'); }
+    else if (q.multi) b.onclick = () => { picked.has(opt) ? picked.delete(opt) : picked.add(opt); b.classList.toggle('sel'); };
+    else b.onclick = () => answerQuestion(q, opt, box);
+    row.appendChild(b);
+  }
+  box.appendChild(row);
+  if (!q.answer) {
+    const foot = document.createElement('div'); foot.className = 'q-foot';
+    if (q.multi) {
+      const go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Send';
+      go.onclick = () => { if (picked.size) answerQuestion(q, [...picked].join(' · '), box); };
+      foot.appendChild(go);
+    }
+    const other = document.createElement('button'); other.className = 'prop-btn'; other.textContent = 'Something else…';
+    other.onclick = () => { inputEl.focus(); };
+    foot.appendChild(other);
+    box.appendChild(foot);
+  }
+  return box;
+}
+function answerQuestion(q, answer, box) {
+  if (streaming) { showToast('Wait for the current answer to finish'); return; }
+  q.answer = answer;
+  saveState();
+  if (box) box.replaceWith(questionCard(q));  // lock the buttons, show the pick
+  inputEl.value = answer;
+  send();
+}
+
 // ---- card editor modal ----
 let editorName = null;
 const editor = document.createElement('div');
@@ -1578,6 +1730,7 @@ async function send() {
   saveState();
 
   let bubble = null;
+  const turnProposals = []; let turnQuestion = null;  // interactive UI the advisor put up this turn
   let acc = '';
   const activity = addActivity();  // "Thinking…" appears immediately
 
@@ -1631,6 +1784,10 @@ async function send() {
           // authoritative commander identity from the backend (tool args) -
           // drives off-color canvas flagging even if the model drops the marker
           if (onScreen() && ev.data.identity) setDeckIdentity(ev.data.identity.toUpperCase());
+        } else if (ev.event === 'proposals') {
+          turnProposals.push(...(ev.data.items || []));
+        } else if (ev.event === 'question') {
+          turnQuestion = ev.data;
         } else if (ev.event === 'stale') {
           showStaleBanner();
         } else if (ev.event === 'memory') {
@@ -1648,12 +1805,18 @@ async function send() {
   } finally {
     if (onScreen()) activity.finish();
     // Always persist the answer to the chat that ASKED, wherever the user is now.
-    if (acc.trim()) {
-      originConv.push({ role: 'assistant', text: acc });
+    if (acc.trim() || turnProposals.length || turnQuestion) {
+      const entry = { role: 'assistant', text: acc };
+      if (turnProposals.length) entry.proposals = turnProposals;
+      if (turnQuestion) entry.question = turnQuestion;
+      originConv.push(entry);
       saveState();
       // If that chat is on screen but the live bubble was lost to a tab-switch
       // (or was never drawn), re-render it so the finished answer shows.
-      if (onScreen() && (!bubble || !bubble.isConnected)) loadActiveIntoUI();
+      if (onScreen()) {
+        if (!bubble || !bubble.isConnected) loadActiveIntoUI();
+        else renderTurnExtras(entry, bubble);
+      }
     }
     streaming = false; sendBtn.disabled = false;
     inputEl.focus();

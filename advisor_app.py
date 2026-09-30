@@ -293,6 +293,20 @@ THAT is their current deck - use it; do not ask them to paste it again.
 - These blocks are plumbing: never mention "the session memory", "the deck block" or "@deck" to the
   player - just talk about their deck and what they told you.
 
+# PROPOSING CHANGES & ASKING THE PLAYER (the player stays in control of their deck)
+- When a deck is loaded and you recommend concrete cuts, adds or swaps, put them through
+  propose_changes - they appear as accept/reject cards beside the player's deck and accepting applies
+  them. Pair a cut with its replacement as one swap when that's the intent. In your prose, explain the
+  plan and the priorities briefly; don't also re-list every change. They are PROPOSALS: you haven't
+  changed the deck - say "I'd swap..." / "I've proposed...", never "I swapped...". Keep a batch focused (up to ~8,
+  most important first) - you can propose more after they've decided.
+- When the decision is genuinely theirs (which direction to take the deck, a taste or budget trade-off,
+  whether a pet card stays, which of two packages), call ask_player with 2-4 clear options BEFORE
+  proposing a big restructure - then end your turn and wait for their answer.
+- Their decisions come back in the conversation ("[Your proposals and the player's decisions: ...]").
+  Never re-propose something they rejected; build on what they accepted.
+- No deck loaded (or a quick question): answer in prose; don't call propose_changes.
+
 # USING YOUR TOOLS (judgment, not a fixed pipeline)
 Reach for the tools the request actually needs - do NOT run a full deck review on every message.
 Match your effort to the ask:
@@ -919,6 +933,113 @@ DECKLIST_TOOLS = {"scryfall_get_decklist_details", "spellbook_find_combos_in_dec
                   "spellbook_estimate_bracket"}
 _DECK_DETAILS_CACHE: dict[str, str] = {}  # deck text -> scryfall_get_decklist_details output
 
+# --- Interactive tools (workbench phase 3): proposals + questions the player decides on ---
+# These don't fetch data; they put UI in front of the player. The server validates each
+# proposal (legal, in color identity, not a must-keep cut...) before it is shown.
+UI_TOOLS = [
+    {
+        "name": "propose_changes",
+        "description": (
+            "Show the player concrete deck edits as accept/reject cards next to their live deck. Use this "
+            "whenever you recommend specific cuts, adds or swaps for the deck in the editor (instead of only "
+            "listing them in prose). Each change is an add, a cut, or a swap (both). Give a short reason per "
+            "change. The server rejects illegal/off-color adds, cuts of cards not in the deck, and cuts of the "
+            "player's must-keep cards - you'll be told which. Accepting applies the change to their deck."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "type": "array", "minItems": 1, "maxItems": 10,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "add": {"type": "string", "description": "Exact card name to add (omit for a pure cut)."},
+                            "cut": {"type": "string", "description": "Exact name of a card in the deck to cut (omit for a pure add)."},
+                            "reason": {"type": "string", "description": "One or two sentences: why, in this deck."},
+                        },
+                        "required": ["reason"],
+                    },
+                },
+            },
+            "required": ["changes"],
+        },
+    },
+    {
+        "name": "ask_player",
+        "description": (
+            "Ask the player a question with 2-6 short answer buttons when you need their decision to go on "
+            "(direction, trade-offs, which of two packages, whether to keep a pet card). After calling this, "
+            "end your turn with at most a sentence or two - their tap on an answer arrives as their next message."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 6},
+                "allow_multiple": {"type": "boolean", "description": "Let them pick several options."},
+            },
+            "required": ["question", "options"],
+        },
+    },
+]
+UI_TOOL_NAMES = {t["name"] for t in UI_TOOLS}
+
+
+def _deck_card_index(deck: dict | None) -> dict[str, str]:
+    """lower(name) and lower(front face) -> canonical deck card name."""
+    idx = {}
+    for c in (deck or {}).get("cards") or []:
+        n = c.get("name") or ""
+        idx[n.lower()] = n
+        idx[_collection_name(n).lower()] = n
+    return idx
+
+
+async def _validate_proposals(changes: list, deck: dict | None, identity: str | None) -> tuple[list, list]:
+    """(shown, refused). shown items carry display data for the page; refused carry reasons
+    for the model. Cards to add are resolved (fuzzy) and must be commander-legal, in color
+    identity and not already in the deck; cuts must be in the deck and not must-keep."""
+    idx = _deck_card_index(deck)
+    keep = {k.lower() for k in ((deck or {}).get("intake") or {}).get("keep") or []}
+    allowed = set(identity or "") - {"C"} if identity else None
+    shown, refused = [], []
+    for ch in (changes or [])[:10]:
+        add_name, cut_name = (ch.get("add") or "").strip(), (ch.get("cut") or "").strip()
+        reason = " ".join(str(ch.get("reason") or "").split())[:400]
+        if not add_name and not cut_name:
+            continue
+        item = {"id": uuid.uuid4().hex[:8], "reason": reason, "status": "pending"}
+        problem = None
+        if cut_name:
+            canon = idx.get(cut_name.lower()) or idx.get(_collection_name(cut_name).lower())
+            if not canon:
+                problem = f"cut '{cut_name}': not in the deck"
+            elif canon.lower() in keep:
+                problem = f"cut '{canon}': it's on the player's MUST KEEP list"
+            else:
+                item["cut"] = canon
+        if not problem and add_name:
+            card = await _resolve_full_card(add_name)
+            if not card:
+                problem = f"add '{add_name}': no such card"
+            else:
+                slim = _slim_deck_card(card, 1)
+                ci = set(card.get("color_identity") or [])
+                if (card.get("legalities") or {}).get("commander") != "legal":
+                    problem = f"add '{slim['name']}': not legal in Commander"
+                elif allowed is not None and not ci <= allowed:
+                    problem = f"add '{slim['name']}': color identity {''.join(sorted(ci))} is outside {identity}"
+                elif slim["name"].lower() in idx and not slim.get("any_qty"):
+                    problem = f"add '{slim['name']}': already in the deck"
+                else:
+                    item["add"] = slim["name"]
+                    item["addCard"] = {k: slim.get(k) for k in ("name", "image", "type_line", "mana_cost",
+                                                                "color_identity", "game_changer", "scryfall_uri")}
+        if problem:
+            refused.append(problem)
+        else:
+            shown.append(item)
+    return shown, refused
+
 
 def _deck_to_text(deck: dict) -> str:
     """Deterministic '1 Name' list (commander(s) first, then A-Z) - stable bytes keep the
@@ -1005,6 +1126,27 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
     return "\n".join(lines), deck_text, _deck_identity(deck)
 
 
+def _decisions_summary(m: dict) -> str:
+    """What this assistant turn put in front of the player and what they decided - the
+    tool calls themselves aren't in the history, so the model would otherwise forget."""
+    out = []
+    props = [p for p in (m.get("proposals") or []) if isinstance(p, dict)][:12]
+    if props:
+        mark = {"accepted": "ACCEPTED", "rejected": "REJECTED"}
+        rows = []
+        for p in props:
+            what = " / ".join(x for x in (f"cut {p.get('cut')}" if p.get("cut") else "",
+                                          f"add {p.get('add')}" if p.get("add") else "") if x)
+            rows.append(f"{what} -> {mark.get(p.get('status'), 'undecided')}")
+        out.append("[Your proposals and the player's decisions: " + "; ".join(rows)
+                   + ". Don't re-propose rejected ones.]")
+    q = m.get("question")
+    if isinstance(q, dict) and q.get("question"):
+        out.append(f"[You asked: \"{str(q['question'])[:200]}\" - options: {', '.join(map(str, q.get('options') or []))[:300]}"
+                   + (f" - they answered: {str(q.get('answer'))[:200]}]" if q.get("answer") else "]"))
+    return ("\n\n" + "\n".join(out)) if out else ""
+
+
 def _collapse_pasted_decklist(text: str) -> str:
     """With a live deck present, an old pasted list is stale and competes with it (e.g. a
     paste that still had the maybeboard). Replace the list lines with a pointer."""
@@ -1070,7 +1212,8 @@ def _cache_last(messages: list) -> list:
 
 
 async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODEL, extra: dict = None,
-                       system: list | None = None, deck_text: str = "", deck_identity: str | None = None):
+                       system: list | None = None, deck_text: str = "", deck_identity: str | None = None,
+                       deck: dict | None = None):
     if extra is None:
         extra = REVIEW_EXTRA
     if system is None:
@@ -1122,7 +1265,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 model=model,
                 max_tokens=MAX_TOKENS,
                 system=system,   # cached: prompt (+ memory + live deck)
-                tools=TOOLS,
+                tools=TOOLS + UI_TOOLS,
                 messages=_cache_last(messages),  # cache the conversation prefix
                 extra_body=extra,
             ) as stream:
@@ -1168,9 +1311,41 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     if ci and not deck_identity:
                         deck_identity = ci
                         yield _sse("identity", {"identity": ci})
-                    yield _sse("status", {"tool": block.name, "input": _short_input(block.input)})
+                    if block.name not in UI_TOOL_NAMES:
+                        yield _sse("status", {"tool": block.name, "input": _short_input(block.input)})
+
+                # Interactive tools put UI in front of the player (and can't run in the
+                # parallel pool - they emit events), so handle them first.
+                ui_results = {}
+                for block in tool_blocks:
+                    if block.name == "propose_changes":
+                        if not deck:
+                            ui_results[block.id] = ("No deck is loaded in the player's editor, so proposals can't "
+                                                    "be shown - give your suggestions in prose instead.")
+                            continue
+                        shown, refused = await _validate_proposals((block.input or {}).get("changes"), deck, deck_identity)
+                        if shown:
+                            yield _sse("proposals", {"items": shown})
+                        desc = lambda it: " / ".join(x for x in (f"cut {it['cut']}" if it.get("cut") else "",
+                                                                 f"add {it['add']}" if it.get("add") else "") if x)
+                        ui_results[block.id] = (
+                            (f"Shown to the player as accept/reject cards: {'; '.join(desc(i) for i in shown)}. "
+                             "Don't repeat them as a list - refer to them briefly; the player decides in the panel."
+                             if shown else "Nothing was shown.")
+                            + (f" REFUSED (not shown): {'; '.join(refused)}. Fix or drop these." if refused else ""))
+                        log_activity(f"PROPOSE sid={session_id[:8]} shown={len(shown)} refused={len(refused)}"
+                                     + (f" ({'; '.join(refused)})" if refused else ""))
+                    elif block.name == "ask_player":
+                        inp = block.input or {}
+                        opts = [" ".join(str(o).split())[:120] for o in (inp.get("options") or [])][:6]
+                        yield _sse("question", {"id": uuid.uuid4().hex[:8], "question": str(inp.get("question") or "")[:500],
+                                                "options": opts, "multi": bool(inp.get("allow_multiple"))})
+                        ui_results[block.id] = ("The question is on screen with answer buttons. End your turn now "
+                                                "(a sentence or two at most) and wait for their answer.")
 
                 async def _run(block):
+                    if block.id in ui_results:
+                        return ui_results[block.id]
                     func = TOOL_FUNCTIONS.get(block.name)
                     if func is None:
                         return f"Unknown tool: {block.name}"
@@ -1526,6 +1701,8 @@ async def chat(request: Request, _: None = Depends(require_auth)):
             text = (m.get("text") or "").strip()
             if m.get("role") not in ("user", "assistant") or not text:
                 continue
+            if m["role"] == "assistant":
+                text += _decisions_summary(m)
             if m["role"] == "user":
                 if has_deck:
                     text = _collapse_pasted_decklist(text)
@@ -1609,7 +1786,8 @@ async def chat(request: Request, _: None = Depends(require_auth)):
                         + memory_text) if memory_text else ""
         async for chunk in agent_stream(session_id, messages, model, extra,
                                         system=_cached_system(memory_block, deck_block),
-                                        deck_text=deck_text, deck_identity=deck_identity):
+                                        deck_text=deck_text, deck_identity=deck_identity,
+                                        deck=deck if has_deck else None):
             yield chunk
 
     return StreamingResponse(

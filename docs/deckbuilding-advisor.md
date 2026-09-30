@@ -19,7 +19,21 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   `install_autostart.ps1` (UAC prompt); update the script first.
 - [x] **Commit today's work** — committed and pushed (9bc96b0 … 6b58659), `feat/deckbuilding-advisor` synced.
 - [x] **Phase 3 step 1:** the editor's deck is sent to `/chat` (see [Live deck + memory](#live-deck--session-memory)).
-- [ ] **Phase 3 step 2:** AI edit proposals with accept/reject in the editor.
+- [x] **Phase 3 step 2 - proposals + questions** (2026-09-30): two advisor-only tools (`UI_TOOLS`).
+  `propose_changes` (cuts/adds/swaps + reason) -> server-validated by `_validate_proposals` (add must
+  resolve, be Commander-legal, in the commander's identity and not already in the deck; cut must be in
+  the deck and not a must-keep; refusals go back to the model) -> SSE `proposals` -> accept/reject cards
+  under the message (Accept all / Reject all; one undo per batch) that apply to the deck panel.
+  `ask_player` (question + 2-6 options, optional multi) -> SSE `question` -> answer buttons; a tap sends
+  the answer as the player's message. Statuses/answers live on the conversation entry
+  (`entry.proposals[].status`, `entry.question.answer`) and `_decisions_summary` appends them to that
+  assistant turn in the history, so the model knows what was accepted/rejected/answered. Tested live:
+  3 swaps in 12 s; a direction question in 4 s; the follow-up built on the answer and didn't re-propose
+  a rejected swap or touch a must-keep.
+- [ ] **Guided build from scratch** (user idea, 2026-09-30): start with no list - the agent runs the
+  brief (commander, bracket, gameplan, budget), then builds the 99 with the player section by section
+  (ramp, draw, interaction, engine, payoffs, lands), proposing packages the player accepts/rejects
+  into the empty deck. Builds on the Phase 3 proposal + question tools.
 - [x] **Phase 4 - deck brief (commander picker + intake questionnaire)** (2026-09-30): a modal
   (`openIntake`) that opens when a pasted/linked deck arrives - *before* the advisor answers (`send()`
   awaits it) - and from the toolbar's 📝 Brief button. Commander: tiles of the deck's
