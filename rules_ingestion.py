@@ -249,9 +249,7 @@ def create_database(chunks: list[dict], data_dir: Path):
     
     # Set up the embedding function using sentence-transformers
     # This model runs locally - no API key needed
-    embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL
-    )
+    embedding_func = embedding_functions.DefaultEmbeddingFunction()  # ONNX all-MiniLM-L6-v2: same vectors, no PyTorch
     
     # Delete existing collection if it exists (for clean re-ingestion)
     try:

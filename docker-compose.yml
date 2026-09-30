@@ -1,0 +1,29 @@
+# Server deployment (Hetzner / any Linux VPS with Docker):
+#   1. copy the repo + mtg_rules_data/, mtg_theory_data/, role_index.json, .env to the server
+#   2. in .env set ADVISOR_SESSION_SECRET (so logins survive container rebuilds)
+#      and ADVISOR_TUNNEL_TOKEN (same Cloudflare tunnel as the PC — only run one at a time)
+#   3. touch advisor_activity.log   (must exist as a file before the bind mount)
+#   4. docker compose up -d --build
+# No ports are published: traffic arrives only through the Cloudflare tunnel.
+services:
+  advisor:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./mtg_rules_data:/app/mtg_rules_data
+      - ./mtg_theory_data:/app/mtg_theory_data
+      - ./role_index.json:/app/role_index.json
+      - ./advisor_activity.log:/app/advisor_activity.log
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # Share the advisor's network namespace so the tunnel's "localhost:8000"
+    # service URL (same as on the PC) reaches the app unchanged.
+    network_mode: "service:advisor"
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${ADVISOR_TUNNEL_TOKEN}
+    depends_on:
+      - advisor

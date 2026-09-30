@@ -18,3 +18,9 @@ mem_conv.json
 label_validation_out.json
 cloudflared.exe
 mtg_theory_data/
+.advisor_secret
+advisor_server.*.log
+cf_tunnel.*.log
+supervisor.log
+advisor_url.txt
+advisor_ui.dev.html

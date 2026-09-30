@@ -47,7 +47,7 @@ def reassemble_transcripts(source_name: str) -> list[dict]:
     import chromadb
     from chromadb.utils import embedding_functions
     c = chromadb.PersistentClient(path=str(DATA_DIR))
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+    ef = embedding_functions.DefaultEmbeddingFunction()  # ONNX all-MiniLM-L6-v2: same vectors, no PyTorch
     col = c.get_collection(COLLECTION, embedding_function=ef)
     got = col.get(where={"source": source_name}, include=["documents", "metadatas"])
 

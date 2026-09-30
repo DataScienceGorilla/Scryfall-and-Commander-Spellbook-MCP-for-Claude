@@ -24,13 +24,14 @@ import uuid
 import secrets
 import asyncio
 import datetime
+import time
 from pathlib import Path
 
 import httpx
 import anthropic
 from fastapi import FastAPI, Request, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -86,6 +87,7 @@ THEORY_DB_PATH = Path(__file__).parent / "mtg_theory_data"
 THEORY_COLLECTION = "mtg_deckbuilding_theory"
 
 UI_FILE = Path(__file__).parent / "advisor_ui.html"
+LOGIN_FILE = Path(__file__).parent / "advisor_login.html"
 
 aclient = anthropic.AsyncAnthropic()
 
@@ -110,32 +112,70 @@ def log_activity(event: str) -> None:
     except Exception:
         pass  # logging must never break a request
 
-# --- Optional password gate (for exposing the app via a tunnel) --------------
-# Auth is OFF when ADVISOR_PASSWORD is unset/empty (local single-user use is
-# unchanged). Set ADVISOR_PASSWORD (and optionally ADVISOR_USER) in .env before
-# exposing the app publicly so a leaked tunnel link alone can't spend API credits.
-ADVISOR_USER = os.getenv("ADVISOR_USER", "player")
-ADVISOR_PASSWORD = os.getenv("ADVISOR_PASSWORD", "")
-_basic = HTTPBasic(auto_error=False)
+# --- Login gate (for exposing the app via a tunnel) --------------------------
+# Auth is OFF when no accounts are configured (local single-user use is
+# unchanged). Accounts come from ADVISOR_USER/ADVISOR_PASSWORD and/or
+# ADVISOR_USERS="alice:pw1,bob:pw2" in .env. A /login page sets a signed session
+# cookie (30 days), so a leaked tunnel link alone can't spend API credits.
+def _load_accounts() -> dict:
+    accounts = {}
+    if os.getenv("ADVISOR_PASSWORD"):
+        accounts[os.getenv("ADVISOR_USER", "player")] = os.getenv("ADVISOR_PASSWORD")
+    for pair in (os.getenv("ADVISOR_USERS") or "").split(","):
+        user, sep, pw = pair.strip().partition(":")
+        if sep and user and pw:
+            accounts[user] = pw
+    return accounts
 
 
-async def require_auth(
-    credentials: HTTPBasicCredentials | None = Depends(_basic),
-) -> None:
-    """Enforce HTTP Basic auth iff ADVISOR_PASSWORD is set. Browsers cache the
-    credentials after the first prompt and resend them on same-origin /chat and
-    /reset requests automatically, so no UI changes are needed."""
-    if not ADVISOR_PASSWORD:
+ACCOUNTS = _load_accounts()
+AUTH_ENABLED = bool(ACCOUNTS)
+SESSION_MAX_AGE = 30 * 24 * 3600
+SECRET_FILE = Path(__file__).parent / ".advisor_secret"
+
+
+def _session_secret() -> str:
+    """Cookie-signing key. Persisted (gitignored) so server restarts - which the
+    supervisor does automatically - don't log everyone out."""
+    if os.getenv("ADVISOR_SESSION_SECRET"):
+        return os.getenv("ADVISOR_SESSION_SECRET")
+    if SECRET_FILE.exists():
+        return SECRET_FILE.read_text(encoding="utf-8").strip()
+    key = secrets.token_urlsafe(48)
+    SECRET_FILE.write_text(key, encoding="utf-8")
+    return key
+
+
+# Brute-force brake: per-client failed-login counter with a temporary lockout.
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCKOUT_SECS = 15 * 60
+_login_fails: dict = {}  # client -> (fail_count, first_fail_ts)
+
+
+def _client_key(request: Request) -> str:
+    # Behind the Cloudflare tunnel every request comes from 127.0.0.1; the real
+    # client is in CF-Connecting-IP.
+    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
+
+
+def _check_password(user: str, password: str) -> bool:
+    expected = ACCOUNTS.get(user)
+    # compare against a dummy on unknown users so timing doesn't reveal usernames
+    ok = secrets.compare_digest(password.encode(), (expected or secrets.token_hex(16)).encode())
+    return expected is not None and ok
+
+
+class LoginRequired(Exception):
+    pass
+
+
+async def require_auth(request: Request) -> None:
+    """Enforce a logged-in session iff accounts are configured."""
+    if not AUTH_ENABLED:
         return  # local mode: no gate
-    ok = credentials is not None and secrets.compare_digest(
-        credentials.username, ADVISOR_USER
-    ) and secrets.compare_digest(credentials.password, ADVISOR_PASSWORD)
-    if not ok:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
-        )
+    user = request.session.get("user")
+    if user not in ACCOUNTS:
+        raise LoginRequired()
 
 # =============================================================================
 # SYSTEM PROMPT - the deckbuilding backbone
@@ -515,9 +555,7 @@ def _load_theory_collection_sync():
         from chromadb.utils import embedding_functions
 
         client = chromadb.PersistentClient(path=str(THEORY_DB_PATH))
-        embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=EMBEDDING_MODEL
-        )
+        embedding_func = embedding_functions.DefaultEmbeddingFunction()  # ONNX all-MiniLM-L6-v2: same vectors, no PyTorch
         _theory_collection = client.get_collection(
             name=THEORY_COLLECTION,
             embedding_function=embedding_func,
@@ -930,6 +968,74 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MTG Deckbuilding Advisor", lifespan=lifespan)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_session_secret(),
+    session_cookie="advisor_session",
+    max_age=SESSION_MAX_AGE,
+    same_site="lax",
+    https_only=True,  # browsers still accept Secure cookies on http://localhost
+)
+
+
+@app.exception_handler(LoginRequired)
+async def _login_required(request: Request, exc: LoginRequired):
+    # Page loads bounce to the login screen; API calls get a 401 the UI handles.
+    if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/login", status_code=303)
+    return JSONResponse({"error": "login required"}, status_code=401)
+
+
+@app.get("/healthz")
+async def healthz():
+    """Unauthenticated liveness probe for the supervisor script."""
+    return {"ok": True}
+
+
+@app.get("/login")
+async def login_page(request: Request):
+    if not AUTH_ENABLED or request.session.get("user") in ACCOUNTS:
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(LOGIN_FILE.read_text(encoding="utf-8"))
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    from urllib.parse import parse_qs
+    if not AUTH_ENABLED:
+        return RedirectResponse("/", status_code=303)
+    client = _client_key(request)
+    fails, first = _login_fails.get(client, (0, 0.0))
+    if fails and time.time() - first > LOGIN_LOCKOUT_SECS:
+        fails, first = 0, 0.0  # window expired
+    if fails >= LOGIN_MAX_FAILS:
+        return RedirectResponse("/login?e=locked", status_code=303)
+
+    form = parse_qs((await request.body()).decode("utf-8", "replace"))
+    user = (form.get("username") or [""])[0].strip()
+    password = (form.get("password") or [""])[0]
+    if _check_password(user, password):
+        _login_fails.pop(client, None)
+        request.session.clear()
+        request.session["user"] = user
+        log_activity(f"login ok user={user}")
+        return RedirectResponse("/", status_code=303)
+
+    _login_fails[client] = (fails + 1, first or time.time())
+    log_activity(f"login FAILED user={user!r} client={client}")
+    await asyncio.sleep(1)  # slow down guessing
+    return RedirectResponse("/login?e=bad", status_code=303)
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login" if AUTH_ENABLED else "/", status_code=303)
+
+
+@app.get("/me")
+async def me(request: Request, _: None = Depends(require_auth)):
+    return {"user": request.session.get("user"), "auth": AUTH_ENABLED}
 
 
 @app.get("/")
@@ -1022,17 +1128,13 @@ def _slim_card(data: dict) -> dict:
     }
 
 
-async def _resolve_card(name: str) -> dict | None:
-    """Fuzzy-resolve a card via Scryfall with correct headers + one 429 retry."""
+async def _scryfall_get(path: str, params: dict) -> dict | None:
+    """GET a Scryfall endpoint with correct headers, the concurrency cap, and one 429 retry."""
     async with _scry_sem:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for attempt in range(2):
                 try:
-                    r = await client.get(
-                        f"{SCRYFALL_API}/cards/named",
-                        params={"fuzzy": name},
-                        headers=SCRYFALL_HEADERS,
-                    )
+                    r = await client.get(f"{SCRYFALL_API}{path}", params=params, headers=SCRYFALL_HEADERS)
                 except httpx.HTTPError:
                     return None
                 if r.status_code == 429 and attempt == 0:
@@ -1040,8 +1142,24 @@ async def _resolve_card(name: str) -> dict | None:
                     continue
                 if r.status_code != 200:
                     return None
-                return _slim_card(r.json())
+                return r.json()
     return None
+
+
+FULL_CARD_CACHE: dict[str, dict | None] = {}  # lower(name) -> full Scryfall card | None
+
+
+async def _resolve_full_card(name: str) -> dict | None:
+    """Fuzzy-resolve a card to its full Scryfall object (cached, shared by all viewers)."""
+    key = name.strip().lower()
+    if key not in FULL_CARD_CACHE:
+        FULL_CARD_CACHE[key] = await _scryfall_get("/cards/named", {"fuzzy": name})
+    return FULL_CARD_CACHE[key]
+
+
+async def _resolve_card(name: str) -> dict | None:
+    data = await _resolve_full_card(name)
+    return _slim_card(data) if data else None
 
 
 def _slim_deck_card(c: dict, qty: int) -> dict:
@@ -1057,6 +1175,7 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         roles = role_index.roles_for(c.get("name", ""))
     except Exception:
         roles = []
+    oracle = c.get("oracle_text") or " ".join(f.get("oracle_text", "") for f in faces)
     return {
         "name": c.get("name"),
         "qty": qty,
@@ -1068,6 +1187,10 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         "image": img,
         "game_changer": bool(c.get("game_changer")),
         "is_land": "Land" in tl and "Creature" not in tl.split("//")[0],
+        # singleton exemptions: basic lands, and "a deck can have any number of cards named ..."
+        "any_qty": "Basic" in tl or "any number of cards named" in oracle,
+        # could lead the deck: legendary creature, or says "can be your commander"
+        "can_command": ("Legendary" in tl and "Creature" in tl) or "can be your commander" in oracle,
         "roles": roles,            # concrete roles (otag index)
         "role": None,              # contextual role - assigned by AI/user later
         "tags": [],                # user tags
@@ -1107,6 +1230,32 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
     not_found = [n for n in names if n.lower() not in lower_found
                  and n.lower().split(" // ")[0] not in lower_found]
     return JSONResponse({"cards": resolved, "not_found": not_found})
+
+
+AUTOCOMPLETE_CACHE: dict[str, list] = {}
+
+
+@app.get("/card/search")
+async def card_search(q: str, _: None = Depends(require_auth)):
+    """Card-name autocomplete for the deck editor's add-card box (Scryfall autocomplete, cached)."""
+    key = q.strip().lower()
+    if len(key) < 2:
+        return JSONResponse({"names": []})
+    if key not in AUTOCOMPLETE_CACHE:
+        data = await _scryfall_get("/cards/autocomplete", {"q": key})
+        if data is None:
+            return JSONResponse({"names": []})  # transient failure: don't cache
+        AUTOCOMPLETE_CACHE[key] = data.get("data", [])[:12]
+    return JSONResponse({"names": AUTOCOMPLETE_CACHE[key]})
+
+
+@app.get("/deck/card")
+async def deck_card(name: str, _: None = Depends(require_auth)):
+    """One card in the deck-object shape (same as /deck/parse items), for add-card."""
+    data = await _resolve_full_card(name)
+    if not data:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(_slim_deck_card(data, 1))
 
 
 @app.get("/card")

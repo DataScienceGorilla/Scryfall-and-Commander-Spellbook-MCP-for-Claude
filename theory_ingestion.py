@@ -242,9 +242,7 @@ def get_collection():
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(DATA_DIR))
-    embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL
-    )
+    embedding_func = embedding_functions.DefaultEmbeddingFunction()  # ONNX all-MiniLM-L6-v2: same vectors, no PyTorch
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=embedding_func,

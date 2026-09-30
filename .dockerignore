@@ -1,0 +1,9 @@
+# The image only needs the files the Dockerfile COPYs; data is mounted at runtime.
+*
+!requirements-advisor.txt
+!advisor_app.py
+!mtg_tools.py
+!role_index.py
+!advisor_ui.html
+!advisor_login.html
+!playbooks/

@@ -82,9 +82,7 @@ def get_rules_collection():
         client = chromadb.PersistentClient(path=str(RULES_DB_PATH))
         
         # Set up the same embedding function used during ingestion
-        embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
+        embedding_func = embedding_functions.DefaultEmbeddingFunction()  # ONNX all-MiniLM-L6-v2: same vectors, no PyTorch
         
         # Get the collection
         _rules_collection = client.get_collection(

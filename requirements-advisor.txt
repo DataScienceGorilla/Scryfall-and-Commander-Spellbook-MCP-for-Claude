@@ -1,0 +1,9 @@
+# Slim runtime deps for the deckbuilding advisor web app only (used by the Dockerfile).
+# The full requirements.txt adds the MCP server, Discord bot and ingestion tooling.
+anthropic>=0.75.0
+httpx>=0.24.0
+chromadb==0.5.3  # pinned: matches the on-disk format of mtg_rules_data / mtg_theory_data
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+itsdangerous>=2.1
+python-dotenv>=1.0.0

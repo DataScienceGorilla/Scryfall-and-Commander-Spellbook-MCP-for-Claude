@@ -7,9 +7,17 @@ tool schemas (TOOLS) and the name->function map (TOOL_FUNCTIONS).
 
 import asyncio
 import json
+import logging
+import os
 import httpx
 from pathlib import Path
 from typing import Optional
+
+# Chroma 0.5.3 + posthog>=6 logs "Failed to send telemetry event ... capture() takes
+# 1 positional argument" on every client start, even with telemetry off. Harmless;
+# turn telemetry off and mute that logger.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 # Path to the rules database (created by rules_ingestion.py)
 RULES_DB_PATH = Path(__file__).parent / "mtg_rules_data"
@@ -47,9 +55,7 @@ def _load_rules_collection_sync():
         from chromadb.utils import embedding_functions
         
         client = chromadb.PersistentClient(path=str(RULES_DB_PATH))
-        embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
+        embedding_func = embedding_functions.DefaultEmbeddingFunction()  # ONNX all-MiniLM-L6-v2: same vectors, no PyTorch
         _rules_collection = client.get_collection(
             name="mtg_comprehensive_rules",
             embedding_function=embedding_func

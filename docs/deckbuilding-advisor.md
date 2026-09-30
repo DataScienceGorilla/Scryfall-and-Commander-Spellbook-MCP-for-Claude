@@ -4,9 +4,11 @@ A local, self-hosted web app that gives **tailored MTG Commander deckbuilding ad
 Scryfall card canvas. It's built on the same tool layer as the MCP server / Discord bot in this
 repo. This doc is the single source of truth for how it works and how to keep building it.
 
-> **Status (2026-09-30):** the advisor is fully working and tunnel-shareable. The current build-out
-> is the **Deck Workbench** (turning it into an agentic deckbuilder) — see [Deck Workbench](#deck-workbench-roadmap).
-> Phase 1 (deck object + populate + render) is done; phases 2–4 are next.
+> **Status (2026-09-30):** the advisor is fully working, behind a login page, and kept alive on the
+> user's PC by a supervisor + logon task. The current build-out is the **Deck Workbench** (turning it
+> into an agentic deckbuilder) — see [Deck Workbench](#8-deck-workbench-roadmap). Phases 1–2
+> (deck object + full manual editor) are done; phases 3–4 are next. Pending: switching the tunnel to
+> the user's domain **brewbot.link** (needs their Cloudflare tunnel token in `.env`).
 
 ---
 
@@ -19,32 +21,63 @@ python -m uvicorn advisor_app:app --host 127.0.0.1 --port 8000
 ```
 - **`.claude/launch.json`** has an `advisor` config (`autoPort: false`, port 8000 — the UI fetches
   relative paths, so the port must be stable for the tunnel).
-- **Detached / survives-Claude-session** (how it's run day to day) — a background process, not the
-  preview server, because preview servers die on session boundaries:
-  ```powershell
-  Start-Process -WindowStyle Hidden -WorkingDirectory <repo> -FilePath <python> `
-    -ArgumentList "-m","uvicorn","advisor_app:app","--host","127.0.0.1","--port","8000" `
-    -RedirectStandardOutput "advisor_server.out.log" -RedirectStandardError "advisor_server.err.log"
-  ```
-  Detached processes survive session resets but **not a PC reboot** (no startup task yet).
-- **The server does NOT auto-reload.** After editing `advisor_app.py` / `mtg_tools.py` / `role_index.py`,
-  restart it. Editing `advisor_ui.html` needs no restart — `GET /` reads the file per request, so
-  just refresh the browser.
+- **Day-to-day: the supervisor.** `run_advisor.ps1` keeps uvicorn + the Cloudflare tunnel alive:
+  every 30 s it probes `GET /healthz` (restarting a dead/hung server, killing whatever holds the
+  port) and restarts `cloudflared` if it exits. Logs to `supervisor.log`; the current public URL is
+  written to `advisor_url.txt`. Single-instance (named mutex).
+  - Run once, detached: `Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File","run_advisor.ps1"`
+  - **Autostart at logon + survive reboots:** `install_autostart.ps1` registers the per-user
+    scheduled task **"MTG Advisor"** (restarts on failure; `-Uninstall` removes it). The PC must be
+    awake — set sleep to "Never" on AC power for true always-on.
+- **Restarting after backend edits:** the server does NOT auto-reload. Kill the uvicorn process
+  (`Get-NetTCPConnection -LocalPort 8000` → owning pid); the supervisor restarts it within ~30 s.
+  Editing `advisor_ui.html` / `advisor_login.html` needs no restart — they're read per request.
 
-### Auth (optional password gate)
-HTTP Basic on all routes, **enforced only when `ADVISOR_PASSWORD` is set** in `.env` (local use
-stays open when unset). For tunnel sharing set `ADVISOR_USER` / `ADVISOR_PASSWORD`. Browsers cache
-the credentials and resend them on same-origin `/chat`, `/card`, `/deck/parse`.
+### Auth (login page + session cookie)
+**Enforced only when accounts are configured** (local use stays open otherwise). Accounts:
+`ADVISOR_USER` / `ADVISOR_PASSWORD` and/or `ADVISOR_USERS="alice:pw1,bob:pw2"` in `.env`.
+- `GET /login` serves `advisor_login.html`; `POST /login` checks the password (constant-time) and
+  sets a signed `advisor_session` cookie (Starlette `SessionMiddleware`, 30 days, HttpOnly, Secure,
+  SameSite=Lax). `GET /logout` clears it; `GET /me` returns the user (drives the Sign-out button).
+- Unauthed page loads redirect to `/login`; unauthed API calls get `401` JSON, and the UI's `fetch`
+  wrapper sends the browser to `/login` (chats are in localStorage, nothing is lost).
+- Brute-force brake: 5 failed logins per client IP (`CF-Connecting-IP` behind the tunnel) → 15 min
+  lockout, plus a 1 s delay per failure. Logins are recorded in `advisor_activity.log`.
+- Signing key: `ADVISOR_SESSION_SECRET` in `.env`, else auto-generated into `.advisor_secret`
+  (gitignored) so restarts don't log people out. Delete that file to force everyone to re-login.
+- `GET /healthz` is the only unauthenticated route.
 
 ### Public sharing (Cloudflare tunnel)
-`cloudflared.exe` (portable binary, gitignored) run detached against `http://localhost:8000` gives a
-random `https://<words>.trycloudflare.com` URL. Quick tunnels get a **new URL each restart** and
-aren't reboot-persistent. A named tunnel (free Cloudflare account) would give a stable URL — not set
-up yet.
+The supervisor runs `cloudflared.exe` (portable binary, gitignored).
+- **Default: quick tunnel** — random `https://<words>.trycloudflare.com`, **new URL every time
+  cloudflared restarts** (check `advisor_url.txt`).
+- **Stable URL: named tunnel** — put `ADVISOR_TUNNEL_TOKEN=<token>` (and `ADVISOR_PUBLIC_URL=https://…`)
+  in `.env`; the supervisor then runs `cloudflared tunnel run --token`. Requires a Cloudflare account
+  and a domain on Cloudflare; create the tunnel in the Zero Trust dashboard pointing at
+  `http://localhost:8000`. After changing the token, restart the task
+  (`Stop-ScheduledTask "MTG Advisor"; Start-ScheduledTask "MTG Advisor"`) — on start the supervisor
+  kills any cloudflared of the wrong kind (quick vs named) and launches the right one.
+
+### Moving to a server (prepared, not deployed)
+Hosting decision (2026-09-30): **run on the user's PC for now**; the app is packaged so a move to a
+~$5–7/mo VPS (Hetzner recommended) is quick.
+- `Dockerfile` (python:3.12-slim, non-root, ONNX embedder baked in, healthcheck) installs only
+  `requirements-advisor.txt` (~350 MB, **no PyTorch**). Verified: the app boots and serves every
+  route from a clean venv with just those deps. The image itself hasn't been built (no Docker on the PC).
+- `docker-compose.yml` runs the app + `cloudflared` (sharing the app's network namespace so the
+  tunnel's `localhost:8000` target works unchanged). RAG DBs, `role_index.json` and the activity log
+  are bind-mounted, not baked in. Set `ADVISOR_SESSION_SECRET` in the server `.env`.
+- Cutover = copy data + `.env`, `docker compose up -d`, then stop the PC's task (`install_autostart.ps1
+  -Uninstall`) — **never run the same tunnel token in two places** (Cloudflare load-balances between them).
+- **Embeddings:** all code uses chromadb's `DefaultEmbeddingFunction` (ONNX all-MiniLM-L6-v2).
+  Verified identical to the old sentence-transformers vectors (cosine 1.0, identical top-8 hits on
+  both collections), so existing DBs didn't need re-ingesting. `chromadb` is pinned to 0.5.3 in the
+  slim requirements to match the on-disk DB format.
 
 ### `.env` keys
-`ANTHROPIC_API_KEY` (required), `ADVISOR_USER` / `ADVISOR_PASSWORD` (gate), plus `DISCORD_BOT_TOKEN`,
-`APIFY_TOKEN` used by other components. `.env` is gitignored.
+`ANTHROPIC_API_KEY` (required), `ADVISOR_USER` / `ADVISOR_PASSWORD` / `ADVISOR_USERS` (login),
+optional `ADVISOR_SESSION_SECRET`, `ADVISOR_TUNNEL_TOKEN`, `ADVISOR_PUBLIC_URL`, plus
+`DISCORD_BOT_TOKEN`, `APIFY_TOKEN` used by other components. `.env` is gitignored.
 
 ---
 
@@ -76,6 +109,10 @@ always sees exactly what the user sees.
 | `POST /reset` | Clears a session id from `SESSIONS`. |
 | `GET /card?name=` | **Cached** Scryfall proxy — resolves a card to slim JSON (image, color identity, `game_changer`, concrete `roles`). The canvas uses this so 100-card decks don't trip Scryfall's rate limit. |
 | `POST /deck/parse` | Parses a pasted decklist into **structured deck cards** (see [Deck object](#deck-object-schema)). |
+| `GET /deck/card?name=` | One card in the deck-card shape (fuzzy name, cached) — the editor's add-card. |
+| `GET /card/search?q=` | Card-name autocomplete (Scryfall autocomplete, cached, ≥2 chars). |
+| `GET /login` `POST /login` `GET /logout` `GET /me` | Login page + session (see Auth). |
+| `GET /healthz` | Unauthenticated liveness probe (supervisor / Docker healthcheck). |
 
 ### `agent_stream` (the tool-use loop)
 - Streams `status` (tool calls), `identity`, `text`, `warning`, `done`, `error` SSE events.
@@ -163,9 +200,11 @@ Built up from real battle-testing. Major sections:
   `{id, title, sessionId, conversation:[{role,text}], deck, updatedAt}`.
 - **Streaming** (`send()`): binds each stream to the **origin chat** so switching tabs mid-stream
   never misfiles the answer; only writes to the DOM when that chat is on screen.
-- **Card canvas** — cards grouped by role in labeled sections (`ROLE_ORDER`). Two feeders:
-  1. Chat `[[Card Name]]` mentions → `requestCard()` → `/card` proxy (hover preview + click lightbox).
-  2. The **deck object** → `renderDeck()` (see below).
+- **Card canvas** has two areas: `deckView` (the editable deck, when there is one) above
+  `mentionView` (chat `[[Card Name]]` mentions → `requestCard()` → `/card` proxy; hover preview +
+  click lightbox). With no deck, mentions group by concrete role (`ROLE_ORDER`); with a deck, mentions
+  not in it collect in one **"Mentioned in chat · not in deck"** group with a **+ Add** button, and
+  mentions already in the deck don't duplicate (clicking the chip flashes the deck tile).
 - **Tiles** keep the card aspect-ratio (`63/88`) so full cards show (a prior bug cropped them).
 
 ---
@@ -176,8 +215,8 @@ Built up from real battle-testing. Major sections:
 Per chat, in `localStorage`, sent to the backend with each request. Populated by `POST /deck/parse`.
 ```js
 deck = {
-  commander: [],          // names (set by user/AI; not auto-detected yet)
-  bracket: null,          // 1–5 (not set yet)
+  commander: [],          // names, max 2 (partners) — set in the editor; not auto-detected from pastes
+  bracket: null,          // 1–5 — set in the editor
   not_found: [...],       // names /deck/parse couldn't resolve
   cards: [{
     name, qty, scryfall_uri, type_line, cmc, mana_cost,
@@ -185,9 +224,11 @@ deck = {
     image,                // normal-size art
     game_changer: bool,   // WotC game-changers list (Scryfall flag)
     is_land: bool,
+    any_qty: bool,        // singleton-exempt (basic land / "any number of cards named")
+    can_command: bool,    // legendary creature or "can be your commander"
     roles: [...],         // CONCRETE roles from the otag index
-    role: null,           // CONTEXTUAL role — assigned by AI/user later
-    tags: [],             // user tags
+    role: null,           // user/AI role override (any DECK_ROLES name) — set by the editor
+    tags: [],             // user tags — set by the editor
   }, ...]
 }
 ```
@@ -200,6 +241,30 @@ deck = {
   qty badges and a game-changer highlight. Uses images from `/deck/parse` (no per-card fetch).
 - Persisted per chat; re-rendered on chat switch/reload.
 
+### Manual editor (Phase 2)
+All client-side against `deck`; every mutation is `pushUndo()` → mutate → `deckChanged()` (persist
+via `saveState`, full `renderDeck()`, `regroupMentions()`, sync the chat's identity flagging).
+- **Toolbar** (built once per deck, synced each render): add-card search with autocomplete
+  (`/card/search`, arrow keys + Enter), commander picker (legal commanders in the deck; partners shown
+  as "A + B"), bracket picker (B1–B5), Undo, Copy list (Moxfield-style text, commander first).
+- **Stats + warnings:** `n/100` cards, lands, avg MV (nonland), identity, game changers vs the bracket
+  cap (`GC_CAP`: B1–2 = 0, B3 = 3); warning chips for count ≠ 100, GC over cap, off-color (vs
+  commander identity), not singleton (`anyQty` exempts basics / "any number of cards named"), no or
+  illegal commander, unresolved paste names.
+- **Groups** follow the full taxonomy (`DECK_ROLES`): `cardGroup(c)` = Commander if in
+  `deck.commander`, else the user's `c.role` override, else Lands / first concrete role / Other.
+  Sorted by MV then name inside each group.
+- **Tiles:** hover −/+/× (hover-capable devices only), qty badge, `#tag` badge, commander outline.
+  **Drag** a tile onto any group (empty groups appear as drop zones while dragging) to set its role;
+  dropping on its natural group clears the override; dropping on Commander makes it (co-)commander.
+- **Card editor modal** (click a tile; the phone-friendly path): quantity stepper, role picker
+  ("Auto (X)" + all roles), comma-separated tags, set/unset commander, remove, Scryfall link.
+- **Undo:** 40-deep per-chat stack (reset on chat switch); toolbar button, Ctrl+Z (outside inputs),
+  and the toast after add/remove. A pasted decklist replacing the cards is also undoable.
+- **Old decks** (saved before `can_command`/`any_qty` existed) fall back to type-line checks.
+- The AI still doesn't *see* manual edits — it reads chat history only. Sending `deck` to `/chat`
+  is the first step of Phase 3.
+
 ---
 
 ## 8. Deck Workbench roadmap
@@ -208,9 +273,9 @@ The agentic deckbuilder, built in shippable phases (user-approved scope):
 
 - **Phase 1 — deck object + populate + render** ✅ *done.* (`POST /deck/parse`, `deck` state,
   `renderDeck`.)
-- **Phase 2 — full manual editor.** Search-to-add cards, remove / quantity steppers, set commander &
-  bracket, per-card role/tag editing, drag between role groups, live-updating composition. All
-  client-side against the `deck` object; add-card can reuse `/card` for resolution.
+- **Phase 2 — full manual editor** ✅ *done (2026-09-30).* See [Manual editor](#manual-editor-phase-2).
+  Possible follow-ups: auto-detect the commander from a pasted list's commander section, a mana-curve
+  chart, maybeboard/sideboard.
 - **Phase 3 — AI edits via accept/reject.** The AI proposes discrete cuts/adds (a structured
   mechanism — a dedicated tool the model calls, or a new SSE event type carrying proposed changes);
   the UI renders each as an **accept/reject** card; accepting mutates the `deck` object. **The deck
@@ -228,12 +293,14 @@ concrete roles come free from the otag index.
 
 ## 9. Dev & test notes / gotchas
 
-- **Testing the UI in a browser + the auth quirk:** a page loaded with credentials in the URL
-  (`http://user:pass@host`) **rejects relative `fetch`** ("credentials in URL"). To test features
-  that fetch (`/card`, `/deck/parse`): navigate once *with* creds to cache Basic auth, then navigate
-  to the **bare** URL so the document URL is clean and relative fetches work.
-- **Restart the detached server** after backend edits (no auto-reload). Refresh the browser for HTML
-  edits.
+- **UI dev loop:** `python dev_server.py` runs a second instance on **:8001** with login off, serving
+  `advisor_ui.dev.html` (gitignored) if it exists. Build there, then promote by copying it over
+  `advisor_ui.html` (no restart needed for HTML; backend changes need the live server restarted).
+- **Testing auth-gated features:** use `fastapi.testclient.TestClient(app, base_url="https://testserver")`
+  (https so the Secure cookie sticks) with a throwaway `ADVISOR_USERS` account set in the env before
+  importing `advisor_app`.
+- **Restart the server** after backend edits (no auto-reload — kill it, the supervisor restarts it).
+  Refresh the browser for HTML edits.
 - **Windows console encoding**: scripts reconfigure stdout to UTF-8 (`errors="replace"`) — cp1252
   crashes on card glyphs/emoji.
 - **Scraping the Academy**: `commandertemplate.com` is a Cloudflare-protected Next.js SPA — plain
@@ -252,6 +319,10 @@ concrete roles come free from the otag index.
 |---|---|
 | `advisor_app.py` | FastAPI advisor: routes, `agent_stream`, system prompt, caching, tiering, `/deck/parse`, `/card`. |
 | `advisor_ui.html` | Single-file SPA: chat, sidebar, canvas, deck object + render. |
+| `advisor_login.html` | Sign-in page (served by `GET /login`). |
+| `dev_server.py` | Dev instance on :8001 (login off, serves `advisor_ui.dev.html`). |
+| `Dockerfile` / `docker-compose.yml` / `requirements-advisor.txt` | Server packaging (see "Moving to a server"). |
+| `run_advisor.ps1` / `install_autostart.ps1` | Supervisor that keeps server + tunnel alive / registers it as a logon task. |
 | `mtg_tools.py` | Shared tool layer (Scryfall, Spellbook, rules/theory RAG, decklist details) + `TOOLS`/`TOOL_FUNCTIONS`. Used by advisor, Discord bot, MCP server. |
 | `role_index.py` | Builds/serves the otag concrete-role index (`role_index.json`). |
 | `rules_ingestion.py` | Auto-updating Comprehensive Rules → rules RAG. |
