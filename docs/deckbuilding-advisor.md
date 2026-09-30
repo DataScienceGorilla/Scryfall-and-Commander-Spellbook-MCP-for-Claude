@@ -221,10 +221,10 @@ always sees exactly what the user sees.
 ## 3. Model config, caching, tiering (cost levers)
 
 - **Model tiering** (`pick_model`): scans the **whole conversation** — if a decklist or deck URL has
-  appeared anywhere, the session uses **`claude-sonnet-5`** (full reasoning); otherwise
+  appeared anywhere (or the conversation is long, or a live deck is attached), the session uses **`claude-sonnet-5-5`** (full reasoning; switched from Sonnet 5 on 2026-09-30 - same price, same review 114 s vs 259 s, and it followed the combo/bracket rules better in a side-by-side); otherwise
   **`claude-haiku-4-5`** for deck-free trivia. (Earlier bug: routing on only the latest message made
   long deck chats drop to Haiku and "get stupid" — fixed by scanning the whole convo.)
-- **Thinking params**: Sonnet 5 uses adaptive thinking + effort, passed via **`extra_body`**
+- **Thinking params**: Sonnet 5.5 uses adaptive thinking + effort, passed via **`extra_body`**
   (`{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`) because the installed SDK
   (`anthropic` 0.75) doesn't type these params. **Haiku 4.5 does NOT support these** → its
   `extra_body` is `{}`. ⚠️ If you bump the SDK or model, re-check this against the `claude-api` skill.
@@ -233,7 +233,15 @@ always sees exactly what the user sees.
   cache (~0.1×) instead of being re-billed. This is the dominant cost saver — a follow-up dropped
   from ~$0.20–0.70 to ~$0.003.
 - **Activity log** (`advisor_activity.log`, gitignored): one line per query with model, token
-  in/cache_read/cache_write/out, cost estimate, and tools used. `tail -f` it to watch usage.
+  in/cache_read/cache_write/out, cost estimate, total time, a per-turn timeline
+  (`model 57s/7791 -> 3 tools 2s | ...`) and tools used; plus ERROR / ABORT / TRUNCATED / OFFCOLOR
+  lines. `tail -f` it to watch usage.
+- **Latency & robustness (2026-09-30):** `MAX_TOKENS = 32000` (thinking counts toward it - at 12k a
+  deep review could think itself out of an answer); answers stream (`ADVISOR_STREAM=0` reverts to
+  validate-then-show); an SSE heartbeat every 15 s keeps Cloudflare's ~100 s idle timeout from
+  killing long reviews; the deck's combo check + Spellbook power read are precomputed into the
+  CURRENT DECK block; the prompt asks for batched tool calls. `benchmarks/model_bench.py <models…>`
+  replays the same full review on each model and saves the answers (gitignored).
 
 ---
 

@@ -62,9 +62,11 @@ from mtg_tools import (
 
 # Model tiering: full deck reviews get Sonnet 5 (deep reasoning); quick questions /
 # follow-ups get Haiku 4.5 (cheap). The picker keys off whether the message carries a
-# decklist. Sonnet 5 uses adaptive thinking + effort (via extra_body on SDK 0.75);
+# decklist. Sonnet 5.5 uses adaptive thinking + effort (via extra_body on SDK 0.75);
 # Haiku 4.5 does not support those params, so it gets an empty extra_body.
-REVIEW_MODEL = "claude-sonnet-5"
+# Sonnet 5.5: same price as Sonnet 5; on the same full Morcant review it took 114 s vs 230 s
+# (far less up-front thinking) at a slightly lower cost, with comparable quality.
+REVIEW_MODEL = "claude-sonnet-5-5"
 QUICK_MODEL = "claude-haiku-4-5"
 THINKING_EFFORT = "high"
 # Thinking counts toward max_tokens. At 12k a deep review could spend the whole budget
