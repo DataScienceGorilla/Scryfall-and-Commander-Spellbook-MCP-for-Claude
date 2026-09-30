@@ -240,6 +240,43 @@
     .ed-side { width: 100%; }
   }
 
+  /* Deck brief (commander picker + questionnaire) */
+  .intake { position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.78);
+    display: flex; align-items: flex-start; justify-content: center; padding: 16px; overflow-y: auto; }
+  .intake[hidden] { display: none; }
+  .in-inner { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 20px 20px 16px; width: 100%; max-width: 640px; margin: auto 0; }
+  .in-title { margin: 0; font-size: 18px; }
+  .in-sub { margin: 4px 0 6px; color: var(--muted); font-size: 13px; }
+  .intake section { margin-top: 16px; }
+  .intake h3 { margin: 0 0 7px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 650; }
+  .in-hint { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted); opacity: .8; font-size: 12px; }
+  .intake textarea, .intake input { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13.5px; resize: vertical; }
+  .intake textarea:focus, .intake input:focus { outline: none; border-color: var(--accent); }
+  .in-row { display: flex; gap: 8px; margin-top: 8px; }
+  .in-small { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .in-small:hover { border-color: var(--accent); }
+  .in-cmdrs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 300px; overflow-y: auto; }
+  .in-cmdr { background: var(--panel-2); border: 2px solid transparent; border-radius: 9px; padding: 4px; cursor: pointer;
+    color: var(--text); font: inherit; font-size: 11px; display: flex; flex-direction: column; gap: 4px; text-align: center; }
+  .in-cmdr img { width: 100%; aspect-ratio: 63/88; object-fit: cover; border-radius: 6px; display: block; }
+  .in-cmdr.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(201,150,63,.35); }
+  .in-pills, .in-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .in-chips { margin-top: 8px; }
+  .in-pill, .in-chip { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); border-radius: 16px;
+    padding: 5px 11px; cursor: pointer; font: inherit; font-size: 12.5px; }
+  .in-pill:hover, .in-chip:hover { color: var(--text); }
+  .in-pill.sel, .in-chip.sel { background: var(--chip); color: var(--accent); border-color: var(--accent); }
+  .in-avoid-note { margin-top: 8px; }
+  .in-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .in-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .in-actions button { border-radius: 8px; padding: 8px 16px; font: inherit; font-size: 13.5px; cursor: pointer;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .in-actions .primary { background: var(--accent); color: #1a1400; border-color: var(--accent); font-weight: 650; }
+  @media (max-width: 560px) { .in-two { grid-template-columns: 1fr; } }
+
   .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 120;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 14px;
     font-size: 13px; box-shadow: 0 10px 30px rgba(0,0,0,.5); display: flex; gap: 12px; align-items: center; }
@@ -582,14 +619,15 @@ async function loadDeckFromText(text) {
 // ---- deck -> advisor (phase 3): the AI gets the live deck + a note of edits since its last reply ----
 function deckForChat() {
   if (!deck || !deck.cards || !deck.cards.length) return null;
-  return { commander: deck.commander || [], bracket: deck.bracket || null,
+  return { commander: deck.commander || [], bracket: deck.bracket || null, intake: deck.intake || null,
            cards: deck.cards.map(c => ({ name: c.name, qty: c.qty || 1, role: c.role || null,
                                          tags: c.tags || [], color_identity: c.color_identity || [] })) };
 }
 function deckSnapshot() {
   if (!deck || !deck.cards) return null;
   const q = {}; for (const c of deck.cards) q[c.name] = c.qty || 1;
-  return { commander: [...(deck.commander || [])], bracket: deck.bracket || null, q };
+  return { commander: [...(deck.commander || [])], bracket: deck.bracket || null, q,
+           brief: JSON.stringify(deck.intake || null) };
 }
 function deckEditNote(prev, cur) {
   if (!prev || !cur) return '';
@@ -607,6 +645,7 @@ function deckEditNote(prev, cur) {
   if (prev.commander.join('|') !== cur.commander.join('|'))
     parts.push(`commander -> ${cur.commander.join(' + ') || 'unset'}`);
   if (prev.bracket !== cur.bracket) parts.push(`bracket -> ${cur.bracket || 'unset'}`);
+  if (prev.brief !== undefined && prev.brief !== cur.brief) parts.push('player updated their deck brief (see PLAYER BRIEF)');
   return parts.length ? `[Deck edits since your last reply: ${parts.join('; ')}]` : '';
 }
 
@@ -695,7 +734,8 @@ function buildToolbar() {
     + '<select id="bracketSelect" title="Bracket"><option value="">Bracket…</option>'
     + Object.entries(BRACKETS).map(([n, l]) => `<option value="${n}">B${n} · ${l}</option>`).join('') + '</select>'
     + '<button class="tb-btn" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>'
-    + '<button class="tb-btn" id="copyDeckBtn" title="Copy decklist to clipboard">⧉ Copy list</button>';
+    + '<button class="tb-btn" id="copyDeckBtn" title="Copy decklist to clipboard">⧉ Copy list</button>'
+    + '<button class="tb-btn" id="briefBtn" title="Commander, bracket, goals and limits for the advisor">📝 Brief</button>';
   const input = tb.querySelector('#addCardInput');
   const list = tb.querySelector('.ac-list');
   let acTimer = null, acItems = [], acSel = -1, acSeq = 0;
@@ -748,6 +788,7 @@ function buildToolbar() {
   });
   tb.querySelector('#undoBtn').addEventListener('click', undo);
   tb.querySelector('#copyDeckBtn').addEventListener('click', copyDecklist);
+  tb.querySelector('#briefBtn').addEventListener('click', () => openIntake());
   return tb;
 }
 function syncToolbar() {
@@ -790,7 +831,7 @@ function renderDeck() {
   const warn = (text, hint) => { const w = document.createElement('span'); w.className = 'deck-warn' + (hint ? ' hint' : ''); w.textContent = text; warns.appendChild(w); };
   if (!deck.cards.length) warn('Empty deck - add cards with the search box, or paste a list in chat', true);
   else {
-    if (!(deck.commander || []).length) warn('No commander set - pick one above or from a card', true);
+    if (!(deck.commander || []).length) warn('No commander set - open 📝 Brief or pick one above', true);
     for (const n of deck.commander || []) {
       const c = deckFind(n);
       if (c && !canCommand(c)) warn(`${c.name} can't normally be a commander`);
@@ -948,6 +989,143 @@ function copyDecklist() {
     + rest.sort((a, b) => a.name.localeCompare(b.name)).map(line).join('\n');
   navigator.clipboard.writeText(text).then(() => showToast('Decklist copied'), () => showToast("Couldn't copy - clipboard blocked"));
 }
+
+// ---- deck brief: commander picker + intake questionnaire (workbench phase 4) ----
+// Opens automatically when a pasted/linked deck arrives (before the advisor answers) and
+// from the toolbar's Brief button. Answers live on deck.intake and reach the advisor as a
+// PLAYER BRIEF inside the CURRENT DECK block.
+const INTAKE_STYLES = ['Combo', 'Value engine', 'Aristocrats', 'Tokens / go-wide', 'Voltron', 'Aggro',
+                       'Control', 'Stax', 'Spellslinger', 'Tribal', 'Big mana', 'Group hug / politics'];
+const INTAKE_AVOID = ['Infinite combos', 'Game changers', 'Stax / tax effects', 'Mass land destruction',
+                      'Extra turns', 'Tutors', 'Board wipes', 'Counterspells'];
+const intakeEl = document.createElement('div');
+intakeEl.className = 'intake'; intakeEl.hidden = true;
+document.body.appendChild(intakeEl);
+let intakeResolve = null;
+
+function openIntake(opts = {}) {
+  if (!deck || !deck.cards) return Promise.resolve(false);
+  hideTooltip();
+  return new Promise(resolve => { intakeResolve = resolve; renderIntake(opts); intakeEl.hidden = false; });
+}
+function closeIntake(saved) {
+  intakeEl.hidden = true;
+  const r = intakeResolve; intakeResolve = null;
+  if (r) r(saved);
+}
+function renderIntake(opts) {
+  const brief = Object.assign({ plan: '', styles: [], keep: [], avoid: [], avoidNote: '', budget: '', notes: '' },
+                              deck.intake || {});
+  let cmdrs = [...(deck.commander || [])];
+  let bracket = deck.bracket || null;
+  const esc = s => escapeHtml(String(s || '')).replace(/"/g, '&quot;');
+  intakeEl.innerHTML = `<form class="in-inner" autocomplete="off">
+    <button type="button" class="ed-close in-x" title="Close">×</button>
+    <h2 class="in-title">Deck brief</h2>
+    <p class="in-sub">${opts.fromSend ? 'Before the advisor reads your deck - ' : ''}tell it who leads the deck and what you're going for.
+      Everything but the commander is optional.</p>
+    <section><h3>Commander <span class="in-hint">pick up to 2 (partners / Background)</span></h3>
+      <div class="in-cmdrs"></div>
+      <div class="in-row"><input class="in-cmdr-search" placeholder="Not listed? Add your commander by name…"><button type="button" class="in-small in-cmdr-add">Add</button></div></section>
+    <section><h3>Target bracket</h3><div class="in-pills in-bracket"></div></section>
+    <section><h3>Gameplan <span class="in-hint">how do you want to win?</span></h3>
+      <textarea class="in-plan" rows="3" placeholder="e.g. Drain everyone out with sacrifice triggers; Gut is a payoff, the treasure engine is the deck.">${esc(brief.plan)}</textarea>
+      <div class="in-chips in-styles"></div></section>
+    <section><h3>Must keep <span class="in-hint">pet cards the advisor should never suggest cutting</span></h3>
+      <div class="in-row"><input class="in-keep-input" list="inKeepList" placeholder="Type a card from your deck…"><button type="button" class="in-small in-keep-add">Add</button></div>
+      <datalist id="inKeepList">${deck.cards.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
+      <div class="in-chips in-keep"></div></section>
+    <section><h3>Avoid <span class="in-hint">things you don't want recommended</span></h3>
+      <div class="in-chips in-avoid"></div>
+      <input class="in-avoid-note" placeholder="Anything else to avoid?" value="${esc(brief.avoidNote)}"></section>
+    <section class="in-two"><div><h3>Budget</h3><input class="in-budget" placeholder="e.g. under $10 a card" value="${esc(brief.budget)}"></div>
+      <div><h3>Playgroup notes</h3><input class="in-notes" placeholder="e.g. lots of flyers, no stax at our table" value="${esc(brief.notes)}"></div></section>
+    <div class="in-actions"><button type="button" class="in-skip">Skip</button>
+      <button type="submit" class="primary">${opts.fromSend ? 'Save & ask' : 'Save brief'}</button></div>
+  </form>`;
+  const $ = s => intakeEl.querySelector(s);
+
+  const paintCmdrs = () => {
+    const box = $('.in-cmdrs'); box.innerHTML = '';
+    const cands = deck.cards.filter(c => canCommand(c) || cmdrs.some(n => lc(n) === lc(c.name)));
+    if (!cands.length) box.innerHTML = '<div class="in-hint">No legal commanders found in the list - add yours below.</div>';
+    for (const c of cands) {
+      const t = document.createElement('button'); t.type = 'button';
+      t.className = 'in-cmdr' + (cmdrs.some(n => lc(n) === lc(c.name)) ? ' sel' : '');
+      t.title = c.name;
+      t.innerHTML = (c.image ? `<img src="${esc(c.image)}" alt="">` : '') + `<span>${esc(c.name)}</span>`;
+      t.onclick = () => {
+        if (cmdrs.some(n => lc(n) === lc(c.name))) cmdrs = cmdrs.filter(n => lc(n) !== lc(c.name));
+        else cmdrs = (cmdrs.length >= 2 ? cmdrs.slice(1) : cmdrs).concat(c.name);
+        paintCmdrs();
+      };
+      box.appendChild(t);
+    }
+  };
+  const addCmdr = async () => {
+    const name = $('.in-cmdr-search').value.trim(); if (!name) return;
+    const before = deck.cards.length;
+    await addCardByName(name);
+    // a new card was appended (canonical name may differ from what was typed), or it was already there
+    const c = deck.cards.length > before ? deck.cards[deck.cards.length - 1] : deckFind(name);
+    if (c && !cmdrs.some(n => lc(n) === lc(c.name))) cmdrs = (cmdrs.length >= 2 ? cmdrs.slice(1) : cmdrs).concat(c.name);
+    $('.in-cmdr-search').value = ''; paintCmdrs();
+  };
+  $('.in-cmdr-add').onclick = addCmdr;
+  $('.in-cmdr-search').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCmdr(); } });
+
+  const paintPills = () => {
+    const box = $('.in-bracket'); box.innerHTML = '';
+    for (const [n, label] of Object.entries(BRACKETS)) {
+      const b = document.createElement('button'); b.type = 'button';
+      b.className = 'in-pill' + (bracket === Number(n) ? ' sel' : '');
+      b.textContent = `B${n} ${label}`;
+      b.onclick = () => { bracket = bracket === Number(n) ? null : Number(n); paintPills(); };
+      box.appendChild(b);
+    }
+  };
+  const chipGroup = (sel, options, list) => {
+    const box = $(sel); box.innerHTML = '';
+    for (const o of new Set([...options, ...list])) {
+      const b = document.createElement('button'); b.type = 'button';
+      b.className = 'in-chip' + (list.includes(o) ? ' sel' : '');
+      b.textContent = o;
+      b.onclick = () => { const i = list.indexOf(o); i >= 0 ? list.splice(i, 1) : list.push(o); chipGroup(sel, options, list); };
+      box.appendChild(b);
+    }
+  };
+  const styles = [...brief.styles], avoid = [...brief.avoid], keep = [...brief.keep];
+  const addKeep = () => {
+    const v = $('.in-keep-input').value.trim(); if (!v) return;
+    const c = deckFind(v);
+    if (!c) { showToast(`"${v}" isn't in the deck`); return; }
+    if (!keep.includes(c.name)) keep.push(c.name);
+    $('.in-keep-input').value = ''; chipGroup('.in-keep', [], keep);
+  };
+  $('.in-keep-add').onclick = addKeep;
+  $('.in-keep-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addKeep(); } });
+
+  paintCmdrs(); paintPills();
+  chipGroup('.in-styles', INTAKE_STYLES, styles);
+  chipGroup('.in-avoid', INTAKE_AVOID, avoid);
+  chipGroup('.in-keep', [], keep);
+
+  $('.in-x').onclick = () => closeIntake(false);
+  $('.in-skip').onclick = () => { deck.intakeSkipped = true; saveState(); closeIntake(false); };
+  intakeEl.querySelector('form').onsubmit = (e) => {
+    e.preventDefault();
+    pushUndo();
+    deck.commander = cmdrs.filter(n => deckFind(n));
+    deck.bracket = bracket;
+    deck.intake = { plan: $('.in-plan').value.trim(), styles, keep, avoid,
+                    avoidNote: $('.in-avoid-note').value.trim(), budget: $('.in-budget').value.trim(),
+                    notes: $('.in-notes').value.trim() };
+    deckChanged();
+    closeIntake(true);
+  };
+}
+intakeEl.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeIntake(false); } });
+intakeEl.addEventListener('click', e => { if (e.target === intakeEl) closeIntake(false); });
 
 // ---- card editor modal ----
 let editorName = null;
@@ -1338,7 +1516,14 @@ async function send() {
   // the new deck (not the previous one). A link that can't be parsed yet (URL import is
   // a TODO) sends no deck, so the advisor goes by the link instead of a stale deck.
   let sendDeck = true;
-  if (looksLikeDeck(text)) sendDeck = await loadDeckFromText(text);
+  const pasted = looksLikeDeck(text);
+  if (pasted) sendDeck = await loadDeckFromText(text);
+  // Deck brief before the advisor reads a newly pasted deck (or one still missing its
+  // commander) - so the first review already knows who leads it and what the player wants.
+  if (sendDeck && deck && deck.cards && deck.cards.length && onScreen()
+      && ((pasted && !deck.intake) || (!(deck.commander || []).length && !deck.intakeSkipped))) {
+    await openIntake({ fromSend: true });
+  }
   const originChat = chats[originId];
   const snap = deckSnapshot();
   const note = sendDeck ? deckEditNote(originChat.deckSent, snap) : '';

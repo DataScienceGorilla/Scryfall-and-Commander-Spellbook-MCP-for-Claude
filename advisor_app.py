@@ -273,6 +273,11 @@ THAT is their current deck - use it; do not ask them to paste it again.
   substitutes the exact list. Never retype the decklist into a tool call.
 - The player edits the deck directly. A message may carry a note like "[Deck edits since your last
   reply: ...]" - take those edits into account.
+- The CURRENT DECK may include a PLAYER BRIEF (their questionnaire answers: gameplan, styles, must-keep
+  cards, things to avoid, budget, playgroup). It is authoritative about what THEY want: never suggest
+  cutting a must-keep card, never recommend something they said to avoid, stay in budget, and frame
+  the review around their stated gameplan (you can still point out tensions honestly, e.g. "your
+  must-keeps crowd out interaction").
 - A SESSION MEMORY block condenses the earlier part of a long conversation (those verbatim messages
   were dropped to keep your context sharp). Treat its goals, constraints and decisions as settled,
   and do NOT re-suggest anything it lists as rejected.
@@ -862,6 +867,26 @@ def _deck_identity(deck: dict) -> str | None:
     return "".join(x for x in "WUBRG" if x in letters) or "C"
 
 
+def _brief_lines(intake) -> list[str]:
+    """The player's deck-brief answers (intake questionnaire) as PLAYER BRIEF lines."""
+    if not isinstance(intake, dict):
+        return []
+    clip = lambda v, n=400: " ".join(str(v).split())[:n]
+    items = lambda v: ", ".join(clip(x, 80) for x in (v or [])[:40] if x)
+    rows = [("Gameplan / how they want to win", clip(intake.get("plan") or "")),
+            ("Play styles", items(intake.get("styles"))),
+            ("MUST KEEP (never suggest cutting)", items(intake.get("keep"))),
+            ("AVOID (don't recommend)", "; ".join(x for x in (items(intake.get("avoid")),
+                                                              clip(intake.get("avoidNote") or "")) if x)),
+            ("Budget", clip(intake.get("budget") or "", 120)),
+            ("Playgroup / other notes", clip(intake.get("notes") or ""))]
+    rows = [f"- {k}: {v}" for k, v in rows if v]
+    if not rows:
+        return []
+    return ["", "PLAYER BRIEF (their answers to the deck questionnaire - these are the player's stated goals "
+            "and limits: build your read and every recommendation around them):"] + rows
+
+
 async def _deck_context(deck) -> tuple[str, str, str | None]:
     """(CURRENT DECK block, canonical deck text, commander identity) - empty when no deck."""
     if not isinstance(deck, dict) or not deck.get("cards"):
@@ -890,6 +915,7 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
     tagged = [f"{c['name']} #{' #'.join(c['tags'])}" for c in cards if c.get("tags")]
     if tagged:
         lines.append("Player tags: " + "; ".join(sorted(tagged)))
+    lines += _brief_lines(deck.get("intake"))
     lines += ["", "Decklist:", deck_text, "", details]
     return "\n".join(lines), deck_text, _deck_identity(deck)
 

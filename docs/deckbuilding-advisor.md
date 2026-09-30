@@ -20,6 +20,15 @@ repo. This doc is the single source of truth for how it works and how to keep bu
 - [x] **Commit today's work** — committed and pushed (9bc96b0 … 6b58659), `feat/deckbuilding-advisor` synced.
 - [x] **Phase 3 step 1:** the editor's deck is sent to `/chat` (see [Live deck + memory](#live-deck--session-memory)).
 - [ ] **Phase 3 step 2:** AI edit proposals with accept/reject in the editor.
+- [x] **Phase 4 - deck brief (commander picker + intake questionnaire)** (2026-09-30): a modal
+  (`openIntake`) that opens when a pasted/linked deck arrives - *before* the advisor answers (`send()`
+  awaits it) - and from the toolbar's 📝 Brief button. Commander: tiles of the deck's
+  Scryfall-eligible commanders (`can_command`), up to 2, or add by name. Then target bracket, gameplan
+  text + style chips, must-keep cards, avoid chips + text, budget, playgroup notes. Saved on
+  `deck.intake`; sent with the deck; `_brief_lines()` renders it as a PLAYER BRIEF in the CURRENT DECK
+  block, which the prompt treats as authoritative (never cut must-keeps, never recommend avoids).
+  Changing it later adds "player updated their deck brief" to the next edit note. Auto-opens only for
+  a fresh paste without a brief, or while the commander is missing (unless skipped).
 - [x] **Deck link import** (2026-09-30): `mtg_tools.import_deck_url` — used by `/deck/parse` (fills the
   panel incl. commander + bracket, skips maybe/side boards) and by the Spellbook tools' `decklist_url`
   (advisor, Discord bot, MCP server). **Archidekt works** (public API: `isPremier` category =
