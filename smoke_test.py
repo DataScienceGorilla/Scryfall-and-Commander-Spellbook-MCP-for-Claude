@@ -1,0 +1,103 @@
+"""
+Pre-deploy smoke test for the advisor - free (no Anthropic calls), ~20 s.
+
+Imports the app in-process with a throwaway test account and exercises the routes a
+deploy could break: login gate, card lookups (incl. fuzzy/ambiguous names), deck
+parsing, autocomplete, and the UI page. Exit code 0 = safe to deploy.
+
+    python smoke_test.py [--ui advisor_ui.dev.html]
+"""
+import argparse
+import ast
+import os
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py"]
+UI_MARKERS = ["function send(", "function renderDeck(", "function initChats(", "initChats();",
+              "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "</html>"]
+
+failures = []
+
+
+def check(label, ok, detail=""):
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}" + (f"  ({detail})" if detail and not ok else ""))
+    if not ok:
+        failures.append(label)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ui", default="advisor_ui.html", help="UI file to validate/serve")
+    args = ap.parse_args()
+    t0 = time.time()
+
+    print("Syntax")
+    for f in PY_FILES:
+        try:
+            ast.parse((REPO / f).read_text(encoding="utf-8"))
+            check(f, True)
+        except SyntaxError as e:
+            check(f, False, f"line {e.lineno}: {e.msg}")
+    if failures:
+        return
+
+    # Throwaway account + fixed secret; load_dotenv never overrides these.
+    os.environ["ADVISOR_USERS"] = "smoketest:smoke-pass"
+    os.environ["ADVISOR_PASSWORD"] = ""
+    os.environ["ADVISOR_SESSION_SECRET"] = "smoke-test-secret"
+    import advisor_app as a
+    from fastapi.testclient import TestClient
+
+    ui = REPO / args.ui
+    a.UI_FILE = ui
+    html = ui.read_text(encoding="utf-8")
+    print(f"UI ({args.ui})")
+    for m in UI_MARKERS:
+        check(f"contains {m!r}", m in html)
+
+    c = TestClient(a.app, base_url="https://smoke")
+    print("Routes")
+    check("healthz", c.get("/healthz").status_code == 200)
+    check("anon API -> 401", c.get("/card?name=Sol Ring").status_code == 401)
+    r = c.get("/", headers={"accept": "text/html"}, follow_redirects=False)
+    check("anon page -> login redirect", r.status_code == 303 and r.headers.get("location") == "/login")
+    check("login page", c.get("/login").status_code == 200)
+    r = c.post("/login", data={"username": "smoketest", "password": "smoke-pass"}, follow_redirects=False)
+    check("login", r.status_code == 303 and r.headers.get("location") == "/")
+    r = c.get("/")
+    check("UI served", r.status_code == 200 and "function send(" in r.text)
+    ver = c.get("/version").json().get("ui", "")
+    check("UI version stamped", "__UI_VERSION__" not in r.text and f"'{ver}'" in r.text)
+    check("/me", c.get("/me").json().get("user") == "smoketest")
+
+    print("Cards (live Scryfall)")
+    r = c.get("/card?name=Sol Ring")
+    check("/card exact", r.status_code == 200 and r.json().get("name") == "Sol Ring")
+    r = c.get("/deck/card?name=morcant")
+    check("/deck/card ambiguous name", r.status_code == 200 and r.json().get("name") == "High Perfect Morcant",
+          r.text[:80])
+    r = c.get("/card/search?q=krenko")
+    check("/card/search", r.status_code == 200 and "Krenko, Mob Boss" in r.json().get("names", []))
+    r = c.post("/deck/parse", json={"text": "1 Sol Ring\n1 Glasspool Mimic // Glasspool Shore\n2 Island"})
+    d = r.json()
+    check("/deck/parse (incl. MDFC)", r.status_code == 200 and len(d.get("cards", [])) == 3 and not d.get("not_found"),
+          str(d.get("not_found")))
+
+    print(f"Done in {time.time() - t0:.0f}s")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:  # an import/runtime crash is a failed smoke test
+        check("unexpected error", False, repr(e))
+    if failures:
+        print(f"SMOKE TEST FAILED: {', '.join(failures)}")
+        sys.exit(1)
+    print("SMOKE TEST PASSED")

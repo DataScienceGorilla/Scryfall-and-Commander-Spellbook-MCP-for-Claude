@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import httpx
 from pathlib import Path
 from typing import Optional
@@ -236,21 +237,24 @@ TOOLS = [
     },
     {
         "name": "scryfall_get_decklist_details",
-        "description": "Fetch the ACTUAL oracle text, type line, mana cost and color identity for every card in a pasted decklist, in one batch. Call this FIRST when reviewing a decklist so your evaluation is grounded in what the cards really do - do NOT guess a card's function from its name, especially for crossover/Universes Beyond/precon/obscure cards where your memory is often wrong.",
+        "description": "Fetch the ACTUAL oracle text, type line, mana cost and color identity for every card in a decklist (pasted text OR a deck link), in one batch, plus the land count, concrete-role counts and game changers. Call this FIRST when reviewing a decklist so your evaluation is grounded in what the cards really do - do NOT guess a card's function from its name, especially for crossover/Universes Beyond/precon/obscure cards where your memory is often wrong.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "decklist_text": {
                     "type": "string",
                     "description": "Pasted decklist as text, one card per line (quantity optional)."
+                },
+                "decklist_url": {
+                    "type": "string",
+                    "description": "Deck link (Archidekt works; Moxfield/Commander Template links can't be fetched - ask for the pasted export)."
                 }
-            },
-            "required": ["decklist_text"]
+            }
         }
     },
     {
         "name": "spellbook_estimate_bracket",
-        "description": "Estimate the Commander bracket (power level 1-4) for a decklist based on its combos. Bracket 1 = Casual, Bracket 2 = Precon-appropriate, Bracket 3 = Powerful, Bracket 4 = Ruthless/cEDH.",
+        "description": "Commander Spellbook's power read of a decklist: its own power tier (Exhibition < Core < Oddball < Powerful < Spicy < Ruthless - NOT an official bracket number), the official game changers in the deck, banned cards, mass land denial, extra turns and combo counts. Use these signals with the official bracket criteria to place the deck.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -374,6 +378,42 @@ async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: 
             return f"Error: {str(e)}"
 
 
+async def resolve_card(client: httpx.AsyncClient, name: str) -> tuple[Optional[dict], list[str]]:
+    """Best card for a partial / misspelled / nickname-ish name, plus other plausible
+    matches. Scryfall's fuzzy lookup handles typos ("sol rin") but refuses AMBIGUOUS
+    names ("Morcant", "Krenko" match several cards) - fall back to a name search
+    ranked by EDHREC popularity, then to autocomplete for heavier typos."""
+    name = (name or "").strip()
+    if not name:
+        return None, []
+    get = lambda path, params: client.get(f"{SCRYFALL_API}{path}", params=params,
+                                          headers=SCRYFALL_HEADERS, timeout=30.0)
+    r = await get("/cards/named", {"fuzzy": name})
+    if r.status_code == 200:
+        return r.json(), []
+    phrase = name.replace('"', "")
+    r = await get("/cards/search", {"q": f'name:"{phrase}" game:paper', "order": "edhrec", "unique": "cards"})
+    if r.status_code == 200 and r.json().get("data"):
+        data = r.json()["data"]
+        return data[0], [c["name"] for c in data[1:8]]
+    # Autocomplete matches word prefixes, so a typo mid-word ("craterhof") misses -
+    # retry with the query trimmed back a few characters ("craterho" -> Craterhoof).
+    names = []
+    for cut in range(0, 4):
+        q = name[:len(name) - cut] if cut else name
+        if len(q) < 4:
+            break
+        r = await get("/cards/autocomplete", {"q": q})
+        names = r.json().get("data", []) if r.status_code == 200 else []
+        if names:
+            break
+    if names:
+        r = await get("/cards/named", {"exact": names[0]})
+        if r.status_code == 200:
+            return r.json(), names[1:8]
+    return None, []
+
+
 async def scryfall_get_card(name: str, commander_identity: str = None) -> str:
     """
     Look up a specific card by name. When commander_identity is provided, the
@@ -381,16 +421,16 @@ async def scryfall_get_card(name: str, commander_identity: str = None) -> str:
     """
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(
-                f"{SCRYFALL_API}/cards/named",
-                params={"fuzzy": name},
-                headers=SCRYFALL_HEADERS,
-                timeout=30.0
-            )
-            response.raise_for_status()
-            card = response.json()
-            
+            card, others = await resolve_card(client, name)
+            if card is None:
+                return f"Could not find card: {name}"
+
             lines = []
+            if others:
+                lines.append(
+                    f"(\"{name}\" matches several cards - showing the most-played, {card.get('name')}. "
+                    f"Other matches: {', '.join(others)}. If the player meant one of those, "
+                    "look it up by its full name.)\n")
             
             # Check if this is a dual-faced card (DFC)
             # DFCs have a "card_faces" array instead of top-level oracle_text, mana_cost, etc.
@@ -698,6 +738,13 @@ def _parse_decklist_to_main(text: str) -> list[dict]:
     return main
 
 
+def _collection_name(name: str) -> str:
+    """Name to send to Scryfall /cards/collection. It rejects multi-face cards by their
+    full "Front // Back" name (MDFCs, split cards, adventures) - silently dropping them
+    from a deck - but resolves them by the front face."""
+    return name.split(" // ")[0].strip()
+
+
 def _format_combo(combo: dict) -> str:
     """One-line summary of a Spellbook combo: cards → what it produces."""
     uses = combo.get("uses", []) or []
@@ -716,32 +763,136 @@ def _format_combo(combo: dict) -> str:
     return cards_str + (f" -> {prod_str}" if prod_str else "")
 
 
+# --- Deck URL import (Archidekt / Commander Template / Moxfield) ---------------
+DECK_URL_RE = re.compile(
+    r"https?://(?:www\.)?(archidekt\.com/(?:api/)?decks/(?P<arch>\d+)"
+    r"|moxfield\.com/decks/(?P<mox>[\w-]+)"
+    r"|commandertemplate\.com/(?:decks|precons)/(?P<ct>[\w-]+))", re.I)
+IMPORT_HEADERS = {"User-Agent": "MTG-Deckbuilding-Advisor/1.0 (personal deck import)"}
+
+
+class DeckImportError(Exception):
+    """A deck link that can't be imported; the message is shown to the player."""
+
+
+def find_deck_url(text: str):
+    m = DECK_URL_RE.search(text or "")
+    return m.group(0) if m else None
+
+
+async def import_deck_url(url: str) -> dict:
+    """Fetch a public deck from its link. Returns {source, name, commanders:[names],
+    cards:[(qty, name)] (the MAIN deck incl. commanders; maybe/side boards excluded),
+    skipped (maybeboard/sideboard card count), bracket (int|None)}."""
+    m = DECK_URL_RE.search(url or "")
+    if not m:
+        raise DeckImportError("Not a supported deck link (Archidekt, Moxfield, Commander Template).")
+    async with httpx.AsyncClient(headers=IMPORT_HEADERS, timeout=30.0, follow_redirects=True) as client:
+        if m.group("arch"):
+            r = await client.get(f"https://archidekt.com/api/decks/{m.group('arch')}/")
+            if r.status_code != 200:
+                raise DeckImportError("Couldn't read that Archidekt deck - is it public?")
+            d = r.json()
+            included = {c["name"]: c.get("includedInDeck", True) for c in d.get("categories", [])}
+            premier = {c["name"] for c in d.get("categories", []) if c.get("isPremier")}
+            cards, commanders, skipped = [], [], 0
+            for c in d.get("cards", []):
+                if c.get("deletedAt"):
+                    continue
+                name = c["card"]["oracleCard"]["name"]
+                cats = c.get("categories") or []
+                if cats and not included.get(cats[0], True):  # primary category = its board
+                    skipped += c.get("quantity", 1)
+                    continue
+                if premier & set(cats):
+                    commanders.append(name)
+                cards.append((c.get("quantity", 1), name))
+            return {"source": "Archidekt", "name": d.get("name"), "commanders": commanders,
+                    "cards": cards, "skipped": skipped, "bracket": d.get("edhBracket")}
+
+        if m.group("mox"):
+            r = await client.get(f"https://api2.moxfield.com/v3/decks/all/{m.group('mox')}")
+            if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
+                raise DeckImportError(
+                    "Moxfield blocks automated access to decks. In Moxfield use "
+                    "Export -> Copy as plain text, and paste the list here instead.")
+            d = r.json()
+            boards = d.get("boards", {})
+            cards, commanders = [], []
+            for b in ("commanders", "companions", "mainboard"):
+                for c in (boards.get(b, {}).get("cards") or {}).values():
+                    cards.append((c.get("quantity", 1), c["card"]["name"]))
+                    if b == "commanders":
+                        commanders.append(c["card"]["name"])
+            skipped = sum(boards.get(b, {}).get("count", 0) for b in ("maybeboard", "sideboard"))
+            return {"source": "Moxfield", "name": d.get("name"), "commanders": commanders,
+                    "cards": cards, "skipped": skipped, "bracket": None}
+
+        # Commander Template: a Next.js page that embeds the full deck object in its
+        # flight data (self.__next_f.push chunks) - no public API needed.
+        r = await client.get(url)
+        if r.status_code == 403:
+            raise DeckImportError(
+                "Commander Template blocks automated access to its pages. Copy the decklist "
+                "out of Commander Template and paste it here instead.")
+        if r.status_code != 200:
+            raise DeckImportError("Couldn't open that Commander Template deck - is it public?")
+        chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', r.text, re.S)
+        flight = "".join(json.loads('"' + c + '"') for c in chunks)
+        deck = None
+        dec = json.JSONDecoder()
+        k = flight.find('"selectedCommanders"')
+        while k != -1 and deck is None:
+            start = flight.rfind('{"id":"', 0, k)
+            try:
+                obj, _ = dec.raw_decode(flight, start)
+                if "deckInstances" in obj:
+                    deck = obj
+            except ValueError:
+                pass
+            k = flight.find('"selectedCommanders"', k + 1)
+        if deck is None:
+            raise DeckImportError("Couldn't find a deck on that Commander Template page - it may be private.")
+        counts: dict[str, int] = {}
+        for inst in deck.get("deckInstances") or []:
+            n = (inst.get("cardData") or {}).get("name")
+            if n:
+                counts[n] = counts.get(n, 0) + 1
+        commanders = [c["name"] for c in deck.get("selectedCommanders") or [] if c.get("name")]
+        if (deck.get("selectedCompanion") or {}).get("name"):
+            counts[deck["selectedCompanion"]["name"]] = 1
+        cards = [(1, n) for n in commanders] + [(q, n) for n, q in counts.items()]
+        bracket = deck.get("deckBracket")
+        return {"source": "Commander Template", "name": deck.get("name"), "commanders": commanders,
+                "cards": cards, "skipped": len(deck.get("maybeboardInstances") or []),
+                "bracket": bracket if isinstance(bracket, int) else None}
+
+
 async def _decklist_to_main(client, decklist_url, decklist_text):
     """Resolve a decklist (pasted text or URL) into the 'main' payload list."""
     if decklist_text:
         return _parse_decklist_to_main(decklist_text)
-    # URL import via Spellbook (best effort; endpoint may be unavailable)
-    resp = await client.post(
-        f"{SPELLBOOK_API}/card-list-from-url/",
-        json={"url": decklist_url},
-        timeout=30.0,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return [
-        {"card": (c.get("name") if isinstance(c, dict) else str(c)), "quantity": 1}
-        for c in data.get("cards", [])
-    ]
+    try:
+        imported = await import_deck_url(decklist_url)
+    except DeckImportError as e:
+        raise ValueError(str(e))
+    return [{"card": n, "quantity": q} for q, n in imported["cards"]]
 
 
-async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
+async def scryfall_get_decklist_details(decklist_text: str = None, decklist_url: str = None) -> str:
     """
     Fetch the ACTUAL oracle text, type, mana cost and color identity for every card
     in a pasted decklist, in one batch (Scryfall /cards/collection). Lets the advisor
     reason from what cards really do instead of guessing from names.
     """
+    if not decklist_text and decklist_url:
+        try:
+            imported = await import_deck_url(decklist_url)
+        except DeckImportError as e:
+            return f"I couldn't import that deck URL: {e}"
+        decklist_text = "\n".join(f"{q} {n}" for q, n in imported["cards"])
     if not decklist_text:
-        return "Provide the decklist as pasted text (one card per line) to read its cards."
+        return "Provide the decklist as pasted text (one card per line) or a deck link to read its cards."
     main = _parse_decklist_to_main(decklist_text)
     names, seen = [], set()
     for e in main:
@@ -755,7 +906,7 @@ async def scryfall_get_decklist_details(decklist_text: str = None) -> str:
     cards, not_found = [], []
     async with httpx.AsyncClient(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
         for i in range(0, len(names), 75):  # Scryfall collection endpoint caps at 75
-            batch = [{"name": n} for n in names[i:i + 75]]
+            batch = [{"name": _collection_name(n)} for n in names[i:i + 75]]
             try:
                 resp = await client.post(f"{SCRYFALL_API}/cards/collection", json={"identifiers": batch})
                 resp.raise_for_status()
@@ -896,9 +1047,9 @@ async def spellbook_find_combos_in_decklist(
         try:
             try:
                 main = await _decklist_to_main(client, decklist_url, decklist_text)
-            except Exception:
-                return ("I couldn't import that deck URL. Please paste the decklist "
-                        "text instead (one card per line).")
+            except Exception as e:
+                return (f"I couldn't import that deck URL: {e} "
+                        "Otherwise, paste the decklist text (one card per line).")
             if not main:
                 return "Couldn't parse any cards from that decklist."
 
@@ -916,17 +1067,40 @@ async def spellbook_find_combos_in_decklist(
             if not included and not almost:
                 return f"No combos found in this deck ({len(main)} cards, color identity {identity})."
 
-            lines = [f"Analyzed {len(main)} cards (color identity {identity})."]
-            if included:
-                lines.append(f"\n**Complete combos already in the deck ({len(included)}):**")
-                for combo in included[:limit]:
-                    lines.append(f"• {_format_combo(combo)}")
+            lines = [f"Analyzed {sum(e.get('quantity', 1) for e in main)} cards (color identity {identity})."]
+            lines.append(f"\n**COMBOS IN THE DECK ({len(included)})** - every piece is already in the list:")
+            for combo in included[:limit]:
+                lines.append(f"• {_format_combo(combo)}")
+            if not included:
+                lines.append("• none")
 
             remaining = max(0, limit - len(included))
             if almost and remaining > 0:
-                lines.append(f"\n**Almost there (missing 1-2 pieces) ({len(almost)}):**")
+                have = set()
+                for e in main:
+                    n = e["card"].lower()
+                    have.update({n, n.split(" // ")[0]})
+                lines.append(
+                    f"\n**NOT COMBOS - near-misses ({len(almost)})**. The deck does NOT have these combos; each is "
+                    "missing the card(s) marked ADD. Those missing cards are candidate recommendations (they'd "
+                    "complete a combo) - but check the target bracket first: completing a two-card combo is off-limits "
+                    "in B1-B2 and restricted in B3.")
                 for combo in almost[:remaining]:
-                    lines.append(f"• {_format_combo(combo)}")
+                    names = [u.get("card", {}).get("name") for u in combo.get("uses") or [] if isinstance(u, dict)]
+                    names = [n for n in names if n]
+                    missing = [n for n in names if n.lower() not in have and n.lower().split(" // ")[0] not in have]
+                    held = [n for n in names if n not in missing]
+                    needs = [r.get("template", {}).get("name") for r in combo.get("requires") or [] if isinstance(r, dict)]
+                    needs = [n for n in needs if n]
+                    prod = [(p.get("feature") or {}).get("name") for p in (combo.get("produces") or [])[:3] if isinstance(p, dict)]
+                    prod = ", ".join(x for x in prod if x)
+                    tier = combo.get("bracketTag")
+                    lines.append(
+                        f"• ADD {' + '.join(missing) or '?'}"
+                        + (f" (with {', '.join(held)} already in deck)" if held else "")
+                        + (f" + any {', '.join(needs)}" if needs else "")
+                        + (f" -> {prod}" if prod else "")
+                        + (f" [Spellbook combo tier {tier}]" if tier else ""))
 
             return "\n".join(lines)
 
@@ -994,9 +1168,9 @@ async def spellbook_estimate_bracket(
         try:
             try:
                 main = await _decklist_to_main(client, decklist_url, decklist_text)
-            except Exception:
-                return ("I couldn't import that deck URL. Please paste the decklist "
-                        "text instead (one card per line).")
+            except Exception as e:
+                return (f"I couldn't import that deck URL: {e} "
+                        "Otherwise, paste the decklist text (one card per line).")
             if not main:
                 return "Couldn't parse any cards from that decklist."
 
@@ -1009,38 +1183,42 @@ async def spellbook_estimate_bracket(
             data = response.json()
 
             tag = data.get("bracketTag", "?")
-            gc_cards = data.get("cards", []) or []
+            cards = [c for c in (data.get("cards") or []) if isinstance(c, dict)]
             combos = data.get("combos", []) or []
 
-            # Spellbook single-letter bracket tags -> official bracket names
-            tag_names = {
-                "E": "1 - Exhibition",
-                "C": "2 - Core",
-                "U": "3 - Upgraded",
-                "O": "4 - Optimized / cEDH",
-            }
+            # Spellbook's OWN power tiers (per its API schema) - not official bracket
+            # numbers, so report the tier by name and let the advisor place the deck.
+            tag_names = {"E": "Exhibition", "C": "Core", "O": "Oddball", "P": "Powerful",
+                         "S": "Spicy", "R": "Ruthless", "B": "Banned (contains a banned card)"}
 
-            # Evidence pulled straight from the combo flags (these mirror the
-            # official bracket criteria, so the advisor can place the deck).
+            def _flagged(key):
+                return [n for n in (c.get("card", {}).get("name") for c in cards if c.get(key)) if n]
+
+            # Per-card flags (they mirror the official bracket criteria) + combo flags.
+            gc_names = _flagged("gameChanger")
+            banned = _flagged("banned")
+            mld_cards = _flagged("massLandDenial")
+            extra_turn_cards = _flagged("extraTurn")
             two_card = [c for c in combos if c.get("definitelyTwoCard") or c.get("arguablyTwoCard")]
-            mld = any(c.get("massLandDenial") for c in combos)
-            extra_turns = any(c.get("extraTurn") or c.get("skipTurns") for c in combos)
+            mld = bool(mld_cards) or any(c.get("massLandDenial") for c in combos)
+            extra_turns = bool(extra_turn_cards) or any(c.get("extraTurn") or c.get("skipTurns") for c in combos)
             locks = any(c.get("lock") or c.get("controlAllOpponents") for c in combos)
 
-            lines = [f"**Spellbook bracket estimate: {tag_names.get(tag, tag)}** ({len(main)} cards)"]
+            total = sum(e.get("quantity", 1) for e in main)
+            lines = [f"**Commander Spellbook power tier: {tag} - {tag_names.get(tag, 'unknown')}** ({total} cards). "
+                     "Spellbook's own scale (Exhibition < Core < Oddball < Powerful < Spicy < Ruthless) - "
+                     "NOT an official bracket number."]
+            lines.append(f"Game changers (official list): {len(gc_names)}"
+                         + (f" - {', '.join(gc_names)}" if gc_names else ""))
+            if banned:
+                lines.append(f"BANNED in Commander: {', '.join(banned)}")
 
-            gc_names = [c.get("card", {}).get("name") for c in gc_cards if isinstance(c, dict)]
-            gc_names = [n for n in gc_names if n]
-            lines.append(f"Game-changer / notable cards: {len(gc_names)}")
-            if gc_names:
-                lines.append("  " + ", ".join(gc_names[:15]))
-
-            lines.append(f"Combos detected: {len(combos)} (two-card infinite-style: {len(two_card)})")
+            lines.append(f"Combos detected: {len(combos)} (two-card: {len(two_card)})")
             flags = []
             if mld:
-                flags.append("mass land denial")
+                flags.append("mass land denial" + (f" ({', '.join(mld_cards)})" if mld_cards else ""))
             if extra_turns:
-                flags.append("extra turns")
+                flags.append("extra turns" + (f" ({', '.join(extra_turn_cards)})" if extra_turn_cards else ""))
             if locks:
                 flags.append("lock / control-all-opponents")
             if flags:

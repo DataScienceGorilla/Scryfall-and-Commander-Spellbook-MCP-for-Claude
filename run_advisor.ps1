@@ -116,7 +116,24 @@ while ($true) {
         }
     }
 
-    if (-not $NoTunnel -and (-not $tunnel -or $tunnel.HasExited)) {
+    # If cloudflared is installed as a Windows service (Cloudflare's "service install
+    # <token>" command), it owns the tunnel - it starts at boot and Windows restarts it.
+    # Stop our own connector so there's just one, and leave the service alone.
+    $svc = Get-Service -Name Cloudflared -ErrorAction SilentlyContinue
+    $serviceOwnsTunnel = $svc -and $svc.Status -eq "Running"
+    if ($serviceOwnsTunnel) {
+        # Our connectors are the ones whose command line we can read (the SYSTEM
+        # service's is hidden from us), including leftovers from a previous run.
+        foreach ($p in Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'") {
+            if ($p.CommandLine -like "*tunnel*") {
+                Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+                Log "Cloudflared service owns the tunnel; stopped our connector (pid $($p.ProcessId))"
+            }
+        }
+        $tunnel = $null
+    }
+
+    if (-not $NoTunnel -and -not $serviceOwnsTunnel -and (-not $tunnel -or $tunnel.HasExited)) {
         # Adopt a tunnel that's already running (e.g. supervisor restarted) instead of
         # duplicating it - but only if it's the right kind (named vs quick). A quick
         # tunnel left over from before ADVISOR_TUNNEL_TOKEN was set gets replaced.

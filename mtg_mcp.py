@@ -27,7 +27,7 @@ import json
 import asyncio
 
 # Shared, framework-agnostic helpers (single source of truth in mtg_tools.py).
-from mtg_tools import _identity_letters, _parse_decklist_to_main
+from mtg_tools import _identity_letters, _parse_decklist_to_main, import_deck_url, DeckImportError, resolve_card
 
 # =============================================================================
 # SERVER INITIALIZATION
@@ -213,15 +213,12 @@ async def _decklist_to_main(decklist_url, decklist_text):
     """
     if decklist_text:
         return _parse_decklist_to_main(decklist_text), None
-    # URL import via Spellbook (best effort; endpoint may be unavailable)
-    result = await make_spellbook_post("/card-list-from-url/", {"url": decklist_url})
-    if result.get("error"):
-        return None, "Could not import that deck URL. Please paste the decklist text instead (one card per line)."
-    main = [
-        {"card": (c.get("name") if isinstance(c, dict) else str(c)), "quantity": 1}
-        for c in result.get("cards", [])
-    ]
-    return main, None
+    # URL import: Archidekt / Commander Template (Moxfield blocks automated access)
+    try:
+        imported = await import_deck_url(decklist_url)
+    except DeckImportError as e:
+        return None, f"{e} Otherwise, paste the decklist text instead (one card per line)."
+    return [{"card": n, "quantity": q} for q, n in imported["cards"]], None
 
 
 def _parse_scryfall_error(response) -> str:
@@ -792,7 +789,14 @@ async def scryfall_get_card(params: ScryfallNamedInput) -> str:
     
     # Make the API request
     result = await make_scryfall_request("/cards/named", api_params)
-    
+    others = []
+    if result.get("error") and params.fuzzy and not params.set_code:
+        # ambiguous ("Krenko") or a heavier typo: best match by EDHREC popularity
+        async with httpx.AsyncClient() as client:
+            card, others = await resolve_card(client, params.name)
+        if card:
+            result = card
+
     # Handle errors
     if result.get("error"):
         return f"**Error:** {result.get('message', 'Card not found. Try a different name or enable fuzzy matching.')}"
@@ -802,6 +806,9 @@ async def scryfall_get_card(params: ScryfallNamedInput) -> str:
         return json.dumps(result, indent=2)
 
     md = format_card_markdown(result)
+    if others:
+        md = (f"*\"{params.name}\" matches several cards - showing the most-played. "
+              f"Other matches: {', '.join(others)}.*\n\n") + md
 
     # Append a color-identity legality verdict when a commander identity is given.
     allowed = _identity_letters(params.commander_identity)
@@ -1332,24 +1339,21 @@ async def spellbook_estimate_bracket(params: SpellbookBracketInput) -> str:
         return f"**Error:** {result.get('message', 'Could not estimate bracket')}"
 
     tag = result.get("bracketTag", "?")
-    gc_cards = result.get("cards", []) or []
+    cards = [c for c in (result.get("cards") or []) if isinstance(c, dict)]
     combos = result.get("combos", []) or []
 
-    # Spellbook single-letter bracket tags -> official bracket names
-    tag_names = {
-        "E": "1 - Exhibition",
-        "C": "2 - Core",
-        "U": "3 - Upgraded",
-        "O": "4 - Optimized / cEDH",
-    }
+    # Spellbook's OWN power tiers (per its API schema) - not official bracket numbers.
+    tag_names = {"E": "Exhibition", "C": "Core", "O": "Oddball", "P": "Powerful",
+                 "S": "Spicy", "R": "Ruthless", "B": "Banned (contains a banned card)"}
 
-    # Evidence pulled from the combo flags (mirror the official bracket criteria)
+    # Per-card flags (mirror the official bracket criteria) + combo flags. Spellbook
+    # returns EVERY card in `cards`; only those flagged gameChanger are game changers.
     two_card = [c for c in combos if c.get("definitelyTwoCard") or c.get("arguablyTwoCard")]
-    mld = any(c.get("massLandDenial") for c in combos)
-    extra_turns = any(c.get("extraTurn") or c.get("skipTurns") for c in combos)
+    mld = any(c.get("massLandDenial") for c in cards + combos)
+    extra_turns = any(c.get("extraTurn") or c.get("skipTurns") for c in cards + combos)
     locks = any(c.get("lock") or c.get("controlAllOpponents") for c in combos)
 
-    gc_names = [c.get("card", {}).get("name") for c in gc_cards if isinstance(c, dict)]
+    gc_names = [c.get("card", {}).get("name") for c in cards if c.get("gameChanger")]
     gc_names = [n for n in gc_names if n]
 
     if params.response_format == ResponseFormat.JSON:
@@ -1365,12 +1369,13 @@ async def spellbook_estimate_bracket(params: SpellbookBracketInput) -> str:
             "locks": locks,
         }, indent=2)
 
-    lines = [f"## Bracket Estimation: **{tag_names.get(tag, tag)}**"]
+    lines = [f"## Commander Spellbook power tier: **{tag} - {tag_names.get(tag, 'unknown')}**",
+             "*Spellbook's own scale (Exhibition < Core < Oddball < Powerful < Spicy < Ruthless), not an official bracket number.*"]
     lines.append(f"*Cards analyzed: {len(main)}*\n")
 
-    lines.append(f"**Game-changer / notable cards:** {len(gc_names)}")
+    lines.append(f"**Game changers (official list):** {len(gc_names)}")
     if gc_names:
-        lines.append(", ".join(gc_names[:15]))
+        lines.append(", ".join(gc_names))
 
     lines.append(f"\n**Combos detected:** {len(combos)} (two-card infinite-style: {len(two_card)})")
     flags = []

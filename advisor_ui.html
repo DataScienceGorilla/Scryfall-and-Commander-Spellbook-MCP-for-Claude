@@ -65,6 +65,11 @@
     cursor: pointer; font-weight: 550;
   }
   .chip:hover { color: #f0c874; }
+  #staleBanner { background: var(--chip); border-bottom: 1px solid var(--accent); color: var(--text);
+    padding: 8px 16px; font-size: 13px; text-align: center; }
+  #staleBanner button { background: var(--accent); color: #1a1400; border: none; border-radius: 6px;
+    padding: 3px 10px; font-weight: 650; cursor: pointer; margin: 0 2px; }
+  .edit-note { font-size: 11.5px; color: var(--muted); margin-top: 4px; text-align: right; font-style: italic; }
 
   .status {
     align-self: flex-start; font-size: 12.5px; color: var(--muted);
@@ -303,6 +308,23 @@
   </main>
 
 <script>
+// Stamped by the server (fingerprint of this file). If the app is updated while this tab
+// is open, the server's version changes and we ask the user to refresh.
+const UI_VERSION = '__UI_VERSION__';
+function showStaleBanner() {
+  if (document.getElementById('staleBanner')) return;
+  const b = document.createElement('div');
+  b.id = 'staleBanner';
+  b.innerHTML = 'The app was updated. <button>Refresh</button> to get the latest version - your chats are saved.';
+  b.querySelector('button').onclick = () => location.reload();
+  document.body.prepend(b);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  fetch('/version').then(r => r.ok ? r.json() : null)
+    .then(v => { if (v && v.ui && v.ui !== UI_VERSION) showStaleBanner(); }).catch(() => {});
+});
+
 // Login gate: if the session cookie expired, any API call comes back 401 -
 // send the user to the sign-in page (chats live in localStorage, so nothing is lost).
 const _fetch = window.fetch.bind(window);
@@ -376,7 +398,7 @@ function loadActiveIntoUI() {
     addMessage('assistant', "Tell me your commander and what you're working on — a decklist to tune, a brand-new build, or a specific problem (curve, mana, a matchup). Cards I mention appear on the right.");
   } else {
     for (const m of conversation) {
-      addMessage(m.role, m.text);
+      addMessage(m.role, m.text, m.note);
       if (m.role === 'assistant' && deckIdentity === null) {
         const mm = m.text.match(/%%IDENTITY:([WUBRGC]+)%%/i);
         if (mm) setDeckIdentity(mm[1].toUpperCase());
@@ -522,7 +544,7 @@ let deckTiles = new Map();  // lower(name) -> tile (for flashCard)
 let undoStack = [];
 
 function looksLikeDeck(text) {
-  if (/moxfield\.com|archidekt\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net/i.test(text)) return true;
+  if (/moxfield\.com|archidekt\.com|commandertemplate\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net/i.test(text)) return true;
   return (text.match(/^\s*\d+\s+\S/gm) || []).length >= 15;
 }
 async function loadDeckFromText(text) {
@@ -531,17 +553,57 @@ async function loadDeckFromText(text) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
-    if (!resp.ok) return;
+    if (!resp.ok) return false;
     const data = await resp.json();
-    if (!data.cards || !data.cards.length) return;
+    if (data.error) { showToast(data.error); return false; }  // e.g. Moxfield blocks import
+    if (!data.cards || !data.cards.length) return false;
     pushUndo();  // a pasted list replaces the cards - keep the old deck undoable
     deck = deck || { commander: [], bracket: null, cards: [] };
     deck.cards = data.cards;
     deck.not_found = data.not_found || [];
-    deck.commander = (deck.commander || []).filter(n => deckFind(n));
+    // a deck link knows its commander (and often its bracket); a pasted list doesn't
+    if (data.commander && data.commander.length) deck.commander = data.commander.filter(n => deckFind(n));
+    else deck.commander = (deck.commander || []).filter(n => deckFind(n));
+    if (data.bracket >= 1 && data.bracket <= 5) deck.bracket = data.bracket;
     deckChanged();
-    if (deck.not_found.length) showToast(`${deck.not_found.length} card(s) couldn't be resolved - see the deck header`);
-  } catch (e) {}
+    if (data.source) {
+      showToast(`Imported "${data.name || 'deck'}" from ${data.source}`
+        + (data.skipped ? ` (${data.skipped} maybeboard/sideboard cards left out)` : '')
+        + (deck.not_found.length ? ` - ${deck.not_found.length} unresolved` : ''));
+    } else if (deck.not_found.length) showToast(`${deck.not_found.length} card(s) couldn't be resolved - see the deck header`);
+    return true;
+  } catch (e) { return false; }
+}
+
+// ---- deck -> advisor (phase 3): the AI gets the live deck + a note of edits since its last reply ----
+function deckForChat() {
+  if (!deck || !deck.cards || !deck.cards.length) return null;
+  return { commander: deck.commander || [], bracket: deck.bracket || null,
+           cards: deck.cards.map(c => ({ name: c.name, qty: c.qty || 1, role: c.role || null,
+                                         tags: c.tags || [], color_identity: c.color_identity || [] })) };
+}
+function deckSnapshot() {
+  if (!deck || !deck.cards) return null;
+  const q = {}; for (const c of deck.cards) q[c.name] = c.qty || 1;
+  return { commander: [...(deck.commander || [])], bracket: deck.bracket || null, q };
+}
+function deckEditNote(prev, cur) {
+  if (!prev || !cur) return '';
+  const parts = [];
+  const adds = Object.keys(cur.q).filter(n => !(n in prev.q));
+  const cuts = Object.keys(prev.q).filter(n => !(n in cur.q));
+  const qty = Object.keys(cur.q).filter(n => n in prev.q && prev.q[n] !== cur.q[n]);
+  if (adds.length + cuts.length + qty.length > 25) {
+    parts.push(`deck heavily changed (${adds.length} added, ${cuts.length} removed) - see CURRENT DECK`);
+  } else {
+    adds.forEach(n => parts.push(`+${cur.q[n] > 1 ? cur.q[n] + ' ' : ''}${n}`));
+    cuts.forEach(n => parts.push(`-${n}`));
+    qty.forEach(n => parts.push(`${n} ${prev.q[n]}->${cur.q[n]}`));
+  }
+  if (prev.commander.join('|') !== cur.commander.join('|'))
+    parts.push(`commander -> ${cur.commander.join(' + ') || 'unset'}`);
+  if (prev.bracket !== cur.bracket) parts.push(`bracket -> ${cur.bracket || 'unset'}`);
+  return parts.length ? `[Deck edits since your last reply: ${parts.join('; ')}]` : '';
 }
 
 const lc = s => (s || '').toLowerCase();
@@ -1092,13 +1154,14 @@ function moveTooltip(e) {
 function hideTooltip() { ttCard = null; tooltip.style.display = 'none'; }
 
 // ---- message rendering ----
-function addMessage(role, text) {
+function addMessage(role, text, note) {
   const wrap = document.createElement('div');
   wrap.className = 'msg ' + role;
   wrap.innerHTML = `<div class="role">${role === 'user' ? 'You' : 'Advisor'}</div><div class="bubble"></div>`;
   const bubble = wrap.querySelector('.bubble');
   if (role === 'user') bubble.textContent = text;
   else { bubble.innerHTML = renderMarkdown(text); bindChips(bubble); }
+  if (note) addNote(wrap, note);
   messagesEl.appendChild(wrap);
   scrollToBottom();
   return bubble;
@@ -1143,6 +1206,16 @@ function addActivity() {
   };
 }
 
+function addNote(wrap, note) {
+  const n = document.createElement('div');
+  n.className = 'edit-note'; n.textContent = '✎ ' + note.replace(/^\[Deck edits since your last reply: |\]$/g, '');
+  n.title = 'Deck editor changes the advisor was told about';
+  wrap.appendChild(n);
+}
+function annotateLastUser(note) {
+  const last = [...messagesEl.querySelectorAll('.msg.user')].pop();
+  if (last && !last.querySelector('.edit-note')) addNote(last, note);
+}
 function scrollToBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
 function renderWarning(cards) {
@@ -1248,10 +1321,21 @@ async function send() {
   const originSession = SESSION_ID;
   const originConv = chats[originId].conversation;
   const onScreen = () => activeId === originId;
-  addMessage('user', text);
-  originConv.push({ role: 'user', text }); saveState();
-  if (looksLikeDeck(text)) loadDeckFromText(text);  // populate the deck object in parallel
   streaming = true; sendBtn.disabled = true;
+  const userEntry = { role: 'user', text };
+  addMessage('user', text);
+  originConv.push(userEntry); saveState();
+  // A pasted list becomes the deck BEFORE the advisor sees this turn, so it reasons over
+  // the new deck (not the previous one). A link that can't be parsed yet (URL import is
+  // a TODO) sends no deck, so the advisor goes by the link instead of a stale deck.
+  let sendDeck = true;
+  if (looksLikeDeck(text)) sendDeck = await loadDeckFromText(text);
+  const originChat = chats[originId];
+  const snap = deckSnapshot();
+  const note = sendDeck ? deckEditNote(originChat.deckSent, snap) : '';
+  if (note) { userEntry.note = note; if (onScreen()) annotateLastUser(note); }
+  if (sendDeck) originChat.deckSent = snap;
+  saveState();
 
   let bubble = null;
   let acc = '';
@@ -1264,7 +1348,9 @@ async function send() {
       // Send the full transcript (this browser is the source of truth), so the
       // model keeps context even if the server restarted since the last message.
       // `originConv` already includes the just-added user turn as its last entry.
-      body: JSON.stringify({ session_id: originSession, message: text, history: originConv }),
+      body: JSON.stringify({ session_id: originSession, message: text, history: originConv,
+                             deck: sendDeck ? deckForChat() : null, memory: originChat.memory || null,
+                             ui_version: UI_VERSION }),
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -1297,6 +1383,11 @@ async function send() {
           // authoritative commander identity from the backend (tool args) -
           // drives off-color canvas flagging even if the model drops the marker
           if (onScreen() && ev.data.identity) setDeckIdentity(ev.data.identity.toUpperCase());
+        } else if (ev.event === 'stale') {
+          showStaleBanner();
+        } else if (ev.event === 'memory') {
+          // earlier messages were condensed server-side; keep the memory with this chat
+          originChat.memory = ev.data; saveState();
         } else if (ev.event === 'warning') {
           if (onScreen()) renderWarning(ev.data.cards);
         } else if (ev.event === 'error') {

@@ -10,6 +10,71 @@ repo. This doc is the single source of truth for how it works and how to keep bu
 > (deck object + full manual editor) are done; phases 3–4 are next. Pending: switching the tunnel to
 > the user's domain **brewbot.link** (needs their Cloudflare tunnel token in `.env`).
 
+### Open TODOs
+- [ ] **Run the app at boot, signed in or not** (on hold — user said don't do it yet). Today the "MTG
+  Advisor" task starts at *logon*, so signing out or rebooting without signing in takes brewbot.link
+  down (502) even though the Cloudflared service tunnel stays up. Plan: re-register the task with an
+  `-AtStartup` trigger + `S4U` principal ("run whether user is logged on or not", no stored password —
+  fine since the app only needs local files + internet). Needs a one-time elevated run of
+  `install_autostart.ps1` (UAC prompt); update the script first.
+- [ ] **Commit today's work** (login, supervisor/autostart, ONNX swap, Docker files, Phase 2 editor,
+  docs) to `main` and sync `feat/deckbuilding-advisor` — awaiting the user's OK.
+- [x] **Phase 3 step 1:** the editor's deck is sent to `/chat` (see [Live deck + memory](#live-deck--session-memory)).
+- [ ] **Phase 3 step 2:** AI edit proposals with accept/reject in the editor.
+- [x] **Deck link import** (2026-09-30): `mtg_tools.import_deck_url` — used by `/deck/parse` (fills the
+  panel incl. commander + bracket, skips maybe/side boards) and by the Spellbook tools' `decklist_url`
+  (advisor, Discord bot, MCP server). **Archidekt works** (public API: `isPremier` category =
+  commander, primary category's `includedInDeck` = board, `edhBracket`). **Moxfield** (invite-only
+  API, Cloudflare 403) and **Commander Template** (Cloudflare challenge on its pages) return a clear
+  "paste the exported list instead" message — we deliberately don't work around their bot protection.
+  Options: apply to Moxfield for an API user-agent; ask Rebel Lily's team about an export/API. The
+  Commander Template parser (Next.js flight data: `selectedCommanders`, `deckInstances`,
+  `maybeboardInstances`, `deckBracket`) is written and works on the page HTML if access is granted.
+- [x] **Bracket tool fixed** (2026-09-30): Spellbook's `estimate-bracket` returns EVERY card in
+  `cards` with per-card `gameChanger`/`massLandDenial`/`extraTurn`/`banned` flags; the tool listed all
+  of them as "game changers" (friend's deck: "100"). Its tags are Spellbook's own tiers (E Exhibition,
+  C Core, O Oddball, P Powerful, S Spicy, R Ruthless, B Banned — from its OpenAPI schema), not
+  official brackets; the old E/C/U/O→1–4 map was wrong. Fixed in `mtg_tools` and `mtg_mcp`.
+- [x] **Stale tabs** (2026-09-30): a tab opened before a deploy kept running old JS (e.g. no deck sent
+  to the AI). The server stamps the page with `UI_VERSION` (sha1 of the UI file, `_ui_page()`); the
+  page sends it with `/chat` and re-checks `GET /version` on tab focus → refresh banner. Pages older
+  than this get `STALE_NOTE` prepended to the answer instead.
+- [x] **Near-miss combos ≠ combos** (2026-09-30): `spellbook_find_combos_in_decklist` now prints
+  "COMBOS IN THE DECK" vs "NOT COMBOS - near-misses", each near-miss as "ADD <missing card> (with
+  <pieces already in deck>) -> result [Spellbook combo tier]"; the prompt forbids counting near-misses
+  toward power/bracket and frames the ADD card as a bracket-checked recommendation.
+- [x] **Cost reducers = Ramp** (2026-09-30): `ROLE_OTAG["Ramp"] = (otag:ramp or otag:cost-reducer)`
+  (+331 cards: Medallions, Herald's Horn, Urza's Incubator, Goreclaw…); `otag:cost-reducer-self`
+  deliberately excluded. Index rebuilt (writes are now atomic).
+- [x] `scryfall_get_decklist_details` accepts `decklist_url` too (it was text-only, so the AI told the
+  player it "only works off a pasted list").
+- [x] **Fuzzy card names** (2026-09-30): `mtg_tools.resolve_card` — Scryfall `fuzzy` handles typos
+  but refuses AMBIGUOUS names ("Morcant", "Krenko"); fallback = `name:"…"` search ordered by EDHREC
+  (best match + up to 7 alternates, which `scryfall_get_card` lists so the model can correct itself),
+  then autocomplete with the query trimmed back up to 3 chars for mid-word typos ("craterhof").
+  Used by the AI's `scryfall_get_card`, the MCP server, and the app's `/card` + `/deck/card`.
+- [x] **Multi-face cards dropped from batch lookups** (2026-09-30): Scryfall `/cards/collection`
+  rejects "Front // Back" names → `_collection_name()` sends the front face (tool + `/deck/parse`).
+- [ ] **Respect export sections when parsing pastes** — now the main path for Moxfield/Commander
+  Template decks (their pastes are the fallback for blocked links) (seen live 2026-09-30): a friend's Archidekt
+  paste included the **maybeboard**, so the first full review (~$0.15) judged the wrong 99; the AI also
+  didn't identify the commander (Atraxa) until told. Archidekt/Moxfield exports label sections
+  (Commander / Maybeboard / Sideboard / Considering) — `_parse_decklist_to_main` should drop
+  maybe/side sections and set `deck.commander` from the Commander section, and the advisor should get
+  the same cleaned list.
+  - **No Commander section → ask, don't guess.** A 99 often holds several legendary creatures, and
+    some commanders aren't creatures at all, so pick candidates and let the user choose. Use Scryfall's
+    **`is:commander`** filter to get the real candidate set (covers legendary creatures plus the
+    exceptions: "can be your commander" planeswalkers/others, Backgrounds, etc.) — e.g. batch the
+    deck's names into `is:commander (!"Name A" or !"Name B" …)` searches. Then prompt the user in the
+    deck panel ("Which is your commander?" with those candidates; partners allowed), and have the
+    advisor ask too instead of assuming.
+  - The editor's current `can_command` flag is a type-line/oracle heuristic
+    (`advisor_app._slim_deck_card`) — replace it with the `is:commander` result so the commander
+    dropdown and "can't normally be a commander" warning use Scryfall's rules, not ours.
+- [ ] Nice-to-haves: compact
+  `mtg_rules_data/` (7 stale segment dirs from past re-ingests).
+
 ---
 
 ## 1. Run it
@@ -29,6 +94,14 @@ python -m uvicorn advisor_app:app --host 127.0.0.1 --port 8000
   - **Autostart at logon + survive reboots:** `install_autostart.ps1` registers the per-user
     scheduled task **"MTG Advisor"** (restarts on failure; `-Uninstall` removes it). The PC must be
     awake — set sleep to "Never" on AC power for true always-on.
+- **Deploying: `deploy.ps1`** (one command; `-Force` to skip the in-flight check, `-Rollback` to
+  restore). It refuses while someone's answer is mid-stream (QUERY without ANSWER in the last 5 min
+  of `advisor_activity.log`), runs **`smoke_test.py`** (free — no Anthropic calls, ~5 s: syntax,
+  imports, login gate, `/card` incl. an ambiguous name, `/card/search`, `/deck/parse` incl. an MDFC,
+  UI markers), promotes `advisor_ui.dev.html` → `advisor_ui.html`, restarts the server, checks local
+  and `ADVISOR_PUBLIC_URL` health, then snapshots the live files to `.deploy/last_good/`. A failure
+  after the restart auto-restores that snapshot. Log: `deploy.log`. Workflow: edit →
+  `python dev_server.py` (:8001) → `deploy.ps1`.
 - **Restarting after backend edits:** the server does NOT auto-reload. Kill the uvicorn process
   (`Get-NetTCPConnection -LocalPort 8000` → owning pid); the supervisor restarts it within ~30 s.
   Editing `advisor_ui.html` / `advisor_login.html` needs no restart — they're read per request.
@@ -54,7 +127,14 @@ The supervisor runs `cloudflared.exe` (portable binary, gitignored).
 - **Stable URL: named tunnel** — put `ADVISOR_TUNNEL_TOKEN=<token>` (and `ADVISOR_PUBLIC_URL=https://…`)
   in `.env`; the supervisor then runs `cloudflared tunnel run --token`. Requires a Cloudflare account
   and a domain on Cloudflare; create the tunnel in the Zero Trust dashboard pointing at
-  `http://localhost:8000`. After changing the token, restart the task
+  `http://localhost:8000`. **Live since 2026-09-30 at `https://brewbot.link`** (tunnel "brewbot").
+- **Cloudflared Windows service:** Cloudflare's install command (`cloudflared service install <token>`)
+  was run on the PC, creating the SYSTEM service **"Cloudflared agent"** (auto-start at boot). When it's
+  running, the supervisor leaves the tunnel to it and kills its own connectors (one connector, not two).
+  If the service is removed (admin: `cloudflared.exe service uninstall`), the supervisor runs the
+  tunnel itself from `ADVISOR_TUNNEL_TOKEN`. Note the *app* still starts at logon (the task), so after
+  a reboot brewbot.link returns 502 until someone signs in to Windows.
+- After changing the token, restart the task
   (`Stop-ScheduledTask "MTG Advisor"; Start-ScheduledTask "MTG Advisor"`) — on start the supervisor
   kills any cloudflared of the wrong kind (quick vs named) and launches the right one.
 
@@ -143,6 +223,37 @@ always sees exactly what the user sees.
   in/cache_read/cache_write/out, cost estimate, and tools used. `tail -f` it to watch usage.
 
 ---
+
+### Live deck + session memory
+Each `/chat` request carries `deck` (compact editor state) and `memory` (`{text, upTo}`) alongside
+`history`. The system is sent as up to three cached blocks, most- to least-stable:
+`SYSTEM_PROMPT` (1h) → **SESSION MEMORY** → **CURRENT DECK** (`_cached_system`).
+- **CURRENT DECK** (`_deck_context`): commander, target bracket, player role overrides/tags, the
+  deterministic decklist (`_deck_to_text`: commander first, then A–Z — stable bytes keep it cached),
+  and the full `scryfall_get_decklist_details` output (oracle text, MANA BASE, roles, game changers),
+  memoized per deck text in `_DECK_DETAILS_CACHE`. The model reads this instead of calling the tool.
+  A deck edit re-caches the block + conversation once (~$0.05 for a 100-card deck), then it's cheap again.
+- **`@deck`:** for the decklist tools (`DECKLIST_TOOLS`) the model passes `decklist_text="@deck"` (or
+  nothing) and `agent_stream._run` substitutes the exact editor list — no retyping, no dropped cards.
+- **Commander identity** for the off-color guardrail comes from the editor's commander when set.
+  Off-color cards **already in the deck** are exempt from the guardrail (`_not_in_deck`) — it polices
+  new recommendations, and the advisor must be able to say "Beastmaster Ascension is illegal here".
+- **Edit notes:** the UI snapshots the deck each time it sends (`chat.deckSent`) and attaches a diff
+  to the next user message as `note` ("[Deck edits since your last reply: +X; -Y; Z 1->2; commander
+  -> …]"), shown under the bubble and appended server-side to that message's content (persisted, so
+  cache-stable).
+- **Stale pastes:** with a live deck, earlier pasted lists (≥15 card lines) are collapsed to a
+  one-line pointer (`_collapse_pasted_decklist`) so old versions (e.g. a maybeboard paste) can't
+  compete. A pasted list is parsed into the deck *before* the chat request goes out.
+- **Session memory:** when the verbatim transcript exceeds `MEMORY_TRIGGER_CHARS` (100k chars ≈
+  25k tokens), everything before the last `MEMORY_KEEP_RECENT` (6) messages is folded into a
+  structured memory by `_condense_memory` (Sonnet 5, effort medium; sections: goals, constraints,
+  decisions, **rejected suggestions**, key findings, open threads). The server emits an SSE `memory`
+  event; the browser stores it on the chat and sends it back, and `history[:upTo]` is no longer sent
+  verbatim (the UI still shows the whole transcript). Condensing only runs when there's ≥ half the
+  trigger to fold in, and never blocks the answer if it fails.
+- Verified live 2026-09-30: `@deck` substitution, editor identity, edit-note awareness, in-deck
+  off-color call-out, memory recall of a rejected card after the verbatim turns were dropped.
 
 ## 4. The system prompt (guardrails, in `advisor_app.py` `SYSTEM_PROMPT`)
 
@@ -276,7 +387,7 @@ The agentic deckbuilder, built in shippable phases (user-approved scope):
 - **Phase 2 — full manual editor** ✅ *done (2026-09-30).* See [Manual editor](#manual-editor-phase-2).
   Possible follow-ups: auto-detect the commander from a pasted list's commander section, a mana-curve
   chart, maybeboard/sideboard.
-- **Phase 3 — AI edits via accept/reject.** The AI proposes discrete cuts/adds (a structured
+- **Phase 3 — AI edits via accept/reject.** *Step 1 done (2026-09-30): the AI reads the live deck.* The AI proposes discrete cuts/adds (a structured
   mechanism — a dedicated tool the model calls, or a new SSE event type carrying proposed changes);
   the UI renders each as an **accept/reject** card; accepting mutates the `deck` object. **The deck
   stays the user's — nothing changes without their click.** The AI should read the current `deck`
@@ -321,6 +432,7 @@ concrete roles come free from the otag index.
 | `advisor_ui.html` | Single-file SPA: chat, sidebar, canvas, deck object + render. |
 | `advisor_login.html` | Sign-in page (served by `GET /login`). |
 | `dev_server.py` | Dev instance on :8001 (login off, serves `advisor_ui.dev.html`). |
+| `deploy.ps1` / `smoke_test.py` | One-command deploy with pre-flight smoke test + auto-rollback. |
 | `Dockerfile` / `docker-compose.yml` / `requirements-advisor.txt` | Server packaging (see "Moving to a server"). |
 | `run_advisor.ps1` / `install_autostart.ps1` | Supervisor that keeps server + tunnel alive / registers it as a logon task. |
 | `mtg_tools.py` | Shared tool layer (Scryfall, Spellbook, rules/theory RAG, decklist details) + `TOOLS`/`TOOL_FUNCTIONS`. Used by advisor, Discord bot, MCP server. |

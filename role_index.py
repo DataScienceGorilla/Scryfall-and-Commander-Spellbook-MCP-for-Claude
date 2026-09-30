@@ -28,7 +28,9 @@ STALE_DAYS = 30
 
 # Concrete role -> Scryfall otag query (validated against the user's certified gold).
 ROLE_OTAG = {
-    "Ramp": "otag:ramp",
+    # Ramp includes cost reducers for OTHER spells (Medallions, Herald's Horn, Urza's Incubator);
+    # otag:cost-reducer-self (cards that only discount themselves) is deliberately excluded.
+    "Ramp": "(otag:ramp or otag:cost-reducer)",
     "Draw": "otag:card-advantage",
     "Target Interaction": "(otag:spot-removal or otag:counterspell)",
     "Mass Interaction": "otag:board-wipe",
@@ -114,7 +116,9 @@ def build_index(force: bool = False) -> dict:
     out = {"_meta": {"built": date.today().isoformat(), "role_sizes": role_sizes,
                      "roles": list(ROLE_OTAG) + ["Stax"]},
            "cards": {k: sorted(v) for k, v in card_roles.items()}}
-    INDEX_PATH.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    tmp = INDEX_PATH.with_suffix(".tmp")  # atomic swap: a reader never sees a half-written file
+    tmp.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(INDEX_PATH)
     print(f"Saved {len(card_roles)} cards -> {INDEX_PATH}")
     return out
 

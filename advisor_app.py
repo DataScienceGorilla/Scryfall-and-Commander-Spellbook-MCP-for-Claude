@@ -24,6 +24,7 @@ import uuid
 import secrets
 import asyncio
 import datetime
+import hashlib
 import time
 from pathlib import Path
 
@@ -44,6 +45,11 @@ from mtg_tools import (
     SCRYFALL_API,
     SCRYFALL_HEADERS,
     _parse_decklist_to_main,
+    _collection_name,
+    find_deck_url,
+    import_deck_url,
+    resolve_card,
+    DeckImportError,
 )
 
 # =============================================================================
@@ -68,7 +74,7 @@ PRICES = {
 }
 
 _DECK_LINE = re.compile(r"^\s*\d+\s+\S", re.M)
-_DECK_URL = re.compile(r"(moxfield\.com|archidekt\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net)", re.I)
+_DECK_URL = re.compile(r"(moxfield\.com|archidekt\.com|commandertemplate\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net)", re.I)
 
 def pick_model(convo_text: str):
     """Sonnet whenever the CONVERSATION involves a deck (a decklist or deck URL appeared
@@ -236,12 +242,30 @@ NEVER ask the player to provide something they already gave you. If a decklist (
 lines like "1 Sol Ring" or a Moxfield/Archidekt URL) appears anywhere in their message,
 THAT is their current deck - use it; do not ask them to paste it again.
 
+# LIVE DECK + SESSION MEMORY (when present, these come right after these instructions)
+- A CURRENT DECK block is the player's deck as it is RIGHT NOW in their deck editor. It is
+  authoritative: it supersedes any decklist pasted earlier (older pastes are collapsed out of the
+  transcript) and any card the conversation mentions that it no longer contains. It already holds
+  every card's real oracle text plus the land count, concrete-role counts and game changers - so do
+  NOT call scryfall_get_decklist_details on the deck itself; read the block.
+- To run spellbook_find_combos_in_decklist, spellbook_estimate_bracket or
+  scryfall_get_decklist_details on the whole deck, pass decklist_text="@deck" - the server
+  substitutes the exact list. Never retype the decklist into a tool call.
+- The player edits the deck directly. A message may carry a note like "[Deck edits since your last
+  reply: ...]" - take those edits into account.
+- A SESSION MEMORY block condenses the earlier part of a long conversation (those verbatim messages
+  were dropped to keep your context sharp). Treat its goals, constraints and decisions as settled,
+  and do NOT re-suggest anything it lists as rejected.
+- These blocks are plumbing: never mention "the session memory", "the deck block" or "@deck" to the
+  player - just talk about their deck and what they told you.
+
 # USING YOUR TOOLS (judgment, not a fixed pipeline)
 Reach for the tools the request actually needs - do NOT run a full deck review on every message.
 Match your effort to the ask:
 - FULL DECK REVIEW ("tune this", "what do I cut/add", a pasted list with a goal): give it the deep
-  treatment - read the list with scryfall_get_decklist_details FIRST (real oracle text, types,
-  color identity, plus the concrete-role and game-changer counts it reports), then
+  treatment - read the list FIRST (the CURRENT DECK block if present, else
+  scryfall_get_decklist_details: real oracle text, types, color identity, plus the concrete-role
+  and game-changer counts), then
   spellbook_find_combos_in_decklist and spellbook_estimate_bracket for combos + power level, and
   scryfall_search_cards for candidate adds. Batch card lookups - verify a whole shortlist in ONE
   scryfall_get_decklist_details call rather than many separate scryfall_get_card calls.
@@ -257,8 +281,12 @@ Whenever they're relevant (guardrails, NOT pipeline steps to always run):
   decklist details). This matters most for the commander, Universes Beyond / crossover cards,
   precons, and anything obscure. Every claim must match the text you actually read.
 - NEVER invent a combo or claim "the combo checker flagged" a line the tool didn't return. Report
-  only combos in the spellbook_find_combos_in_decklist result (`included` = complete,
-  `almostIncluded` = one/two short). If unsure two cards go infinite, don't assert it (e.g.
+  only combos in the spellbook_find_combos_in_decklist result. Only "COMBOS IN THE DECK" are combos
+  the deck has. "NOT COMBOS - near-misses" are NOT combos: never call them combos, never count them
+  toward the deck's power or bracket, and don't describe the deck as "combo-dense" because of them.
+  Their value is the ADD card - a candidate recommendation that would complete a combo. Recommend one
+  only if it fits the player's goals AND their target bracket (a completed two-card combo is
+  off-limits in B1-B2 and restricted in B3), and say plainly that adding it creates a combo. If unsure two cards go infinite, don't assert it (e.g.
   "Metallic Mimic + a sac outlet is infinite" is FALSE - Mimic makes no tokens) - made-up combos
   destroy trust.
 
@@ -748,9 +776,118 @@ def _short_input(tool_input: dict) -> str:
 MAX_IDENTITY_RETRIES = 2  # regenerate the answer this many times if off-color cards slip in
 
 
-def _cached_system():
-    """System prompt as a cached block (stable per process) - big recurring input saving."""
-    return [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+def _cached_system(memory_block: str = "", deck_block: str = ""):
+    """System prompt + optional SESSION MEMORY + CURRENT DECK, each its own cache breakpoint,
+    ordered most- to least-stable (static prompt -> memory, which changes every ~N turns ->
+    deck, which changes on edits). An edit re-caches only what follows it."""
+    blocks = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    for text in (memory_block, deck_block):
+        if text:
+            blocks.append({"type": "text", "text": text, "cache_control": {"type": "ephemeral"}})
+    return blocks
+
+
+# --- Live deck context (workbench phase 3) -----------------------------------
+DECK_REF = "@deck"  # the model passes this as decklist_text; the server substitutes the list
+DECKLIST_TOOLS = {"scryfall_get_decklist_details", "spellbook_find_combos_in_decklist",
+                  "spellbook_estimate_bracket"}
+_DECK_DETAILS_CACHE: dict[str, str] = {}  # deck text -> scryfall_get_decklist_details output
+
+
+def _deck_to_text(deck: dict) -> str:
+    """Deterministic '1 Name' list (commander(s) first, then A-Z) - stable bytes keep the
+    deck block cacheable across turns."""
+    cmdrs = {n.lower() for n in deck.get("commander") or []}
+    cards = [c for c in deck.get("cards") or [] if c.get("name")]
+    head = sorted((c for c in cards if c["name"].lower() in cmdrs), key=lambda c: c["name"])
+    rest = sorted((c for c in cards if c["name"].lower() not in cmdrs), key=lambda c: c["name"])
+    return "\n".join(f"{int(c.get('qty') or 1)} {c['name']}" for c in head + rest)
+
+
+def _deck_identity(deck: dict) -> str | None:
+    cmdrs = {n.lower() for n in deck.get("commander") or []}
+    if not cmdrs:
+        return None
+    letters = set()
+    for c in deck.get("cards") or []:
+        if (c.get("name") or "").lower() in cmdrs:
+            letters.update(c.get("color_identity") or [])
+    return "".join(x for x in "WUBRG" if x in letters) or "C"
+
+
+async def _deck_context(deck) -> tuple[str, str, str | None]:
+    """(CURRENT DECK block, canonical deck text, commander identity) - empty when no deck."""
+    if not isinstance(deck, dict) or not deck.get("cards"):
+        return "", "", None
+    deck_text = _deck_to_text(deck)
+    if deck_text not in _DECK_DETAILS_CACHE:
+        details = await TOOL_FUNCTIONS["scryfall_get_decklist_details"](decklist_text=deck_text)
+        if details.startswith("Error"):
+            details = "(Card details unavailable right now - use scryfall_get_decklist_details with @deck.)"
+        else:
+            _DECK_DETAILS_CACHE[deck_text] = details
+    else:
+        details = _DECK_DETAILS_CACHE[deck_text]
+    cards = deck.get("cards") or []
+    cmdrs = deck.get("commander") or []
+    bracket = deck.get("bracket")
+    total = sum(int(c.get("qty") or 1) for c in cards)
+    lines = [
+        "# CURRENT DECK (live from the player's deck editor - authoritative, see instructions)",
+        f"Commander: {' + '.join(cmdrs) if cmdrs else 'NOT SET in the editor - infer it from the conversation or ask'}",
+        f"Target bracket: {bracket if bracket else 'not set'} | Cards: {total}",
+    ]
+    overrides = [f"{c['name']} -> {c['role']}" for c in cards if c.get("role")]
+    if overrides:
+        lines.append("Player-assigned roles (their read of the deck - respect it): " + "; ".join(sorted(overrides)))
+    tagged = [f"{c['name']} #{' #'.join(c['tags'])}" for c in cards if c.get("tags")]
+    if tagged:
+        lines.append("Player tags: " + "; ".join(sorted(tagged)))
+    lines += ["", "Decklist:", deck_text, "", details]
+    return "\n".join(lines), deck_text, _deck_identity(deck)
+
+
+def _collapse_pasted_decklist(text: str) -> str:
+    """With a live deck present, an old pasted list is stale and competes with it (e.g. a
+    paste that still had the maybeboard). Replace the list lines with a pointer."""
+    if len(_DECK_LINE.findall(text)) < 15:
+        return text
+    kept = [ln for ln in text.splitlines() if not _DECK_LINE.match(ln)]
+    kept.append("[decklist pasted here - superseded by the CURRENT DECK block]")
+    return "\n".join(ln for ln in kept if ln.strip())
+
+
+# --- Session memory: condense the old part of long chats ---------------------
+MEMORY_TRIGGER_CHARS = 100_000  # verbatim transcript size (~25k tokens) that triggers condensing
+MEMORY_KEEP_RECENT = 6          # the last N messages always stay verbatim
+
+MEMORY_PROMPT = """You maintain the SESSION MEMORY for a Commander (EDH) deckbuilding chat between a player and an AI advisor. Older messages are about to be removed from the advisor's context, so this memory is ALL the advisor will know about them. Merge the existing memory (if any) with the conversation excerpt into ONE updated memory.
+
+Write these sections (omit a section only if there is truly nothing for it):
+## Player & deck goals - commander, gameplan, win conditions, target bracket, budget, playgroup/meta notes
+## Constraints & preferences - hard rules the player set (pet cards to keep, cards they don't own, styles they dislike, bracket rules to respect)
+## Decisions made - changes the player accepted or made, with the one-line reason
+## Rejected suggestions - cards/ideas the player turned down, with their reason (the advisor must not re-suggest these)
+## Key findings - concrete analysis results worth keeping: bracket estimate, combos found, land/ramp/draw counts, structural problems identified
+## Open threads - questions still unanswered, things the player said they'd come back to
+
+Rules: keep card names EXACT. Keep numbers exact. Only record what the excerpt/memory actually says - never invent. Drop pleasantries, tool chatter, and anything superseded by a later decision. Be dense: short bullets, no prose padding. Output only the memory."""
+
+
+async def _condense_memory(prev_memory: str, excerpt: list[dict]) -> str:
+    transcript = "\n\n".join(f"[{m['role'].upper()}]\n{m['content']}" for m in excerpt)
+    msg = (f"EXISTING MEMORY:\n{prev_memory or '(none yet)'}\n\n"
+           f"CONVERSATION EXCERPT TO FOLD IN:\n{transcript}")
+    resp = await aclient.messages.create(
+        model=REVIEW_MODEL, max_tokens=4000, system=MEMORY_PROMPT,
+        messages=[{"role": "user", "content": msg}],
+        extra_body={"output_config": {"effort": "medium"}},
+    )
+    u = resp.usage
+    pin, pout = PRICES[REVIEW_MODEL]
+    log_activity(f"MEMORY condensed {len(excerpt)} msgs in={u.input_tokens} out={u.output_tokens} "
+                 f"~${u.input_tokens * pin + u.output_tokens * pout:.4f}")
+    return "".join(b.text for b in resp.content if b.type == "text").strip()
 
 
 def _cache_last(messages: list) -> list:
@@ -774,9 +911,25 @@ def _cache_last(messages: list) -> list:
     return out
 
 
-async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODEL, extra: dict = None):
+async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODEL, extra: dict = None,
+                       system: list | None = None, deck_text: str = "", deck_identity: str | None = None):
     if extra is None:
         extra = REVIEW_EXTRA
+    if system is None:
+        system = _cached_system()
+    # Cards already IN the deck may be discussed even if off-color ("Beastmaster Ascension
+    # is illegal here, cut it") - the guardrail only polices new recommendations.
+    in_deck = set()
+    for ln in deck_text.splitlines():
+        name = ln.split(" ", 1)[-1].strip().lower()
+        in_deck.update({name, name.split(" // ")[0]})
+
+    def _not_in_deck(off):
+        if not off:
+            return off
+        off = [c for c in off if (c.get("name") or "").lower() not in in_deck
+               and (c.get("name") or "").lower().split(" // ")[0] not in in_deck]
+        return off or None
     """
     Drives the Claude tool-use loop. Tool-call turns stream status live; the FINAL
     answer is buffered and validated for color-identity legality BEFORE it is shown,
@@ -785,7 +938,10 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
     """
     yield _sse("session", {"session_id": session_id})
     identity_retries = 0
-    deck_identity = None  # authoritative commander identity, captured from tool args
+    # Authoritative commander identity: from the deck editor when a commander is set there,
+    # else captured from the model's tool args below.
+    if deck_identity:
+        yield _sse("identity", {"identity": deck_identity})
     usage_in = usage_out = usage_cr = usage_cw = 0  # uncached in / out / cache-read / cache-write
     tools_used: list[str] = []
 
@@ -804,7 +960,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
             async with aclient.messages.stream(
                 model=model,
                 max_tokens=MAX_TOKENS,
-                system=_cached_system(),   # cache system+tools prefix
+                system=system,   # cached: prompt (+ memory + live deck)
                 tools=TOOLS,
                 messages=_cache_last(messages),  # cache the conversation prefix
                 extra_body=extra,
@@ -842,8 +998,16 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     func = TOOL_FUNCTIONS.get(block.name)
                     if func is None:
                         return f"Unknown tool: {block.name}"
+                    args = dict(block.input or {})
+                    # "@deck" (or no list at all) -> the exact editor list, so the model
+                    # never retypes 100 lines (and can't drop cards doing it).
+                    if block.name in DECKLIST_TOOLS and deck_text and (
+                            (args.get("decklist_text") or "").strip() == DECK_REF
+                            or not (args.get("decklist_text") or args.get("decklist_url"))):
+                        args["decklist_text"] = deck_text
+                        args.pop("decklist_url", None)
                     try:
-                        return await func(**block.input)
+                        return await func(**args)
                     except Exception as e:
                         return f"Error running {block.name}: {e}"
 
@@ -860,7 +1024,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
             # ---- Final answer turn: validate color identity BEFORE showing it ----
             answer_text = "".join(turn_parts)
             try:
-                off = await _check_off_color(answer_text, deck_identity)
+                off = _not_in_deck(await _check_off_color(answer_text, deck_identity))
             except Exception:
                 off = None
 
@@ -903,7 +1067,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 "you've already gathered above.")})
             final_parts = []
             async with aclient.messages.stream(
-                model=model, max_tokens=MAX_TOKENS, system=_cached_system(),
+                model=model, max_tokens=MAX_TOKENS, system=system,
                 messages=_cache_last(messages), extra_body=extra,
             ) as stream:
                 async for event in stream:
@@ -914,7 +1078,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
             _tally(getattr(fmsg, "usage", None))
             answer_text = "".join(final_parts)
             try:
-                off = await _check_off_color(answer_text, deck_identity)
+                off = _not_in_deck(await _check_off_color(answer_text, deck_identity))
             except Exception:
                 off = None
             if off:
@@ -1038,9 +1202,26 @@ async def me(request: Request, _: None = Depends(require_auth)):
     return {"user": request.session.get("user"), "auth": AUTH_ENABLED}
 
 
+def _ui_page() -> tuple[str, str]:
+    """(page HTML, version). The version is a fingerprint of the UI file, stamped into the
+    page as UI_VERSION so a tab left open across a deploy can tell it's stale."""
+    raw = UI_FILE.read_text(encoding="utf-8")
+    version = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return raw.replace("__UI_VERSION__", version), version
+
+
+STALE_NOTE = ("_(This page is out of date - the app was updated. Refresh the page to get the "
+              "latest version; your chats are saved.)_\n\n")
+
+
 @app.get("/")
 async def index(_: None = Depends(require_auth)):
-    return HTMLResponse(UI_FILE.read_text(encoding="utf-8"))
+    return HTMLResponse(_ui_page()[0])
+
+
+@app.get("/version")
+async def version(_: None = Depends(require_auth)):
+    return {"ui": _ui_page()[1]}
 
 
 @app.post("/chat")
@@ -1056,16 +1237,39 @@ async def chat(request: Request, _: None = Depends(require_auth)):
     # only in the in-memory SESSIONS dict. Rebuild the message list from it; fall
     # back to the in-memory store for older clients that don't send history.
     history = body.get("history")
+    deck = body.get("deck") if isinstance(body.get("deck"), dict) else None
+    has_deck = bool(deck and deck.get("cards"))
+    # Session memory: the browser keeps {text, upTo} per chat; history[:upTo] is already
+    # condensed into text, so only history[upTo:] goes over verbatim.
+    mem = body.get("memory") if isinstance(body.get("memory"), dict) else {}
+    memory_text = (mem.get("text") or "").strip()
+    mem_upto = int(mem.get("upTo") or 0) if memory_text else 0
+
+    def _to_messages(raw):
+        out = []
+        for m in raw:
+            text = (m.get("text") or "").strip()
+            if m.get("role") not in ("user", "assistant") or not text:
+                continue
+            if m["role"] == "user":
+                if has_deck:
+                    text = _collapse_pasted_decklist(text)
+                if m.get("note"):  # deck edits made in the editor before this message
+                    text += "\n\n" + m["note"]
+            out.append({"role": m["role"], "content": text})
+        return out
+
     if isinstance(history, list) and history:
-        messages = [
-            {"role": m["role"], "content": (m.get("text") or "").strip()}
-            for m in history
-            if m.get("role") in ("user", "assistant") and (m.get("text") or "").strip()
-        ]
+        mem_upto = min(mem_upto, len(history))
+        recent = history[mem_upto:]
+        messages = _to_messages(recent)
         if not messages or messages[-1]["role"] != "user":
             messages.append({"role": "user", "content": user_message})
+        while messages and messages[0]["role"] != "user":  # API needs a user turn first
+            messages.pop(0)
         SESSIONS[session_id] = messages
     else:
+        history, recent = None, None
         messages = SESSIONS.setdefault(session_id, [])
         messages.append({"role": "user", "content": user_message})
 
@@ -1080,12 +1284,60 @@ async def chat(request: Request, _: None = Depends(require_auth)):
     # Sonnet for every follow-up (they're substantive deck reasoning); Haiku only for
     # deck-free trivia. Caching keeps Sonnet follow-ups cheap.
     convo_text = "\n".join(m["content"] for m in messages if isinstance(m.get("content"), str))
-    model, extra = pick_model(convo_text)
+    model, extra = pick_model(convo_text + "\n" + memory_text)
+    if has_deck:
+        model, extra = REVIEW_MODEL, REVIEW_EXTRA  # a live deck is always deck work
     preview = user_message.replace("\n", " ")[:200]
-    log_activity(f"QUERY  sid={session_id[:8]} ip={client_ip} [{model.replace('claude-','')}] | {preview}")
+    ctx = []
+    if has_deck:
+        ctx.append(f"deck {sum(int(c.get('qty') or 1) for c in deck['cards'])}c")
+    if memory_text:
+        ctx.append(f"mem@{mem_upto}")
+    log_activity(f"QUERY  sid={session_id[:8]} ip={client_ip} [{model.replace('claude-','')}]"
+                 f"{' {' + ', '.join(ctx) + '}' if ctx else ''} | {preview}")
+
+    client_ui = body.get("ui_version")
+    ui_stale = client_ui != _ui_page()[1]
+
+    async def _stream():
+        nonlocal messages, memory_text, mem_upto
+        if ui_stale:
+            # Current pages show a refresh banner; pages from before this existed don't
+            # know the event, so they get the note as the start of the answer instead.
+            yield _sse("stale", {}) if client_ui else _sse("text", {"text": STALE_NOTE})
+        # Condense the old part of a long chat into SESSION MEMORY (keeps the last
+        # MEMORY_KEEP_RECENT messages verbatim), then hand the new memory to the browser.
+        if recent is not None and sum(len(m["content"]) for m in messages) > MEMORY_TRIGGER_CHARS:
+            cut = None  # history index of the first message to keep verbatim (a user turn)
+            for i in range(len(history) - MEMORY_KEEP_RECENT, mem_upto, -1):
+                if history[i].get("role") == "user":
+                    cut = i
+                    break
+            excerpt = _to_messages(history[mem_upto:cut]) if cut else []
+            # only worth a condensing call when there's a real chunk to fold in (otherwise
+            # a few huge recent messages would trigger a tiny condense on every turn)
+            if cut and sum(len(m["content"]) for m in excerpt) >= MEMORY_TRIGGER_CHARS // 2:
+                yield _sse("status", {"tool": "memory", "input": "condensing earlier conversation"})
+                try:
+                    memory_text = await _condense_memory(memory_text, excerpt)
+                    mem_upto = cut
+                    messages = _to_messages(history[cut:])
+                    if not messages or messages[-1]["role"] != "user":
+                        messages.append({"role": "user", "content": user_message})
+                    SESSIONS[session_id] = messages
+                    yield _sse("memory", {"text": memory_text, "upTo": mem_upto})
+                except Exception as e:  # never block the answer on memory upkeep
+                    log_activity(f"MEMORY failed: {e}")
+        deck_block, deck_text, deck_identity = await _deck_context(deck) if has_deck else ("", "", None)
+        memory_block = ("# SESSION MEMORY (condensed earlier conversation - see instructions)\n"
+                        + memory_text) if memory_text else ""
+        async for chunk in agent_stream(session_id, messages, model, extra,
+                                        system=_cached_system(memory_block, deck_block),
+                                        deck_text=deck_text, deck_identity=deck_identity):
+            yield chunk
 
     return StreamingResponse(
-        agent_stream(session_id, messages, model, extra),
+        _stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1153,7 +1405,15 @@ async def _resolve_full_card(name: str) -> dict | None:
     """Fuzzy-resolve a card to its full Scryfall object (cached, shared by all viewers)."""
     key = name.strip().lower()
     if key not in FULL_CARD_CACHE:
-        FULL_CARD_CACHE[key] = await _scryfall_get("/cards/named", {"fuzzy": name})
+        card = await _scryfall_get("/cards/named", {"fuzzy": name})
+        if card is None:  # ambiguous ("Krenko") or a heavier typo - search by popularity
+            async with _scry_sem:
+                async with httpx.AsyncClient() as client:
+                    try:
+                        card, _ = await resolve_card(client, name)
+                    except httpx.HTTPError:
+                        card = None
+        FULL_CARD_CACHE[key] = card
     return FULL_CARD_CACHE[key]
 
 
@@ -1199,9 +1459,23 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
 
 @app.post("/deck/parse")
 async def deck_parse(request: Request, _: None = Depends(require_auth)):
-    """Parse a pasted decklist into structured deck cards (name-resolved, role-tagged)."""
+    """Parse a pasted decklist - or a deck link (Archidekt / Commander Template / Moxfield) -
+    into structured deck cards (name-resolved, role-tagged)."""
     body = await request.json()
-    main = _parse_decklist_to_main(body.get("text") or "")
+    text = body.get("text") or ""
+    meta = {}
+    url = find_deck_url(text) if len(_DECK_LINE.findall(text)) < 15 else None
+    if url:
+        try:
+            imp = await import_deck_url(url)
+        except DeckImportError as e:
+            return JSONResponse({"cards": [], "not_found": [], "error": str(e)})
+        except Exception:
+            return JSONResponse({"cards": [], "not_found": [], "error": "Couldn't import that deck link right now."})
+        text = "\n".join(f"{q} {n}" for q, n in imp["cards"])
+        meta = {"commander": imp["commanders"], "bracket": imp["bracket"], "source": imp["source"],
+                "name": imp["name"], "skipped": imp["skipped"]}
+    main = _parse_decklist_to_main(text)
     qty_by_name = {}
     for e in main:
         qty_by_name[e["card"]] = qty_by_name.get(e["card"], 0) + e["quantity"]
@@ -1213,7 +1487,7 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
             try:
                 r = await client.post(
                     f"{SCRYFALL_API}/cards/collection",
-                    json={"identifiers": [{"name": n} for n in chunk]},
+                    json={"identifiers": [{"name": _collection_name(n)} for n in chunk]},
                     headers={**SCRYFALL_HEADERS, "Content-Type": "application/json"},
                 )
                 data = r.json()
@@ -1222,14 +1496,16 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
             for c in data.get("data", []):
                 # match back to the requested qty (by canonical or the requested name)
                 qty = qty_by_name.get(c.get("name"))
+                if qty is None:  # pasted as just the front face of a multi-face card
+                    qty = qty_by_name.get(_collection_name(c.get("name", "")))
                 if qty is None:  # fuzzy/canonical differs - fall back to any unmatched in chunk
                     qty = next((qty_by_name[n] for n in chunk if n not in found_names), 1)
                 resolved.append(_slim_deck_card(c, qty))
                 found_names.add(c.get("name"))
-    lower_found = {n.lower() for n in found_names}
+    lower_found = {n.lower() for n in found_names} | {_collection_name(n).lower() for n in found_names}
     not_found = [n for n in names if n.lower() not in lower_found
                  and n.lower().split(" // ")[0] not in lower_found]
-    return JSONResponse({"cards": resolved, "not_found": not_found})
+    return JSONResponse({"cards": resolved, "not_found": not_found, **meta})
 
 
 AUTOCOMPLETE_CACHE: dict[str, list] = {}
