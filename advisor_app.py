@@ -42,6 +42,7 @@ from mtg_tools import (
     get_rules_collection_async,
     SCRYFALL_API,
     SCRYFALL_HEADERS,
+    _parse_decklist_to_main,
 )
 
 # =============================================================================
@@ -1041,6 +1042,70 @@ async def _resolve_card(name: str) -> dict | None:
                     return None
                 return _slim_card(r.json())
     return None
+
+
+def _slim_deck_card(c: dict, qty: int) -> dict:
+    """Structured card for the deck object: identity, cost, image, flags, concrete roles."""
+    tl = c.get("type_line", "")
+    faces = c.get("card_faces") or []
+    img = ((c.get("image_uris") or {}).get("normal")
+           or (faces[0].get("image_uris", {}).get("normal") if faces else None))
+    if not tl and faces:
+        tl = " // ".join(f.get("type_line", "") for f in faces)
+    try:
+        import role_index
+        roles = role_index.roles_for(c.get("name", ""))
+    except Exception:
+        roles = []
+    return {
+        "name": c.get("name"),
+        "qty": qty,
+        "type_line": tl,
+        "cmc": c.get("cmc"),
+        "mana_cost": c.get("mana_cost", "") or (faces[0].get("mana_cost", "") if faces else ""),
+        "color_identity": c.get("color_identity", []),
+        "image": img,
+        "game_changer": bool(c.get("game_changer")),
+        "is_land": "Land" in tl and "Creature" not in tl.split("//")[0],
+        "roles": roles,            # concrete roles (otag index)
+        "role": None,              # contextual role - assigned by AI/user later
+        "tags": [],                # user tags
+    }
+
+
+@app.post("/deck/parse")
+async def deck_parse(request: Request, _: None = Depends(require_auth)):
+    """Parse a pasted decklist into structured deck cards (name-resolved, role-tagged)."""
+    body = await request.json()
+    main = _parse_decklist_to_main(body.get("text") or "")
+    qty_by_name = {}
+    for e in main:
+        qty_by_name[e["card"]] = qty_by_name.get(e["card"], 0) + e["quantity"]
+    names = list(qty_by_name)
+    resolved, found_names = [], set()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for i in range(0, len(names), 75):
+            chunk = names[i:i + 75]
+            try:
+                r = await client.post(
+                    f"{SCRYFALL_API}/cards/collection",
+                    json={"identifiers": [{"name": n} for n in chunk]},
+                    headers={**SCRYFALL_HEADERS, "Content-Type": "application/json"},
+                )
+                data = r.json()
+            except Exception:
+                continue
+            for c in data.get("data", []):
+                # match back to the requested qty (by canonical or the requested name)
+                qty = qty_by_name.get(c.get("name"))
+                if qty is None:  # fuzzy/canonical differs - fall back to any unmatched in chunk
+                    qty = next((qty_by_name[n] for n in chunk if n not in found_names), 1)
+                resolved.append(_slim_deck_card(c, qty))
+                found_names.add(c.get("name"))
+    lower_found = {n.lower() for n in found_names}
+    not_found = [n for n in names if n.lower() not in lower_found
+                 and n.lower().split(" // ")[0] not in lower_found]
+    return JSONResponse({"cards": resolved, "not_found": not_found})
 
 
 @app.get("/card")
