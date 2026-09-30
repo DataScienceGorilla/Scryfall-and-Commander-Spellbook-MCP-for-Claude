@@ -267,7 +267,10 @@ THAT is their current deck - use it; do not ask them to paste it again.
   authoritative: it supersedes any decklist pasted earlier (older pastes are collapsed out of the
   transcript) and any card the conversation mentions that it no longer contains. It already holds
   every card's real oracle text plus the land count, concrete-role counts and game changers - so do
-  NOT call scryfall_get_decklist_details on the deck itself; read the block.
+  NOT call scryfall_get_decklist_details on the deck itself; read the block. It also includes the
+  PRECOMPUTED combo check (with combo profiles) and Spellbook power read for this exact deck
+  version - use those; don't re-run spellbook_find_combos_in_decklist / spellbook_estimate_bracket
+  on the deck unless the player asks.
 - To run spellbook_find_combos_in_decklist, spellbook_estimate_bracket or
   scryfall_get_decklist_details on the whole deck, pass decklist_text="@deck" - the server
   substitutes the exact list. Never retype the decklist into a tool call.
@@ -290,8 +293,8 @@ Match your effort to the ask:
 - FULL DECK REVIEW ("tune this", "what do I cut/add", a pasted list with a goal): give it the deep
   treatment - read the list FIRST (the CURRENT DECK block if present, else
   scryfall_get_decklist_details: real oracle text, types, color identity, plus the concrete-role
-  and game-changer counts), then
-  spellbook_find_combos_in_decklist and spellbook_estimate_bracket for combos + power level, and
+  and game-changer counts), then the combo check and power read (precomputed in the CURRENT DECK
+  block when present; otherwise spellbook_find_combos_in_decklist and spellbook_estimate_bracket), and
   scryfall_search_cards for candidate adds. Batch card lookups - verify a whole shortlist in ONE
   scryfall_get_decklist_details call rather than many separate scryfall_get_card calls.
 - TARGETED QUESTION ("how does X interact with Y", "is this card good here", "a swap for Z", a
@@ -300,6 +303,10 @@ Match your effort to the ask:
   info from earlier in the conversation. Do NOT re-pull the whole deck to answer a one-card question.
 - FOLLOW-UPS mid-chat: you already fetched the deck earlier - reuse what you have; don't re-run the
   whole review each turn.
+- BATCH your lookups: when you need several things that don't depend on each other (e.g. three
+  candidate searches, or a search plus a card check), request them ALL in the same turn - they run
+  in parallel. Every extra round-trip costs the player another full pass of waiting. Plan the
+  lookups a review needs up front, then fetch them together.
 
 Whenever they're relevant (guardrails, NOT pipeline steps to always run):
 - Verify a card's text before you claim what it does - never from memory (scryfall_get_card or the
@@ -946,10 +953,21 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
         return "", "", None
     deck_text = _deck_to_text(deck)
     if deck_text not in _DECK_DETAILS_CACHE:
-        details = await TOOL_FUNCTIONS["scryfall_get_decklist_details"](decklist_text=deck_text)
-        if details.startswith("Error"):
+        # Card details + the combo check + Spellbook's bracket read are deterministic lookups:
+        # run them together here (once per deck version) instead of spending model turns on them.
+        details, combos, bracket_read = await asyncio.gather(
+            TOOL_FUNCTIONS["scryfall_get_decklist_details"](decklist_text=deck_text),
+            TOOL_FUNCTIONS["spellbook_find_combos_in_decklist"](decklist_text=deck_text, limit=12),
+            TOOL_FUNCTIONS["spellbook_estimate_bracket"](decklist_text=deck_text))
+        failed = any(str(x).startswith(("Error", "{'error'")) for x in (details, combos, bracket_read))
+        if str(details).startswith("Error"):
             details = "(Card details unavailable right now - use scryfall_get_decklist_details with @deck.)"
-        else:
+        analysis = ["", "PRECOMPUTED FOR THIS DECK VERSION (already run - don't call these tools for the deck "
+                    "itself; re-run them with @deck only if the player asks you to double-check):",
+                    "## Combo check (spellbook_find_combos_in_decklist)", str(combos),
+                    "## Spellbook power read (spellbook_estimate_bracket)", str(bracket_read)]
+        details = str(details) + "\n" + "\n".join(analysis)
+        if not failed:
             _DECK_DETAILS_CACHE[deck_text] = details
     else:
         details = _DECK_DETAILS_CACHE[deck_text]
@@ -1070,6 +1088,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
         yield _sse("identity", {"identity": deck_identity})
     usage_in = usage_out = usage_cr = usage_cw = 0  # uncached in / out / cache-read / cache-write
     tools_used: list[str] = []
+    t_start = time.monotonic()
+    timeline: list[str] = []  # per turn: "model <secs>s/<out tokens>" [+ "<n> tools <secs>s"]
 
     def _tally(u):
         nonlocal usage_in, usage_out, usage_cr, usage_cw
@@ -1083,6 +1103,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
     try:
         for _ in range(MAX_ITERATIONS + MAX_IDENTITY_RETRIES):
             turn_parts = []
+            t_turn = time.monotonic()
             async with aclient.messages.stream(
                 model=model,
                 max_tokens=MAX_TOKENS,
@@ -1102,6 +1123,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 final = await stream.get_final_message()
 
             _tally(getattr(final, "usage", None))
+            timeline.append(f"model {time.monotonic() - t_turn:.0f}s/"
+                            f"{getattr(getattr(final, 'usage', None), 'output_tokens', 0) or 0}")
 
             messages.append({"role": "assistant", "content": final.content})
 
@@ -1139,10 +1162,12 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     except Exception as e:
                         return f"Error running {block.name}: {e}"
 
+                t_tools = time.monotonic()
                 tools_task = asyncio.ensure_future(asyncio.gather(*(_run(b) for b in tool_blocks)))
                 while not (await asyncio.wait({tools_task}, timeout=HEARTBEAT_SECS))[0]:
                     yield HEARTBEAT  # slow tools (Spellbook, big Scryfall batches) keep the tunnel open
                 results = tools_task.result()
+                timeline[-1] += f" -> {len(tool_blocks)} tool{'s' if len(tool_blocks) > 1 else ''} {time.monotonic() - t_tools:.0f}s"
                 messages.append({
                     "role": "user",
                     "content": [
@@ -1230,7 +1255,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
         short_model = model.replace("claude-", "")
         log_activity(
             f"ANSWER sid={session_id[:8]} [{short_model}] in={usage_in} cache_r={usage_cr} "
-            f"cache_w={usage_cw} out={usage_out} ~${cost:.4f} | tools: {tool_summary}"
+            f"cache_w={usage_cw} out={usage_out} ~${cost:.4f} | {time.monotonic() - t_start:.0f}s "
+            f"[{' | '.join(timeline)}] | tools: {tool_summary}"
         )
         yield _sse("done", {})
     except anthropic.APIError as e:
