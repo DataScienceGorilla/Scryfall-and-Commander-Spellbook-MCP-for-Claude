@@ -65,6 +65,11 @@
     cursor: pointer; font-weight: 550;
   }
   .chip:hover { color: #f0c874; }
+  .export-menu { position: absolute; z-index: 40; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; display: flex; flex-direction: column; min-width: 240px; }
+  .export-menu button { background: none; border: none; color: var(--text); text-align: left; padding: 7px 10px;
+    border-radius: 5px; font: inherit; font-size: 13px; cursor: pointer; }
+  .export-menu button:hover { background: var(--user); }
   #staleBanner { background: var(--chip); border-bottom: 1px solid var(--accent); color: var(--text);
     padding: 8px 16px; font-size: 13px; text-align: center; }
   #staleBanner button { background: var(--accent); color: #1a1400; border: none; border-radius: 6px;
@@ -737,7 +742,7 @@ function buildToolbar() {
     + '<select id="bracketSelect" title="Bracket"><option value="">Bracket…</option>'
     + Object.entries(BRACKETS).map(([n, l]) => `<option value="${n}">B${n} · ${l}</option>`).join('') + '</select>'
     + '<button class="tb-btn" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>'
-    + '<button class="tb-btn" id="copyDeckBtn" title="Copy decklist to clipboard">⧉ Copy list</button>'
+    + '<button class="tb-btn" id="copyDeckBtn" title="Copy the decklist in a format your deckbuilder imports">⧉ Export list ▾</button>'
     + '<button class="tb-btn" id="briefBtn" title="Commander, bracket, goals and limits for the advisor">📝 Brief</button>';
   const input = tb.querySelector('#addCardInput');
   const list = tb.querySelector('.ac-list');
@@ -790,7 +795,7 @@ function buildToolbar() {
     deckChanged();
   });
   tb.querySelector('#undoBtn').addEventListener('click', undo);
-  tb.querySelector('#copyDeckBtn').addEventListener('click', copyDecklist);
+  tb.querySelector('#copyDeckBtn').addEventListener('click', (e) => toggleExportMenu(e.currentTarget));
   tb.querySelector('#briefBtn').addEventListener('click', () => openIntake());
   return tb;
 }
@@ -984,13 +989,48 @@ function setCardTags(name, text) {
   c.tags = tags;
   deckChanged();
 }
-function copyDecklist() {
-  if (!deck || !deck.cards.length) return;
-  const cmdrs = deck.cards.filter(isCommander), rest = deck.cards.filter(c => !isCommander(c));
+// Export formats. 'plain' imports almost anywhere (commander first, no header lines);
+// 'archidekt' tags the commander so Archidekt sets it on import; 'arena' uses the
+// Commander/Deck section headers MTG Arena-style importers expect.
+const EXPORT_FORMATS = {
+  plain: 'Plain list (most sites)',
+  archidekt: 'Archidekt (commander tagged)',
+  arena: 'MTG Arena style (Commander / Deck headers)',
+};
+function decklistText(format) {
+  const cmdrs = deck.cards.filter(isCommander);
+  const rest = deck.cards.filter(c => !isCommander(c)).sort((a, b) => a.name.localeCompare(b.name));
   const line = c => `${c.qty || 1} ${c.name}`;
-  const text = (cmdrs.length ? `// Commander\n${cmdrs.map(line).join('\n')}\n\n// Deck\n` : '')
-    + rest.sort((a, b) => a.name.localeCompare(b.name)).map(line).join('\n');
-  navigator.clipboard.writeText(text).then(() => showToast('Decklist copied'), () => showToast("Couldn't copy - clipboard blocked"));
+  if (format === 'archidekt')
+    return cmdrs.map(c => `${c.qty || 1}x ${c.name} [Commander{top}]`).concat(rest.map(c => `${c.qty || 1}x ${c.name}`)).join('\n');
+  if (format === 'arena' && cmdrs.length)
+    return `Commander\n${cmdrs.map(line).join('\n')}\n\nDeck\n${rest.map(line).join('\n')}`;
+  return cmdrs.concat(rest).map(line).join('\n');
+}
+function copyDecklist(format = 'plain') {
+  if (!deck || !deck.cards.length) return;
+  navigator.clipboard.writeText(decklistText(format)).then(
+    () => showToast(`Decklist copied - ${EXPORT_FORMATS[format]}`
+                    + (format === 'plain' && (deck.commander || []).length ? '. Commander is on the first line.' : '')),
+    () => showToast("Couldn't copy - clipboard blocked"));
+}
+function toggleExportMenu(btn) {
+  let menu = document.getElementById('exportMenu');
+  if (menu) { menu.remove(); return; }
+  menu = document.createElement('div');
+  menu.id = 'exportMenu'; menu.className = 'export-menu';
+  for (const [key, label] of Object.entries(EXPORT_FORMATS)) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+    b.onclick = () => { menu.remove(); copyDecklist(key); };
+    menu.appendChild(b);
+  }
+  btn.parentElement.style.position = 'relative';
+  menu.style.top = (btn.offsetTop + btn.offsetHeight + 4) + 'px';
+  menu.style.left = btn.offsetLeft + 'px';
+  btn.parentElement.appendChild(menu);
+  setTimeout(() => document.addEventListener('click', function off(e) {
+    if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', off); }
+  }), 0);
 }
 
 // ---- deck brief: commander picker + intake questionnaire (workbench phase 4) ----
