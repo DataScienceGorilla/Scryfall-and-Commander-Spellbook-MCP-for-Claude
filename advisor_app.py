@@ -776,6 +776,35 @@ TOOL_FUNCTIONS = {**BASE_TOOL_FUNCTIONS, "deckbuilding_search": deckbuilding_sea
 # =============================================================================
 
 
+# Cloudflare drops a proxied response that sends nothing for ~100 s, and the final answer is
+# buffered for the color-identity check - so a long review looked like a "connection error".
+# An SSE comment every few seconds keeps the tunnel open; the page ignores comment frames.
+HEARTBEAT_SECS = 15
+HEARTBEAT = ": keepalive\n\n"
+
+
+async def _with_heartbeat(source):
+    """Yield items from an async iterator, plus None whenever HEARTBEAT_SECS pass with nothing
+    - a model thinking silently can go minutes without a single stream event."""
+    it = source.__aiter__()
+    nxt = asyncio.ensure_future(it.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({nxt}, timeout=HEARTBEAT_SECS)
+            if not done:
+                yield None
+                continue
+            try:
+                item = nxt.result()
+            except StopAsyncIteration:
+                return
+            yield item
+            nxt = asyncio.ensure_future(it.__anext__())
+    finally:
+        if not nxt.done():
+            nxt.cancel()
+
+
 def _sse(event: str, data: dict) -> str:
     """Format a Server-Sent Event frame."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -1062,8 +1091,10 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 messages=_cache_last(messages),  # cache the conversation prefix
                 extra_body=extra,
             ) as stream:
-                async for event in stream:
-                    if (
+                async for event in _with_heartbeat(stream):
+                    if event is None:
+                        yield HEARTBEAT
+                    elif (
                         event.type == "content_block_delta"
                         and getattr(event.delta, "type", None) == "text_delta"
                     ):
@@ -1108,7 +1139,10 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     except Exception as e:
                         return f"Error running {block.name}: {e}"
 
-                results = await asyncio.gather(*(_run(b) for b in tool_blocks))
+                tools_task = asyncio.ensure_future(asyncio.gather(*(_run(b) for b in tool_blocks)))
+                while not (await asyncio.wait({tools_task}, timeout=HEARTBEAT_SECS))[0]:
+                    yield HEARTBEAT  # slow tools (Spellbook, big Scryfall batches) keep the tunnel open
+                results = tools_task.result()
                 messages.append({
                     "role": "user",
                     "content": [
@@ -1167,8 +1201,10 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 model=model, max_tokens=MAX_TOKENS, system=system,
                 messages=_cache_last(messages), extra_body=extra,
             ) as stream:
-                async for event in stream:
-                    if (event.type == "content_block_delta"
+                async for event in _with_heartbeat(stream):
+                    if event is None:
+                        yield HEARTBEAT
+                    elif (event.type == "content_block_delta"
                             and getattr(event.delta, "type", None) == "text_delta"):
                         final_parts.append(event.delta.text)
                 fmsg = await stream.get_final_message()
@@ -1198,8 +1234,15 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
         )
         yield _sse("done", {})
     except anthropic.APIError as e:
+        log_activity(f"ERROR  sid={session_id[:8]} API error: {e}")
         yield _sse("error", {"message": f"API error: {e}"})
+    except asyncio.CancelledError:
+        # the browser/tunnel went away mid-answer - worth knowing when someone says "it errored"
+        log_activity(f"ABORT  sid={session_id[:8]} client disconnected mid-answer "
+                     f"(out={usage_out} tokens so far, tools: {', '.join(tools_used) or 'none'})")
+        raise
     except Exception as e:
+        log_activity(f"ERROR  sid={session_id[:8]} {type(e).__name__}: {e}")
         yield _sse("error", {"message": str(e)})
 
 
