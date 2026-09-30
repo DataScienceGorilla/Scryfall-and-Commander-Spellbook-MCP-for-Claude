@@ -1125,8 +1125,8 @@ async def spellbook_find_combos_in_decklist(
                 lines.append(
                     f"\n**NOT COMBOS - near-misses ({len(almost)})**. The deck does NOT have these combos; each is "
                     "missing the card(s) marked ADD. Those missing cards are candidate recommendations (they'd "
-                    "complete a combo) - but check the target bracket first: completing a two-card combo is off-limits "
-                    "in B1-B2 and restricted in B3.")
+                    "complete a combo) - but check the target bracket first: completing a two-card INFINITE is off-limits "
+                    "in B1-B2 and must not be early-game in B3; 3+ card combos aren't restricted.")
                 for combo in almost[:remaining]:
                     names = [u.get("card", {}).get("name") for u in combo.get("uses") or [] if isinstance(u, dict)]
                     names = [n for n in names if n]
