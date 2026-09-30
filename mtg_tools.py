@@ -787,6 +787,65 @@ def _collection_name(name: str) -> str:
     return name.split(" // ")[0].strip()
 
 
+_ZONES = {"B": "battlefield", "H": "hand", "G": "graveyard", "E": "exile", "L": "library", "C": "command zone"}
+_WIN_WORDS = ("win the game", "lose the game", "loses the game", "wins the game")
+
+
+async def _card_mana_values(names: list[str]) -> dict[str, float]:
+    """lower(name) -> mana value, one batched Scryfall lookup (front-face names)."""
+    out: dict[str, float] = {}
+    names = list(dict.fromkeys(n for n in names if n))
+    async with httpx.AsyncClient(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
+        for i in range(0, len(names), 75):
+            try:
+                r = await client.post(f"{SCRYFALL_API}/cards/collection",
+                                      json={"identifiers": [{"name": _collection_name(n)} for n in names[i:i + 75]]})
+                data = r.json().get("data", []) if r.status_code == 200 else []
+            except Exception:
+                data = []
+            for c in data:
+                mv = c.get("cmc")
+                if mv is not None:
+                    out[c["name"].lower()] = mv
+                    out[_collection_name(c["name"]).lower()] = mv
+    return out
+
+
+def _combo_profile(combo: dict, mv: dict[str, float]) -> str:
+    """How heavy a combo really is: pieces with mana values and total, where each must be,
+    setup prerequisites, mana to run it, and whether it wins on its own. The advisor judges
+    bracket weight from this - Spellbook's one-letter tier is too coarse on its own."""
+    uses = [u for u in combo.get("uses") or [] if isinstance(u, dict) and u.get("card", {}).get("name")]
+    pieces, total, unknown = [], 0.0, False
+    for u in uses:
+        n = u["card"]["name"]
+        v = mv.get(n.lower(), mv.get(_collection_name(n).lower()))
+        zones = "/".join(_ZONES.get(z, z) for z in (u.get("zoneLocations") or []))
+        state = u.get("battlefieldCardState") or ""
+        extra = ", ".join(x for x in (zones if zones and zones != "battlefield" else "", state) if x)
+        pieces.append(f"{n} (MV {v:g}{', ' + extra if extra else ''})" if v is not None else n)
+        if v is None:
+            unknown = True
+        else:
+            total += v
+    templates = [f"{r.get('quantity', 1)}x {r['template']['name']}" if r.get("quantity", 1) > 1 else r["template"]["name"]
+                 for r in combo.get("requires") or [] if isinstance(r, dict) and r.get("template")]
+    produces = [(p.get("feature") or {}).get("name") or "" for p in combo.get("produces") or [] if isinstance(p, dict)]
+    wins = any(w in p.lower() for p in produces for w in _WIN_WORDS)
+    prereq = " ".join(x.strip() for x in (combo.get("easyPrerequisites") or "", combo.get("notablePrerequisites") or "") if x and x.strip())
+    parts = [f"{len(uses) + len(templates)} pieces: {', '.join(pieces)}"
+             + (f" + any {', '.join(templates)}" if templates else "")
+             + (f" = {total:g}{'+' if unknown else ''} MV to deploy" if pieces else "")]
+    if prereq:
+        parts.append(f"setup: {' '.join(prereq.split())[:220]}")
+    if combo.get("manaNeeded"):
+        parts.append(f"mana to run: {combo['manaNeeded']}")
+    parts.append("wins on its own: YES" if wins else "wins on its own: NO - needs a separate payoff to close the game")
+    if combo.get("bracketTag"):
+        parts.append(f"Spellbook tier {combo['bracketTag']} (coarse - judge from the profile)")
+    return "\n    " + " | ".join(parts)
+
+
 def _format_combo(combo: dict) -> str:
     """One-line summary of a Spellbook combo: cards → what it produces."""
     uses = combo.get("uses", []) or []
@@ -1109,10 +1168,16 @@ async def spellbook_find_combos_in_decklist(
             if not included and not almost:
                 return f"No combos found in this deck ({len(main)} cards, color identity {identity})."
 
+            shown_almost = almost[:max(0, limit - len(included))]
+            mv = await _card_mana_values([u.get("card", {}).get("name") for c in included[:limit] + shown_almost
+                                          for u in c.get("uses") or [] if isinstance(u, dict)])
+
             lines = [f"Analyzed {sum(e.get('quantity', 1) for e in main)} cards (color identity {identity})."]
-            lines.append(f"\n**COMBOS IN THE DECK ({len(included)})** - every piece is already in the list:")
+            lines.append(f"\n**COMBOS IN THE DECK ({len(included)})** - every piece is already in the list. "
+                         "Each has a profile (pieces + mana values, setup, whether it wins on its own): judge "
+                         "its bracket weight from that, not from Spellbook's tier.")
             for combo in included[:limit]:
-                lines.append(f"• {_format_combo(combo)}")
+                lines.append(f"• {_format_combo(combo)}{_combo_profile(combo, mv)}")
             if not included:
                 lines.append("• none")
 
@@ -1127,7 +1192,7 @@ async def spellbook_find_combos_in_decklist(
                     "missing the card(s) marked ADD. Those missing cards are candidate recommendations (they'd "
                     "complete a combo) - but check the target bracket first: completing a two-card INFINITE is off-limits "
                     "in B1-B2 and must not be early-game in B3; 3+ card combos aren't restricted.")
-                for combo in almost[:remaining]:
+                for combo in shown_almost:
                     names = [u.get("card", {}).get("name") for u in combo.get("uses") or [] if isinstance(u, dict)]
                     names = [n for n in names if n]
                     missing = [n for n in names if n.lower() not in have and n.lower().split(" // ")[0] not in have]
@@ -1142,7 +1207,7 @@ async def spellbook_find_combos_in_decklist(
                         + (f" (with {', '.join(held)} already in deck)" if held else "")
                         + (f" + any {', '.join(needs)}" if needs else "")
                         + (f" -> {prod}" if prod else "")
-                        + (f" [Spellbook combo tier {tier}]" if tier else ""))
+                        + _combo_profile(combo, mv))
 
             return "\n".join(lines)
 
