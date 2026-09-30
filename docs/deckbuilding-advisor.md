@@ -17,8 +17,7 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   `-AtStartup` trigger + `S4U` principal ("run whether user is logged on or not", no stored password —
   fine since the app only needs local files + internet). Needs a one-time elevated run of
   `install_autostart.ps1` (UAC prompt); update the script first.
-- [ ] **Commit today's work** (login, supervisor/autostart, ONNX swap, Docker files, Phase 2 editor,
-  docs) to `main` and sync `feat/deckbuilding-advisor` — awaiting the user's OK.
+- [x] **Commit today's work** — committed and pushed (9bc96b0 … 6b58659), `feat/deckbuilding-advisor` synced.
 - [x] **Phase 3 step 1:** the editor's deck is sent to `/chat` (see [Live deck + memory](#live-deck--session-memory)).
 - [ ] **Phase 3 step 2:** AI edit proposals with accept/reject in the editor.
 - [x] **Deck link import** (2026-09-30): `mtg_tools.import_deck_url` — used by `/deck/parse` (fills the
@@ -115,6 +114,15 @@ python -m uvicorn advisor_app:app --host 127.0.0.1 --port 8000
 - Signing key: `ADVISOR_SESSION_SECRET` in `.env`, else auto-generated into `.advisor_secret`
   (gitignored) so restarts don't log people out. Delete that file to force everyone to re-login.
 - `GET /healthz` is the only unauthenticated route.
+- **Self-service accounts** (`accounts.py`, 2026-09-30): `/signup` takes username + password +
+  **site code** (`ADVISOR_SITE_CODE`, falling back to `ADVISOR_PASSWORD`), so only people you've
+  given the code to can register. Stored in `accounts.json` (gitignored; scrypt-hashed, atomic writes;
+  usernames 3–24 chars, case-insensitive unique; `.env` usernames reserved). Wrong site codes count
+  toward the same 5-strikes lockout as logins. `require_auth` re-checks the account on every request,
+  so removing one signs that person out immediately. The activity log's QUERY lines carry `user=`.
+  Admin CLI: `python accounts.py list | remove <user> | reset <user> <new-password>`.
+  The shared `.env` login (`ADVISOR_USER`/`ADVISOR_PASSWORD`) still works; remove it from `.env`
+  once everyone has their own account (then set `ADVISOR_SITE_CODE` explicitly).
 
 ### Public sharing (Cloudflare tunnel)
 The supervisor runs `cloudflared.exe` (portable binary, gitignored).

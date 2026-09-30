@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sign in · Deckbuilding Advisor</title>
+<title>Create account · Deckbuilding Advisor</title>
 <style>
   :root {
     --bg: #14161a;
@@ -30,9 +30,10 @@
   .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
   h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
-  .sub { color: var(--muted); font-size: 13px; margin: 0 0 22px 20px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px 20px; }
   label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
           color: var(--muted); margin: 14px 0 6px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
   input {
     width: 100%; padding: 10px 12px; font: inherit; color: var(--text);
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; outline: none;
@@ -43,32 +44,45 @@
     color: #1a1407; background: var(--accent); border: 0; border-radius: 8px; cursor: pointer;
   }
   button:hover { filter: brightness(1.08); }
-  .alt { margin-top: 16px; text-align: center; font-size: 13px; color: var(--muted); }
-  .alt a { color: var(--accent); text-decoration: none; }
-  .alt a:hover { text-decoration: underline; }
   .err {
     display: none; margin-top: 16px; padding: 9px 12px; font-size: 13px;
     color: var(--danger); border: 1px solid var(--danger); border-radius: 8px;
     background: rgba(217, 86, 79, .08);
   }
+  .alt { margin-top: 16px; text-align: center; font-size: 13px; color: var(--muted); }
+  .alt a { color: var(--accent); text-decoration: none; }
+  .alt a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
-  <form class="card" method="post" action="/login">
+  <form class="card" method="post" action="/signup">
     <div class="brand"><span class="dot"></span><h1>Commander Deckbuilding Advisor</h1></div>
-    <p class="sub">Sign in to continue</p>
+    <p class="sub">Create your account</p>
     <label for="username">Username</label>
-    <input id="username" name="username" autocomplete="username" autofocus required />
+    <input id="username" name="username" autocomplete="username" autofocus required
+           pattern="[A-Za-z0-9_.\-]{3,24}" maxlength="24" />
+    <div class="hint">3–24 letters, numbers, dots, dashes or underscores.</div>
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required />
-    <button type="submit">Sign in</button>
+    <input id="password" name="password" type="password" autocomplete="new-password" minlength="6" required />
+    <label for="confirm">Confirm password</label>
+    <input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="6" required />
+    <label for="code">Site code</label>
+    <input id="code" name="code" type="password" autocomplete="off" required />
+    <div class="hint">The code you got from whoever invited you.</div>
+    <button type="submit">Create account</button>
     <div class="err" id="err"></div>
-    <div class="alt">New here? <a href="/signup">Create an account</a></div>
+    <div class="alt">Already have an account? <a href="/login">Sign in</a></div>
   </form>
 <script>
   const e = new URLSearchParams(location.search).get('e');
-  const msg = { bad: 'Wrong username or password.',
-                locked: 'Too many failed attempts. Try again in 15 minutes.' }[e];
+  const msg = {
+    code: "That site code isn't right.",
+    taken: 'That username is taken - try another.',
+    badname: 'Usernames are 3–24 letters, numbers, dots, dashes or underscores.',
+    weak: 'Passwords need at least 6 characters.',
+    mismatch: "The two passwords don't match.",
+    locked: 'Too many failed attempts. Try again in 15 minutes.',
+  }[e];
   if (msg) { const el = document.getElementById('err'); el.textContent = msg; el.style.display = 'block'; }
 </script>
 </body>

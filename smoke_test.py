@@ -18,7 +18,7 @@ REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py"]
+PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py", "accounts.py"]
 UI_MARKERS = ["function send(", "function renderDeck(", "function initChats(", "initChats();",
               "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "</html>"]
 
@@ -47,10 +47,13 @@ def main():
     if failures:
         return
 
-    # Throwaway account + fixed secret; load_dotenv never overrides these.
+    # Throwaway account, site code, secret and accounts file; load_dotenv never overrides these.
+    import tempfile
     os.environ["ADVISOR_USERS"] = "smoketest:smoke-pass"
     os.environ["ADVISOR_PASSWORD"] = ""
+    os.environ["ADVISOR_SITE_CODE"] = "smoke-code"
     os.environ["ADVISOR_SESSION_SECRET"] = "smoke-test-secret"
+    os.environ["ADVISOR_ACCOUNTS_FILE"] = str(Path(tempfile.mkdtemp()) / "accounts.json")
     import advisor_app as a
     from fastapi.testclient import TestClient
 
@@ -75,6 +78,22 @@ def main():
     ver = c.get("/version").json().get("ui", "")
     check("UI version stamped", "__UI_VERSION__" not in r.text and f"'{ver}'" in r.text)
     check("/me", c.get("/me").json().get("user") == "smoketest")
+
+    print("Sign-up")
+    s = TestClient(a.app, base_url="https://smoke")
+    check("signup page", s.get("/signup").status_code == 200)
+    form = {"username": "Friend_1", "password": "hunter22", "confirm": "hunter22", "code": "nope"}
+    r = s.post("/signup", data=form, follow_redirects=False)
+    check("wrong site code rejected", r.headers.get("location") == "/signup?e=code")
+    r = s.post("/signup", data={**form, "code": "smoke-code"}, follow_redirects=False)
+    check("signup with site code", r.headers.get("location") == "/" and s.get("/me").json().get("user") == "Friend_1")
+    s2 = TestClient(a.app, base_url="https://smoke")
+    r = s2.post("/signup", data={**form, "username": "friend_1", "code": "smoke-code"}, follow_redirects=False)
+    check("duplicate username (case-insensitive) rejected", r.headers.get("location") == "/signup?e=taken")
+    r = s2.post("/login", data={"username": "FRIEND_1", "password": "hunter22"}, follow_redirects=False)
+    check("login with new account", r.headers.get("location") == "/" and s2.get("/me").json().get("user") == "Friend_1")
+    a.accounts.remove("Friend_1")
+    check("removed account is logged out", s2.get("/me").status_code == 401)
 
     print("Cards (live Scryfall)")
     r = c.get("/card?name=Sol Ring")

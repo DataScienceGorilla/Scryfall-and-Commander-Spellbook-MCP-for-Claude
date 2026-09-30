@@ -20,7 +20,7 @@ $Root = $PSScriptRoot
 Set-Location $Root
 $LastGood = Join-Path $Root ".deploy\last_good"
 $DeployLog = Join-Path $Root "deploy.log"
-$LiveFiles = @("advisor_app.py", "mtg_tools.py", "role_index.py", "advisor_ui.html", "advisor_login.html")
+$LiveFiles = @("advisor_app.py", "mtg_tools.py", "role_index.py", "accounts.py", "advisor_ui.html", "advisor_login.html", "advisor_signup.html")
 
 function Say($msg, $color = "Gray") {
     Write-Host $msg -ForegroundColor $color

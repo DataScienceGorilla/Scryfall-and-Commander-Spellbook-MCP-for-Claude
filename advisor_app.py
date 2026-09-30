@@ -37,6 +37,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import accounts  # self-service accounts (after load_dotenv: reads ADVISOR_ACCOUNTS_FILE)
+
 # Shared, framework-agnostic tool handlers + schemas (also used by the Discord bot).
 from mtg_tools import (
     TOOLS as BASE_TOOLS,
@@ -99,6 +101,7 @@ THEORY_COLLECTION = "mtg_deckbuilding_theory"
 
 UI_FILE = Path(__file__).parent / "advisor_ui.html"
 LOGIN_FILE = Path(__file__).parent / "advisor_login.html"
+SIGNUP_FILE = Path(__file__).parent / "advisor_signup.html"
 
 aclient = anthropic.AsyncAnthropic()
 
@@ -140,7 +143,11 @@ def _load_accounts() -> dict:
 
 
 ACCOUNTS = _load_accounts()
-AUTH_ENABLED = bool(ACCOUNTS)
+# Self-service accounts (accounts.py): friends sign up with their own username, gated by
+# this SITE CODE so only people you've given it to can get in. Falls back to the shared
+# ADVISOR_PASSWORD so an existing setup keeps working.
+SITE_CODE = os.getenv("ADVISOR_SITE_CODE") or os.getenv("ADVISOR_PASSWORD") or ""
+AUTH_ENABLED = bool(ACCOUNTS) or bool(SITE_CODE)
 SESSION_MAX_AGE = 30 * 24 * 3600
 SECRET_FILE = Path(__file__).parent / ".advisor_secret"
 
@@ -169,11 +176,20 @@ def _client_key(request: Request) -> str:
     return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
 
 
-def _check_password(user: str, password: str) -> bool:
+def _check_password(user: str, password: str) -> str | None:
+    """Canonical username if the credentials are right: .env accounts first, then the
+    self-service accounts file."""
     expected = ACCOUNTS.get(user)
     # compare against a dummy on unknown users so timing doesn't reveal usernames
     ok = secrets.compare_digest(password.encode(), (expected or secrets.token_hex(16)).encode())
-    return expected is not None and ok
+    if expected is not None and ok:
+        return user
+    return accounts.check(user, password)
+
+
+def _valid_user(user) -> bool:
+    """Still an account? (A removed account's cookie stops working immediately.)"""
+    return bool(user) and (user in ACCOUNTS or accounts.exists(user))
 
 
 class LoginRequired(Exception):
@@ -184,8 +200,7 @@ async def require_auth(request: Request) -> None:
     """Enforce a logged-in session iff accounts are configured."""
     if not AUTH_ENABLED:
         return  # local mode: no gate
-    user = request.session.get("user")
-    if user not in ACCOUNTS:
+    if not _valid_user(request.session.get("user")):
         raise LoginRequired()
 
 # =============================================================================
@@ -1161,39 +1176,86 @@ async def healthz():
     return {"ok": True}
 
 
+def _login_attempts_blocked(request: Request):
+    """(client, fails, first_ts, blocked?) for the shared brute-force brake (login + sign-up)."""
+    client = _client_key(request)
+    fails, first = _login_fails.get(client, (0, 0.0))
+    if fails and time.time() - first > LOGIN_LOCKOUT_SECS:
+        fails, first = 0, 0.0  # window expired
+    return client, fails, first, fails >= LOGIN_MAX_FAILS
+
+
+async def _form(request: Request) -> dict:
+    from urllib.parse import parse_qs
+    form = parse_qs((await request.body()).decode("utf-8", "replace"))
+    return {k: v[0] for k, v in form.items()}
+
+
 @app.get("/login")
 async def login_page(request: Request):
-    if not AUTH_ENABLED or request.session.get("user") in ACCOUNTS:
+    if not AUTH_ENABLED or _valid_user(request.session.get("user")):
         return RedirectResponse("/", status_code=303)
     return HTMLResponse(LOGIN_FILE.read_text(encoding="utf-8"))
 
 
 @app.post("/login")
 async def login_submit(request: Request):
-    from urllib.parse import parse_qs
     if not AUTH_ENABLED:
         return RedirectResponse("/", status_code=303)
-    client = _client_key(request)
-    fails, first = _login_fails.get(client, (0, 0.0))
-    if fails and time.time() - first > LOGIN_LOCKOUT_SECS:
-        fails, first = 0, 0.0  # window expired
-    if fails >= LOGIN_MAX_FAILS:
+    client, fails, first, blocked = _login_attempts_blocked(request)
+    if blocked:
         return RedirectResponse("/login?e=locked", status_code=303)
 
-    form = parse_qs((await request.body()).decode("utf-8", "replace"))
-    user = (form.get("username") or [""])[0].strip()
-    password = (form.get("password") or [""])[0]
-    if _check_password(user, password):
+    form = await _form(request)
+    user = (form.get("username") or "").strip()
+    who = await asyncio.to_thread(_check_password, user, form.get("password") or "")
+    if who:
         _login_fails.pop(client, None)
         request.session.clear()
-        request.session["user"] = user
-        log_activity(f"login ok user={user}")
+        request.session["user"] = who
+        log_activity(f"login ok user={who}")
         return RedirectResponse("/", status_code=303)
 
     _login_fails[client] = (fails + 1, first or time.time())
     log_activity(f"login FAILED user={user!r} client={client}")
     await asyncio.sleep(1)  # slow down guessing
     return RedirectResponse("/login?e=bad", status_code=303)
+
+
+@app.get("/signup")
+async def signup_page(request: Request):
+    if not SITE_CODE:
+        return RedirectResponse("/login", status_code=303)
+    if _valid_user(request.session.get("user")):
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(SIGNUP_FILE.read_text(encoding="utf-8"))
+
+
+@app.post("/signup")
+async def signup_submit(request: Request):
+    if not SITE_CODE:
+        return RedirectResponse("/login", status_code=303)
+    client, fails, first, blocked = _login_attempts_blocked(request)
+    if blocked:
+        return RedirectResponse("/signup?e=locked", status_code=303)
+    form = await _form(request)
+    user = (form.get("username") or "").strip()
+    if not secrets.compare_digest((form.get("code") or "").encode(), SITE_CODE.encode()):
+        _login_fails[client] = (fails + 1, first or time.time())
+        log_activity(f"signup FAILED (wrong site code) user={user!r} client={client}")
+        await asyncio.sleep(1)
+        return RedirectResponse("/signup?e=code", status_code=303)
+    if (form.get("password") or "") != (form.get("confirm") or ""):
+        return RedirectResponse("/signup?e=mismatch", status_code=303)
+    try:
+        who = await asyncio.to_thread(accounts.create, user, form.get("password") or "", set(ACCOUNTS))
+    except accounts.AccountError as e:
+        return RedirectResponse(f"/signup?e={e.code}", status_code=303)
+    _login_fails.pop(client, None)
+    request.session.clear()
+    request.session["user"] = who
+    log_activity(f"signup ok user={who} client={client}")
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/logout")
@@ -1298,7 +1360,8 @@ async def chat(request: Request, _: None = Depends(require_auth)):
         ctx.append(f"deck {sum(int(c.get('qty') or 1) for c in deck['cards'])}c")
     if memory_text:
         ctx.append(f"mem@{mem_upto}")
-    log_activity(f"QUERY  sid={session_id[:8]} ip={client_ip} [{model.replace('claude-','')}]"
+    who = request.session.get("user") or "-"
+    log_activity(f"QUERY  sid={session_id[:8]} user={who} ip={client_ip} [{model.replace('claude-','')}]"
                  f"{' {' + ', '.join(ctx) + '}' if ctx else ''} | {preview}")
 
     client_ui = body.get("ui_version")

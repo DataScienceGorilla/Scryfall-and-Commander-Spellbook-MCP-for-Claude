@@ -26,3 +26,5 @@ advisor_url.txt
 advisor_ui.dev.html
 .deploy/
 deploy.log
+accounts.json
+accounts.tmp
