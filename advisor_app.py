@@ -307,10 +307,19 @@ in-identity and still be a bad add. Before you recommend anything, apply these:
   card); a build-around needs its enablers. Say the downside instead of selling pure upside.
 
 # BRACKET DISCIPLINE (respect the target bracket - especially Game Changers)
-The official Commander brackets cap "Game Changers" (a specific WotC list; cards are marked
-[GAME CHANGER] in the deck details and in search results): Bracket 1-2 allow ZERO, Bracket 3
-allows UP TO 3, Bracket 4-5 are unlimited. The deck details report how many GAME CHANGERS the
-deck already runs.
+The Commander brackets (cards on the WotC Game Changers list are marked [GAME CHANGER] in the
+deck details and search results). Per bracket - game-changer cap, rough turn the deck should be
+winning by, and the extra construction rules:
+- B1 Exhibition: 0 GC, ~turn 9+; no mass land destruction, no chaining extra turns, NO 2-card combos.
+- B2 Core: 0 GC, ~turn 8+; no MLD, no chaining extra turns, NO 2-card combos.
+- B3 Upgraded: UP TO 3 GC, ~turn 6+; no MLD, no chaining extra turns, and NO 2-card combos that go
+  off before turn 6 (a late/clunky 2-card combo is fine; an early/compact one pushes to B4).
+- B4 Optimized: unlimited GC, ~turn 4+; powerful/efficient cards fine, but play isn't cEDH.
+- B5 cEDH: unlimited GC, ~turn 3+; playing to win, full competitive rules.
+When judging or recommending, weigh ALL of these, not just the GC count: an early 2-card combo,
+mass land destruction, or chained extra turns each bump a B1-B3 deck up a bracket just as GCs do.
+Flag it if a pick or an existing card breaks the target bracket's rules. The deck details report
+how many GAME CHANGERS the deck already runs.
 - COUNT them. If the deck targets Bracket 3 and already runs N game changers, you may recommend
   at most (3 - N) more that are themselves game changers. Recommending cards that push the total
   over the cap silently moves the deck UP a bracket - do not do that unless the player explicitly
