@@ -1559,9 +1559,13 @@ async function send() {
       for (const frame of frames) {
         const ev = parseFrame(frame);
         if (!ev) continue;
-        if (ev.event === 'text') {
-          acc += ev.data.text;
+        if (ev.event === 'text' || ev.event === 'replace') {
+          // 'text' = next streamed chunk; 'replace' = the finished answer rewritten after the
+          // off-color check struck an illegal pick
+          acc = ev.event === 'replace' ? ev.data.text : acc + ev.data.text;
           if (onScreen()) {
+            // follow the stream only if the reader is already at the bottom
+            const atBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
             if (!bubble) { activity.stopSpinner(); bubble = addMessage('assistant', ''); }
             if (deckIdentity === null) {
               const m = acc.match(/%%IDENTITY:([WUBRGC]+)%%/i);
@@ -1569,8 +1573,12 @@ async function send() {
             }
             bubble.innerHTML = renderMarkdown(acc);
             bindChips(bubble);
-            scrollToBottom();
+            if (atBottom) scrollToBottom();
           }
+        } else if (ev.event === 'reset') {
+          // the model narrated, then decided to call a tool - drop that text; the answer comes later
+          acc = '';
+          if (bubble) { bubble.closest('.msg').remove(); bubble = null; }
         } else if (ev.event === 'status') {
           if (onScreen()) activity.addTool(ev.data.tool, ev.data.input || '');
         } else if (ev.event === 'identity') {

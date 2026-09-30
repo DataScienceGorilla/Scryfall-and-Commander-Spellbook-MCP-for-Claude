@@ -787,6 +787,14 @@ TOOL_FUNCTIONS = {**BASE_TOOL_FUNCTIONS, "deckbuilding_search": deckbuilding_sea
 # buffered for the color-identity check - so a long review looked like a "connection error".
 # An SSE comment every few seconds keeps the tunnel open; the page ignores comment frames.
 HEARTBEAT_SECS = 15
+
+# Stream the answer to the browser as it's written (first words minutes sooner on a full
+# review). The off-color guardrail then runs AFTER: an off-identity pick gets struck out via a
+# `replace` event + warning instead of a silent regenerate. ADVISOR_STREAM=0 in .env restores
+# the buffered validate-then-show behavior.
+STREAM_ANSWERS = os.getenv("ADVISOR_STREAM", "1") != "0"
+STREAM_FLUSH_CHARS = 80
+STREAM_FLUSH_SECS = 0.25
 HEARTBEAT = ": keepalive\n\n"
 
 
@@ -1112,6 +1120,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 messages=_cache_last(messages),  # cache the conversation prefix
                 extra_body=extra,
             ) as stream:
+                pending, last_flush, streamed = "", time.monotonic(), False
                 async for event in _with_heartbeat(stream):
                     if event is None:
                         yield HEARTBEAT
@@ -1120,6 +1129,14 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                         and getattr(event.delta, "type", None) == "text_delta"
                     ):
                         turn_parts.append(event.delta.text)
+                        if STREAM_ANSWERS:  # batch deltas so the page re-renders a few times/sec
+                            pending += event.delta.text
+                            if len(pending) >= STREAM_FLUSH_CHARS or time.monotonic() - last_flush > STREAM_FLUSH_SECS:
+                                yield _sse("text", {"text": pending})
+                                pending, last_flush, streamed = "", time.monotonic(), True
+                if pending:
+                    yield _sse("text", {"text": pending})
+                    streamed = True
                 final = await stream.get_final_message()
 
             _tally(getattr(final, "usage", None))
@@ -1133,6 +1150,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 # (the "let me refine this search" chatter) - the tool trace shows
                 # what's happening; only the final answer turn streams to the user.
 
+                if streamed:  # narration before a tool call already streamed - take it back
+                    yield _sse("reset", {})
                 tool_blocks = [b for b in final.content if b.type == "tool_use"]
                 tools_used.extend(b.name for b in tool_blocks)
                 for block in tool_blocks:
@@ -1184,6 +1203,20 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
             except Exception:
                 off = None
 
+            if STREAM_ANSWERS:
+                # Already on screen: strike any off-identity picks after the fact.
+                if off:
+                    off_names = [c["name"] for c in off]
+                    fixed = _strip_off_color_lines(answer_text, off_names) + (
+                        f"\n\n_(Removed {len(off)} off-identity card{'s' if len(off) > 1 else ''} "
+                        f"from the recommendations: {', '.join(off_names)}.)_")
+                    yield _sse("replace", {"text": fixed})
+                    yield _sse("warning", {"cards": off})
+                    log_activity(f"OFFCOLOR sid={session_id[:8]} stripped after streaming: {', '.join(off_names)}")
+                elif not streamed and answer_text:
+                    yield _sse("text", {"text": answer_text})
+                break
+
             if off and identity_retries < MAX_IDENTITY_RETRIES:
                 identity_retries += 1
                 bad = ", ".join(f"{c['name']} ({c['identity']})" for c in off)
@@ -1226,12 +1259,21 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 model=model, max_tokens=MAX_TOKENS, system=system,
                 messages=_cache_last(messages), extra_body=extra,
             ) as stream:
+                pending, last_flush, streamed = "", time.monotonic(), False
                 async for event in _with_heartbeat(stream):
                     if event is None:
                         yield HEARTBEAT
                     elif (event.type == "content_block_delta"
                             and getattr(event.delta, "type", None) == "text_delta"):
                         final_parts.append(event.delta.text)
+                        if STREAM_ANSWERS:
+                            pending += event.delta.text
+                            if len(pending) >= STREAM_FLUSH_CHARS or time.monotonic() - last_flush > STREAM_FLUSH_SECS:
+                                yield _sse("text", {"text": pending})
+                                pending, last_flush, streamed = "", time.monotonic(), True
+                if pending:
+                    yield _sse("text", {"text": pending})
+                    streamed = True
                 fmsg = await stream.get_final_message()
             _tally(getattr(fmsg, "usage", None))
             answer_text = "".join(final_parts)
@@ -1244,7 +1286,10 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 answer_text = _strip_off_color_lines(answer_text, off_names)
                 answer_text += (f"\n\n_(Removed {len(off)} off-identity card"
                                 f"{'s' if len(off) > 1 else ''}: {', '.join(off_names)}.)_")
-            if answer_text:
+            if streamed:
+                if off:
+                    yield _sse("replace", {"text": answer_text})
+            elif answer_text:
                 yield _sse("text", {"text": answer_text})
             if off:
                 yield _sse("warning", {"cards": off})
