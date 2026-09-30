@@ -1454,12 +1454,50 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         "is_land": "Land" in tl and "Creature" not in tl.split("//")[0],
         # singleton exemptions: basic lands, and "a deck can have any number of cards named ..."
         "any_qty": "Basic" in tl or "any number of cards named" in oracle,
-        # could lead the deck: legendary creature, or says "can be your commander"
-        "can_command": ("Legendary" in tl and "Creature" in tl) or "can be your commander" in oracle,
+        # could lead the deck. Overwritten by the Scryfall COMMANDER_QUERY result in
+        # /deck/parse and /deck/card; this type-line guess is only the offline fallback.
+        "can_command": ("Legendary" in tl and "Creature" in tl) or "Background" in tl
+                       or "can be your commander" in oracle,
         "roles": roles,            # concrete roles (otag index)
         "role": None,              # contextual role - assigned by AI/user later
         "tags": [],                # user tags
     }
+
+
+# Who can lead a deck, per Scryfall: is:commander covers legendary creatures and the
+# exceptions ("can be your commander" planeswalkers etc., Backgrounds); t:background is
+# spelled out so Backgrounds (partnered via "Choose a Background") are never flagged.
+COMMANDER_QUERY = "(is:commander or t:background)"
+_COMMANDER_OK: dict[str, bool] = {}  # lower(name) -> eligible
+
+
+async def _apply_commander_eligibility(cards: list[dict]) -> None:
+    """Set each deck card's can_command from Scryfall (batched exact-name searches,
+    cached). On a Scryfall failure the type-line fallback from _slim_deck_card stays."""
+    names = [c["name"] for c in cards if c.get("name")]
+    unknown = [n for n in dict.fromkeys(names) if n.lower() not in _COMMANDER_OK]
+    for i in range(0, len(unknown), 30):  # keep the query URL a sane length
+        chunk = unknown[i:i + 30]
+        q = COMMANDER_QUERY + " (" + " or ".join(
+            f'!"{_collection_name(n).replace(chr(34), "")}"' for n in chunk) + ")"
+        async with _scry_sem:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                try:
+                    r = await client.get(f"{SCRYFALL_API}/cards/search", params={"q": q},
+                                         headers=SCRYFALL_HEADERS)
+                except httpx.HTTPError:
+                    continue
+        if r.status_code not in (200, 404):  # 404 = none of them qualify
+            continue
+        found = set()
+        for c in (r.json().get("data") or []) if r.status_code == 200 else []:
+            found.update({c["name"].lower(), _collection_name(c["name"]).lower()})
+        for n in chunk:
+            _COMMANDER_OK[n.lower()] = n.lower() in found or _collection_name(n).lower() in found
+    for c in cards:
+        ok = _COMMANDER_OK.get((c.get("name") or "").lower())
+        if ok is not None:
+            c["can_command"] = ok
 
 
 @app.post("/deck/parse")
@@ -1510,6 +1548,7 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
                     qty = next((qty_by_name[n] for n in chunk if n not in found_names), 1)
                 resolved.append(_slim_deck_card(c, qty))
                 found_names.add(c.get("name"))
+    await _apply_commander_eligibility(resolved)
     lower_found = {n.lower() for n in found_names} | {_collection_name(n).lower() for n in found_names}
     not_found = [n for n in names if n.lower() not in lower_found
                  and n.lower().split(" // ")[0] not in lower_found]
@@ -1539,7 +1578,9 @@ async def deck_card(name: str, _: None = Depends(require_auth)):
     data = await _resolve_full_card(name)
     if not data:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return JSONResponse(_slim_deck_card(data, 1))
+    card = _slim_deck_card(data, 1)
+    await _apply_commander_eligibility([card])
+    return JSONResponse(card)
 
 
 @app.get("/card")

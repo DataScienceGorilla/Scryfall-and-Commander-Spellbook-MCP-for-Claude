@@ -97,6 +97,12 @@ def main():
     check("/deck/parse Archidekt export (commander, maybeboard)",
           d.get("commander") == ["Krenko, Mob Boss"] and d.get("skipped") == 1 and len(d.get("cards", [])) == 3,
           str({k: d.get(k) for k in ("commander", "skipped", "not_found")}))
+    d = c.post("/deck/parse", json={"text": "1x Agent of the Iron Throne [Commander]\n"
+                                            "1x Wilson, Refined Grizzly [Commander]\n1x Sol Ring"}).json()
+    elig = {x["name"]: x.get("can_command") for x in d.get("cards", [])}
+    check("commander eligibility via Scryfall (Background ok, Sol Ring not)",
+          elig.get("Agent of the Iron Throne") is True and elig.get("Wilson, Refined Grizzly") is True
+          and elig.get("Sol Ring") is False, str(elig))
     many = "\n".join(f"1x Card {i} (set) {i} [Other]" for i in range(16))
     check("'1x' pastes route to the review model", a.pick_model(many)[0] == a.REVIEW_MODEL)
 

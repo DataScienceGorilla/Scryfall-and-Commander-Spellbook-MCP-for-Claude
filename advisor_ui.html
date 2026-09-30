@@ -617,7 +617,12 @@ function deckFind(name) {
   return deck.cards.find(c => lc(c.name) === k || lc(c.name).split(' // ')[0] === k) || null;
 }
 // Decks parsed before these flags existed lack them - fall back to the type line.
-function canCommand(c) { return c.can_command ?? (/Legendary/.test(c.type_line || '') && /Creature/.test(c.type_line || '')); }
+function canCommand(c) {
+  const tl = c.type_line || '';
+  // Backgrounds pair with a "Choose a Background" commander - never flag them (also fixes
+  // decks saved before the server checked Scryfall's is:commander / t:background).
+  return /Background/.test(tl) || (c.can_command ?? (/Legendary/.test(tl) && /Creature/.test(tl)));
+}
 function anyQty(c) { return c.any_qty ?? /Basic/.test(c.type_line || ''); }
 function isCommander(c) { return !!(deck && (deck.commander || []).some(n => lc(n) === lc(c.name))); }
 function autoGroup(c) { return c.is_land ? 'Lands' : ((c.roles && c.roles.length) ? c.roles[0] : 'Other'); }

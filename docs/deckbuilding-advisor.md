@@ -63,8 +63,11 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   **Root cause of a live regression:** Archidekt's "1x" lines didn't match the deck-line regex, so the
   paste was treated as no deck -> routed to **Haiku** (misread cards, missed synergies) and never
   loaded into the editor. `pick_model` now also sends any conversation over 1,500 chars to Sonnet.
-  Still open: a commander-picker prompt when a paste has no Commander section (Moxfield plain text) -
-  use `is:commander` candidates as planned above.
+  Still open: a commander-picker prompt when a paste has no Commander section (Moxfield plain text).
+- [x] **Commander eligibility from Scryfall** (2026-09-30): `can_command` now comes from
+  `COMMANDER_QUERY = (is:commander or t:background)` (batched exact-name searches, cached per card)
+  in `/deck/parse` + `/deck/card`; the type-line guess is only an offline fallback. Fixes Backgrounds
+  (Agent of the Iron Throne) being flagged "can't normally be a commander".
 - [ ] Nice-to-haves: compact
   `mtg_rules_data/` (7 stale segment dirs from past re-ingests).
 
