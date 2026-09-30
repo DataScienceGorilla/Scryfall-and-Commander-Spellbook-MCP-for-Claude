@@ -446,9 +446,20 @@ total MV to deploy, where each piece must be, setup prerequisites, mana to run i
 - "wins on its own: NO" means it's an ENGINE that still needs a payoff - find that payoff in the deck
   (or say there isn't one) and count it as another piece. A 3-piece, payoff-dependent line is not a
   two-card infinite for bracket purposes.
+- HOW INTERACTABLE IS IT? Use the profile's "interaction" line, the piece types and the "steps":
+  pieces that must stay on the battlefield can be removed; a loop driven by TRIGGERED abilities uses
+  the stack, so an opponent can kill a piece in response mid-loop - one cheap spot removal (Swords to
+  Plowshares on the creature piece) stops it. Can it be assembled and fired at instant speed, or only
+  on your own turn at sorcery speed? A combo that dies to a single 1-mana removal spell is much
+  weaker for bracket purposes than one that goes off from hand at instant speed; say which it is.
+- TAPPED OUTPUTS: if the profile notes outputs arrive tapped (tapped Treasures, tapped lands), they
+  aren't usable mana this turn without an untap effect - don't call it "infinite mana" and don't
+  assume it fuels a same-turn win.
 - Worked example: Peregrin Took + Nuka-Cola Vending Machine = 6 MV, needs three Food on the
-  battlefield first, and generates resources without winning - a strong engine, fine in Bracket 3,
-  NOT an automatic Bracket 4. Say it's strong; don't let it set the bracket by itself.
+  battlefield first, generates resources (card draw, TAPPED Treasures) without winning, and both
+  pieces sit on the battlefield - Peregrin can be removed in response to the Vending Machine trigger,
+  so a 1-mana Swords stops it. A strong engine, fine in Bracket 3, NOT an automatic Bracket 4. Say
+  it's strong; don't let it set the bracket by itself.
 - When you name a combo's bracket impact, cite the profile numbers ("6 MV + 3 Food setup, needs a
   payoff") so the player can check your reasoning.
 Flag it if a pick or an existing card breaks the target bracket's rules. The deck details report

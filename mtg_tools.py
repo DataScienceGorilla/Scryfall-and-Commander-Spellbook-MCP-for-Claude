@@ -791,9 +791,10 @@ _ZONES = {"B": "battlefield", "H": "hand", "G": "graveyard", "E": "exile", "L": 
 _WIN_WORDS = ("win the game", "lose the game", "loses the game", "wins the game")
 
 
-async def _card_mana_values(names: list[str]) -> dict[str, float]:
-    """lower(name) -> mana value, one batched Scryfall lookup (front-face names)."""
-    out: dict[str, float] = {}
+async def _card_facts(names: list[str]) -> dict[str, dict]:
+    """lower(name) -> {"mv": mana value, "type": front-face type line}, one batched Scryfall
+    lookup (front-face names)."""
+    out: dict[str, dict] = {}
     names = list(dict.fromkeys(n for n in names if n))
     async with httpx.AsyncClient(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
         for i in range(0, len(names), 75):
@@ -804,30 +805,42 @@ async def _card_mana_values(names: list[str]) -> dict[str, float]:
             except Exception:
                 data = []
             for c in data:
-                mv = c.get("cmc")
-                if mv is not None:
-                    out[c["name"].lower()] = mv
-                    out[_collection_name(c["name"]).lower()] = mv
+                tl = c.get("type_line") or ((c.get("card_faces") or [{}])[0].get("type_line", ""))
+                facts = {"mv": c.get("cmc"), "type": tl.split(" // ")[0]}
+                out[c["name"].lower()] = facts
+                out[_collection_name(c["name"]).lower()] = facts
     return out
 
 
-def _combo_profile(combo: dict, mv: dict[str, float]) -> str:
-    """How heavy a combo really is: pieces with mana values and total, where each must be,
-    setup prerequisites, mana to run it, and whether it wins on its own. The advisor judges
-    bracket weight from this - Spellbook's one-letter tier is too coarse on its own."""
+_PERMANENT_TYPES = ("Creature", "Artifact", "Enchantment", "Planeswalker", "Land", "Battle")
+
+
+def _combo_profile(combo: dict, facts: dict[str, dict]) -> str:
+    """How heavy a combo really is: pieces with mana values/types and total, where each must
+    be, how it can be interacted with, setup prerequisites, mana to run it, whether it wins on
+    its own, and the step-by-step. The advisor judges bracket weight from this - Spellbook's
+    one-letter tier is too coarse on its own."""
     uses = [u for u in combo.get("uses") or [] if isinstance(u, dict) and u.get("card", {}).get("name")]
     pieces, total, unknown = [], 0.0, False
+    on_board: list[str] = []  # permanent types that must be on the battlefield
     for u in uses:
         n = u["card"]["name"]
-        v = mv.get(n.lower(), mv.get(_collection_name(n).lower()))
-        zones = "/".join(_ZONES.get(z, z) for z in (u.get("zoneLocations") or []))
+        f = facts.get(n.lower(), facts.get(_collection_name(n).lower())) or {}
+        v, tl = f.get("mv"), f.get("type", "")
+        main_types = "/".join(t for t in ("Creature", "Artifact", "Enchantment", "Planeswalker", "Land",
+                                          "Battle", "Instant", "Sorcery") if t in tl)
+        zone_codes = u.get("zoneLocations") or ["B"]
+        zones = "/".join(_ZONES.get(z, z) for z in zone_codes)
         state = u.get("battlefieldCardState") or ""
-        extra = ", ".join(x for x in (zones if zones and zones != "battlefield" else "", state) if x)
-        pieces.append(f"{n} (MV {v:g}{', ' + extra if extra else ''})" if v is not None else n)
+        extra = ", ".join(x for x in (main_types, zones if zones != "battlefield" else "", state) if x)
+        pieces.append(f"{n} (MV {v:g}{', ' + extra if extra else ''})" if v is not None
+                      else f"{n}{' (' + extra + ')' if extra else ''}")
         if v is None:
             unknown = True
         else:
             total += v
+        if zone_codes == ["B"] and any(t in tl for t in _PERMANENT_TYPES):
+            on_board.append(main_types.lower() or "permanent")
     templates = [f"{r.get('quantity', 1)}x {r['template']['name']}" if r.get("quantity", 1) > 1 else r["template"]["name"]
                  for r in combo.get("requires") or [] if isinstance(r, dict) and r.get("template")]
     produces = [(p.get("feature") or {}).get("name") or "" for p in combo.get("produces") or [] if isinstance(p, dict)]
@@ -841,9 +854,23 @@ def _combo_profile(combo: dict, mv: dict[str, float]) -> str:
     if combo.get("manaNeeded"):
         parts.append(f"mana to run: {combo['manaNeeded']}")
     parts.append("wins on its own: YES" if wins else "wins on its own: NO - needs a separate payoff to close the game")
+    if on_board:
+        kinds = ", ".join(f"{on_board.count(k)} {k}" for k in dict.fromkeys(on_board))
+        parts.append(f"interaction: {len(on_board)} permanent(s) must stay on the battlefield ({kinds}) - "
+                     "removal on any one stops it, including in response to a trigger mid-loop")
+    else:
+        parts.append("interaction: no piece has to sit on the battlefield - hard to answer with removal")
+    tapped = [p for p in produces if "tapped" in p.lower()]
+    if tapped:
+        parts.append(f"note: outputs arrive TAPPED ({', '.join(tapped)}) - tapped Treasure/lands can't make "
+                     "mana this turn without an untap effect")
     if combo.get("bracketTag"):
         parts.append(f"Spellbook tier {combo['bracketTag']} (coarse - judge from the profile)")
-    return "\n    " + " | ".join(parts)
+    steps = " ".join((combo.get("description") or "").split())
+    out = "\n    " + " | ".join(parts)
+    if steps:
+        out += f"\n    steps: {steps[:420]}{'…' if len(steps) > 420 else ''}"
+    return out
 
 
 def _format_combo(combo: dict) -> str:
@@ -1169,7 +1196,7 @@ async def spellbook_find_combos_in_decklist(
                 return f"No combos found in this deck ({len(main)} cards, color identity {identity})."
 
             shown_almost = almost[:max(0, limit - len(included))]
-            mv = await _card_mana_values([u.get("card", {}).get("name") for c in included[:limit] + shown_almost
+            mv = await _card_facts([u.get("card", {}).get("name") for c in included[:limit] + shown_almost
                                           for u in c.get("uses") or [] if isinstance(u, dict)])
 
             lines = [f"Analyzed {sum(e.get('quantity', 1) for e in main)} cards (color identity {identity})."]
