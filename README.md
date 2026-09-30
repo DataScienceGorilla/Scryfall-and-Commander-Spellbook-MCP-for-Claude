@@ -2,6 +2,11 @@
 
 An MCP (Model Context Protocol) server that integrates **Scryfall** (card database) and **Commander Spellbook** (combo database) for Magic: The Gathering.
 
+> **Deckbuilding Advisor** — this repo also hosts a local web app (`advisor_app.py` + `advisor_ui.html`)
+> that gives tailored Commander deckbuilding advice with a card canvas, and is being built into an
+> agentic deck workbench. Architecture, how-to-run, and the build roadmap are in
+> **[docs/deckbuilding-advisor.md](docs/deckbuilding-advisor.md)** — start there to work on it.
+
 ## Features
 
 ### Scryfall Tools
