@@ -67,13 +67,17 @@ from mtg_tools import (
 REVIEW_MODEL = "claude-sonnet-5"
 QUICK_MODEL = "claude-haiku-4-5"
 THINKING_EFFORT = "high"
-MAX_TOKENS = 12000  # room for thinking + a full deck diagnosis
+# Thinking counts toward max_tokens. At 12k a deep review could spend the whole budget
+# thinking and return an EMPTY answer (seen in a benchmark); we always stream, so a large
+# cap costs nothing unless it's used.
+MAX_TOKENS = 32000
 REVIEW_EXTRA = {"thinking": {"type": "adaptive"}, "output_config": {"effort": THINKING_EFFORT}}
 QUICK_EXTRA: dict = {}
 
 # per-model ($/token in, $/token out) for the activity-log cost estimate
 PRICES = {
     "claude-sonnet-5": (2.0 / 1_000_000, 10.0 / 1_000_000),
+    "claude-sonnet-5-5": (2.0 / 1_000_000, 10.0 / 1_000_000),
     "claude-haiku-4-5": (1.0 / 1_000_000, 5.0 / 1_000_000),
 }
 
@@ -1198,6 +1202,17 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
 
             # ---- Final answer turn: validate color identity BEFORE showing it ----
             answer_text = "".join(turn_parts)
+            if final.stop_reason == "max_tokens":
+                log_activity(f"TRUNCATED sid={session_id[:8]} hit max_tokens={MAX_TOKENS} "
+                             f"({len(answer_text)} chars of answer)")
+                if not answer_text.strip():
+                    yield _sse("error", {"message": "The advisor ran out of room while thinking this through "
+                                                    "and didn't get to an answer - try asking again, or narrow "
+                                                    "the question."})
+                    break
+                answer_text += "\n\n_(Answer cut off at the length limit.)_"
+                if STREAM_ANSWERS:
+                    yield _sse("text", {"text": "\n\n_(Answer cut off at the length limit.)_"})
             try:
                 off = _not_in_deck(await _check_off_color(answer_text, deck_identity))
             except Exception:
