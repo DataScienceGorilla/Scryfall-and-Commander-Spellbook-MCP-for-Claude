@@ -1060,6 +1060,7 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
     return {
         "name": c.get("name"),
         "qty": qty,
+        "scryfall_uri": c.get("scryfall_uri"),
         "type_line": tl,
         "cmc": c.get("cmc"),
         "mana_cost": c.get("mana_cost", "") or (faces[0].get("mana_cost", "") if faces else ""),

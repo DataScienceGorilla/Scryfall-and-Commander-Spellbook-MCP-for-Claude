@@ -142,6 +142,13 @@
   .card-tile:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,.45); }
   .card-tile.flash { box-shadow: 0 0 0 2px var(--accent); }
   .card-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .card-tile.gc { box-shadow: 0 0 0 2px var(--accent); }
+  .card-tile .qty { position: absolute; bottom: 5px; right: 5px; background: rgba(0,0,0,.82); color: #fff;
+    font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: 10px; pointer-events: none; }
+  .deck-head { padding: 4px 2px 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+  .deck-stat { font-size: 13px; color: var(--text); }
+  .deck-stat b { color: var(--accent); }
+  .deck-roles { font-size: 11px; color: var(--muted); margin-top: 4px; }
   .card-tile a { text-decoration: none; color: inherit; display:block; }
   .card-tile .cap { display:none; }
   .card-tile.loading { aspect-ratio: 63/88; display:flex; align-items:center; justify-content:center; color: var(--muted); font-size:12px; }
@@ -216,8 +223,9 @@ let SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) ||
 // ---- multi-chat persistence + sidebar (survives reloads) ----
 const STORE_KEY = 'mtg_advisor_chats_v1';
 let conversation = [];   // active chat's messages [{role, text}]
+let deck = null;         // active chat's deck object { commander:[], bracket, cards:[...] }
 let activeId = null;
-let chats = {};          // id -> {id, title, sessionId, conversation, updatedAt}
+let chats = {};          // id -> {id, title, sessionId, conversation, deck, updatedAt}
 
 function newId() {
   return (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + '-' + Math.random().toString(16).slice(2));
@@ -232,6 +240,7 @@ function saveState() {  // fold the active chat back into the store, persist, re
   if (activeId && chats[activeId]) {
     const ch = chats[activeId];
     ch.conversation = conversation;
+    ch.deck = deck;
     ch.sessionId = SESSION_ID;
     ch.updatedAt = Date.now();
     if (!ch.title || ch.title === 'New chat') {
@@ -272,6 +281,7 @@ function loadActiveIntoUI() {
       }
     }
   }
+  if (deck && deck.cards && deck.cards.length) renderDeck();
   scrollToBottom();
 }
 function switchChat(id) {
@@ -279,14 +289,15 @@ function switchChat(id) {
   activeId = id;
   SESSION_ID = chats[id].sessionId || newId();
   conversation = chats[id].conversation || [];
+  deck = chats[id].deck || null;
   loadActiveIntoUI();
   saveState();
   if (window.innerWidth < 820) document.body.classList.add('nosidebar');
 }
 function newChat() {
   const id = newId();
-  chats[id] = { id, title: 'New chat', sessionId: newId(), conversation: [], updatedAt: Date.now() };
-  activeId = id; SESSION_ID = chats[id].sessionId; conversation = [];
+  chats[id] = { id, title: 'New chat', sessionId: newId(), conversation: [], deck: null, updatedAt: Date.now() };
+  activeId = id; SESSION_ID = chats[id].sessionId; conversation = []; deck = null;
   loadActiveIntoUI();
   saveState();
   if (window.innerWidth < 820) document.body.classList.add('nosidebar');
@@ -308,6 +319,7 @@ function initChats() {
   if (activeId && chats[activeId]) {
     SESSION_ID = chats[activeId].sessionId || newId();
     conversation = chats[activeId].conversation || [];
+    deck = chats[activeId].deck || null;
     loadActiveIntoUI();
     saveState();
   } else {
@@ -330,8 +342,8 @@ const seenNames = new Set();   // names already requested
 let scryfallQueue = Promise.resolve();
 
 // ---- canvas grouping by concrete role (from the otag index, sent by /card) ----
-const ROLE_ORDER = ['Ramp','Draw','Tutor','Recursion','Target Interaction','Mass Interaction',
-                    'Protection','Stax','Other','Unresolved','Loading'];
+const ROLE_ORDER = ['Commander','Ramp','Draw','Tutor','Recursion','Target Interaction','Mass Interaction',
+                    'Protection','Stax','Other','Lands','Unresolved','Loading'];
 const roleGroups = {};   // role -> { section, grid, title, n }
 function resetGroups() { for (const k in roleGroups) delete roleGroups[k]; }
 function updateGroupTitle(role) {
@@ -360,6 +372,73 @@ function setTileGroup(entry, role) {
   const g = ensureGroup(role);
   g.grid.appendChild(entry.tile);
   entry.group = role; g.n++; updateGroupTitle(role);
+}
+
+// ---- deck object: the canvas renders the live deck (grouped by role) ----
+function looksLikeDeck(text) {
+  if (/moxfield\.com|archidekt\.com|tappedout\.net|mtggoldfish\.com|deckstats\.net/i.test(text)) return true;
+  return (text.match(/^\s*\d+\s+\S/gm) || []).length >= 15;
+}
+async function loadDeckFromText(text) {
+  try {
+    const resp = await fetch('/deck/parse', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.cards || !data.cards.length) return;
+    deck = deck || { commander: [], bracket: null, cards: [] };
+    deck.cards = data.cards;
+    deck.not_found = data.not_found || [];
+    saveState();
+    renderDeck();
+  } catch (e) {}
+}
+function deckComposition() {
+  const cards = (deck && deck.cards) || [];
+  let total = 0, lands = 0, gc = 0; const colors = new Set(); const roleCounts = {};
+  for (const c of cards) {
+    const q = c.qty || 1; total += q;
+    if (c.is_land) lands += q; else for (const r of (c.roles || [])) roleCounts[r] = (roleCounts[r] || 0) + q;
+    if (c.game_changer) gc += q;
+    for (const ci of (c.color_identity || [])) colors.add(ci);
+  }
+  return { total, lands, gc, colors: [...colors], roleCounts };
+}
+function deckCardTile(c) {
+  const tile = document.createElement('div');
+  tile.className = 'card-tile' + (c.game_changer ? ' gc' : '');
+  tile.title = c.name + (c.qty > 1 ? ` (x${c.qty})` : '');
+  if (c.image) {
+    tile.innerHTML = `<img loading="lazy" src="${c.image}" alt="${c.name}">`
+      + (c.qty > 1 ? `<span class="qty">${c.qty}</span>` : '');
+    tile.style.cursor = 'zoom-in';
+    const entry = { img: c.image, scryfall: c.scryfall_uri, canonical: c.name, identity: c.color_identity || [] };
+    tile.onclick = () => openLightbox(entry);
+  } else {
+    tile.classList.add('missing'); tile.textContent = c.name;
+  }
+  return tile;
+}
+function renderDeck() {
+  if (!deck || !deck.cards) return;
+  cardsEl.innerHTML = ''; resetGroups(); seenNames.clear();
+  const comp = deckComposition();
+  const head = document.createElement('div');
+  head.className = 'deck-head';
+  const roleStr = ROLE_ORDER.filter(r => comp.roleCounts[r]).map(r => `${r} ${comp.roleCounts[r]}`).join(' · ');
+  head.innerHTML =
+    `<div class="deck-stat"><b>${comp.total}</b> cards · <b>${comp.lands}</b> lands · `
+    + `${comp.colors.join('') || 'C'} · <b>${comp.gc}</b> game changer${comp.gc === 1 ? '' : 's'}</div>`
+    + (roleStr ? `<div class="deck-roles">${roleStr}</div>` : '')
+    + ((deck.not_found && deck.not_found.length) ? `<div class="deck-roles">Unresolved: ${deck.not_found.join(', ')}</div>` : '');
+  cardsEl.appendChild(head);
+  for (const c of deck.cards) {
+    seenNames.add(keyFor(c.name));
+    const role = c.is_land ? 'Lands' : (c.roles && c.roles.length ? c.roles[0] : 'Other');
+    setTileGroup({ tile: deckCardTile(c), group: null }, role);
+  }
 }
 
 // Floating hover-preview tooltip
@@ -646,6 +725,7 @@ async function send() {
   const onScreen = () => activeId === originId;
   addMessage('user', text);
   originConv.push({ role: 'user', text }); saveState();
+  if (looksLikeDeck(text)) loadDeckFromText(text);  // populate the deck object in parallel
   streaming = true; sendBtn.disabled = true;
 
   let bubble = null;
