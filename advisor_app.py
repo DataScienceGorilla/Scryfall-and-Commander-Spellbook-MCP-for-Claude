@@ -1137,9 +1137,12 @@ def _decisions_summary(m: dict) -> str:
         for p in props:
             what = " / ".join(x for x in (f"cut {p.get('cut')}" if p.get("cut") else "",
                                           f"add {p.get('add')}" if p.get("add") else "") if x)
-            rows.append(f"{what} -> {mark.get(p.get('status'), 'undecided')}")
+            why = " ".join(str(p.get("note") or "").split())[:240]
+            rows.append(f"{what} -> {mark.get(p.get('status'), 'undecided')}"
+                        + (f" (player's reason: \"{why}\")" if why else ""))
         out.append("[Your proposals and the player's decisions: " + "; ".join(rows)
-                   + ". Don't re-propose rejected ones.]")
+                   + ". Don't re-propose rejected ones, and learn from their reasons - they tell you what "
+                   "this player values.]")
     q = m.get("question")
     if isinstance(q, dict) and q.get("question"):
         out.append(f"[You asked: \"{str(q['question'])[:200]}\" - options: {', '.join(map(str, q.get('options') or []))[:300]}"
@@ -1245,6 +1248,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
         yield _sse("identity", {"identity": deck_identity})
     usage_in = usage_out = usage_cr = usage_cw = 0  # uncached in / out / cache-read / cache-write
     tools_used: list[str] = []
+    kept_parts: list[str] = []  # answer text written before a question/proposal (kept, see below)
     t_start = time.monotonic()
     timeline: list[str] = []  # per turn: "model <secs>s/<out tokens>" [+ "<n> tools <secs>s"]
 
@@ -1299,9 +1303,19 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 # (the "let me refine this search" chatter) - the tool trace shows
                 # what's happening; only the final answer turn streams to the user.
 
-                if streamed:  # narration before a tool call already streamed - take it back
-                    yield _sse("reset", {})
                 tool_blocks = [b for b in final.content if b.type == "tool_use"]
+                turn_text = "".join(turn_parts).strip()
+                if any(b.name in UI_TOOL_NAMES for b in tool_blocks):
+                    # Text written before a question/proposal IS the answer (analysis, then
+                    # "which way?") - keep it, don't treat it as tool chatter.
+                    if turn_text:
+                        kept_parts.append(turn_text)
+                        if streamed:
+                            yield _sse("text", {"text": "\n\n"})  # separates it from what follows
+                elif streamed:  # "let me look that up" before a data lookup - take it back,
+                    # but only back to the answer text already kept from earlier turns
+                    keep = "\n\n".join(kept_parts)
+                    yield _sse("reset", {"keep": keep + "\n\n" if keep else ""})
                 tools_used.extend(b.name for b in tool_blocks)
                 for block in tool_blocks:
                     # Capture the commander identity the model passes to its tools -
@@ -1378,7 +1392,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 continue
 
             # ---- Final answer turn: validate color identity BEFORE showing it ----
-            answer_text = "".join(turn_parts)
+            answer_text = "\n\n".join(kept_parts + ["".join(turn_parts)]).strip()
+            streamed = streamed or bool(kept_parts and STREAM_ANSWERS)
             if final.stop_reason == "max_tokens":
                 log_activity(f"TRUNCATED sid={session_id[:8]} hit max_tokens={MAX_TOKENS} "
                              f"({len(answer_text)} chars of answer)")
@@ -1468,7 +1483,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     streamed = True
                 fmsg = await stream.get_final_message()
             _tally(getattr(fmsg, "usage", None))
-            answer_text = "".join(final_parts)
+            answer_text = "\n\n".join(kept_parts + ["".join(final_parts)]).strip()
+            streamed = streamed or bool(kept_parts and STREAM_ANSWERS)
             try:
                 off = _not_in_deck(await _check_off_color(answer_text, deck_identity))
             except Exception:
