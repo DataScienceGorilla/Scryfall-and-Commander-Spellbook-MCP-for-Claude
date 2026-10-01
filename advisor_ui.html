@@ -33,7 +33,7 @@
     background: var(--panel);
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
-  header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+  header .logo { width: 20px; height: 20px; color: var(--accent); flex-shrink: 0; }
   header .spacer { flex: 1; }
   header button {
     background: transparent; color: var(--muted); border: 1px solid var(--border);
@@ -366,7 +366,7 @@
 <body>
   <header>
     <button id="sidebarToggle" title="Toggle chat list">☰</button>
-    <span class="dot"></span>
+    <svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><path d="M25 9h14M28 9v15L15 46a6 6 0 0 0 5 9h24a6 6 0 0 0 5-9L36 24V9" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.5 41h25L49 48.5A4 4 0 0 1 45.5 54h-27A4 4 0 0 1 15 48.5z" fill="currentColor"/><circle cx="29" cy="35" r="2.4" fill="currentColor"/><circle cx="35" cy="30" r="1.8" fill="currentColor"/></svg>
     <h1>Brew Bot</h1>
     <span class="spacer"></span>
     <button id="logoutBtn" hidden onclick="location.href='/logout'">Sign out</button>
