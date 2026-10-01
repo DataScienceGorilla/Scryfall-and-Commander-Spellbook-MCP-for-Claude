@@ -98,6 +98,9 @@
     border: 1px solid var(--border); border-radius: 7px; padding: 4px 9px; font: inherit; font-size: 12.5px; }
   .prop-note:focus { outline: none; border-color: var(--accent); }
   .prop-card.accepted .prop-status { color: #8fcf9b; }
+  .auto-continue { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px;
+    color: var(--muted); padding: 6px 2px; }
+  .auto-continue .ac-text { flex: 1; min-width: 180px; }
   .q-card { background: var(--panel-2); border: 1px solid var(--accent); border-radius: 10px; padding: 12px; }
   .q-title { font-weight: 600; margin-bottom: 8px; }
   .q-options { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -1329,6 +1332,45 @@ function afterDecision(entry, bubble, toastText) {
   deckChanged();  // persists (incl. the entry's statuses) + re-renders the deck panel
   renderTurnExtras(entry, bubble);
   if (toastText) showToast(toastText, true);
+  maybeAutoContinue(entry, bubble);
+}
+
+// Once every proposal in a turn is decided, hand the turn back to the advisor - otherwise it
+// sits idle until the player thinks to type something. A short countdown leaves time to add a
+// reason (typing in a "Why?" box pauses it) or to hold off.
+const AUTO_CONTINUE_SECS = 4;
+function maybeAutoContinue(entry, bubble) {
+  const props = entry.proposals || [];
+  if (!props.length || props.some(p => p.status === 'pending') || entry.continued) return;
+  const box = bubble && bubble.closest('.msg') && bubble.closest('.msg').querySelector('.turn-extras');
+  if (!box || box.querySelector('.auto-continue')) return;
+  const bar = document.createElement('div'); bar.className = 'auto-continue';
+  bar.innerHTML = '<span class="ac-text"></span><button class="prop-btn ok ac-go">Continue now</button><button class="prop-btn ac-wait">Wait</button>';
+  box.appendChild(bar);
+  let left = AUTO_CONTINUE_SECS, timer = null;
+  const label = bar.querySelector('.ac-text');
+  const paint = () => {
+    const typing = box.contains(document.activeElement) && document.activeElement.classList.contains('prop-note');
+    label.textContent = typing ? 'All decided - continuing when you finish typing…' : `All decided - continuing in ${left}s…`;
+    return typing;
+  };
+  const go = () => {
+    clearInterval(timer);
+    if (entry.continued) return;
+    if (streaming) { label.textContent = 'Waiting for the current answer…'; setTimeout(go, 1500); return; }
+    entry.continued = true; saveState();
+    bar.remove();
+    const acc = props.filter(p => p.status === 'accepted').length, rej = props.length - acc;
+    inputEl.value = `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and keep going.`;
+    send();
+  };
+  timer = setInterval(() => { if (!paint() && --left <= 0) go(); else paint(); }, 1000);
+  paint();
+  bar.querySelector('.ac-go').onclick = go;
+  bar.querySelector('.ac-wait').onclick = () => {
+    clearInterval(timer); entry.continued = true; saveState();
+    bar.innerHTML = '<span class="ac-text">Okay - send a message whenever you\'re ready.</span>';
+  };
 }
 function questionCard(q) {
   const box = document.createElement('div'); box.className = 'q-card';
