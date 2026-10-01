@@ -327,6 +327,10 @@ Built up from real battle-testing. Major sections:
 - **Concrete-role index** — `role_index.py` builds `role_index.json` (gitignored) from **Scryfall
   oracle-tags (otags)**: card → concrete roles. Refreshes every 30 days (`--force` to rebuild).
 - **Card-role taxonomy (the user's 15 roles).** This is the backbone of the workbench:
+  - **Tutor excludes land fetching** (2026-09-30): `otag:tutor` contains all of `otag:tutor-land` (fetch
+    lands, Cultivate, Rampant Growth…), which is ramp/fixing, so Tutor = `otag:tutor -otag:tutor-land`
+    + land-tagged cards that can fetch *any* card (Dig Up) + **Crop Rotation** (instant-speed utility-land
+    interaction). 1,199 -> 586 cards. Saved decks pick up role changes via `POST /deck/roles` on chat load.
   - **Concrete (text-derivable) → otags**: Ramp, Draw, Tutor, Recursion, Target Interaction
     (spot-removal + counterspells), Mass Interaction (board wipes), Protection, Stax
     (`otag:tax` + a curated list — no `otag:stax` exists).

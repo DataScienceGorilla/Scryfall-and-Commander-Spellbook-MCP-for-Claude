@@ -35,7 +35,11 @@ ROLE_OTAG = {
     "Target Interaction": "(otag:spot-removal or otag:counterspell)",
     "Mass Interaction": "otag:board-wipe",
     "Recursion": "otag:recursion",
-    "Tutor": "otag:tutor",
+    # Fetching lands (fetch lands, Cultivate, Rampant Growth...) is ramp/fixing, not tutoring -
+    # otag:tutor includes all of otag:tutor-land, so drop those; keep land-tagged cards that can also
+    # fetch ANY card (Dig Up), and Crop Rotation (instant-speed utility-land interaction).
+    "Tutor": '((otag:tutor -otag:tutor-land) or (otag:tutor-land o:"search your library for a card") '
+             'or !"Crop Rotation")',
     "Protection": "otag:protection",
 }
 

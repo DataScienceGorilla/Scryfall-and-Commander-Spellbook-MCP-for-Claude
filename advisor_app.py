@@ -2026,6 +2026,20 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
     return JSONResponse({"cards": resolved, "not_found": not_found, **meta})
 
 
+@app.post("/deck/roles")
+async def deck_roles(request: Request, _: None = Depends(require_auth)):
+    """Current concrete roles for a saved deck's cards. Roles are stored in the browser when a
+    deck is loaded, so a role-index change (e.g. land fetchers no longer counted as Tutor) would
+    otherwise never reach decks people already have."""
+    body = await request.json()
+    names = [n for n in (body.get("names") or []) if isinstance(n, str)][:300]
+    try:
+        import role_index
+        return JSONResponse({"roles": {n: role_index.roles_for(n) for n in names}})
+    except Exception:
+        return JSONResponse({"roles": {}})
+
+
 AUTOCOMPLETE_CACHE: dict[str, list] = {}
 
 

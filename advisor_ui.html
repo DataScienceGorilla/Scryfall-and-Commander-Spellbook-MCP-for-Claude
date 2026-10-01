@@ -477,11 +477,32 @@ function renderSidebar() {
     list.appendChild(row);
   }
 }
+// Concrete roles are saved with the deck when it's loaded; refresh them once per page load per
+// deck so role-index fixes (e.g. land fetchers no longer counted as Tutor) reach saved decks.
+const rolesRefreshed = new WeakSet();
+async function refreshDeckRoles() {
+  const d = deck;
+  if (!d || !d.cards || !d.cards.length || rolesRefreshed.has(d)) return;
+  rolesRefreshed.add(d);
+  try {
+    const r = await fetch('/deck/roles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                           body: JSON.stringify({ names: d.cards.map(c => c.name) }) });
+    if (!r.ok) return;
+    const { roles } = await r.json();
+    let changed = false;
+    for (const c of d.cards) {
+      const next = roles[c.name];
+      if (next && JSON.stringify(next) !== JSON.stringify(c.roles || [])) { c.roles = next; changed = true; }
+    }
+    if (changed && d === deck) { saveState(); renderDeck(); }
+  } catch (e) {}
+}
 function loadActiveIntoUI() {
   messagesEl.innerHTML = '';
   cardCache.clear(); seenNames.clear(); resetGroups(); deckIdentity = null;
   resetCanvas(); undoStack = []; closeEditor();
   renderDeck();  // before messages, so their card mentions know what's already in the deck
+  refreshDeckRoles();
   if (!conversation.length) {
     addMessage('assistant', "Tell me your commander and what you're working on — a decklist to tune, a brand-new build, or a specific problem (curve, mana, a matchup). Cards I mention appear on the right.");
   } else {
