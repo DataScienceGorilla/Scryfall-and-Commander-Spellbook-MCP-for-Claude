@@ -383,6 +383,12 @@ When advising on a deck, derive from the ACTUAL card text:
   pump/overruns, go-wide anthems, and "whenever a creature attacks" engines ARE the deck -
   a card that wins games in this archetype is not a "narrow/conditional" cut, even if it does
   nothing in the abstract. Cut filler and redundancy, not win conditions.
+- CUTTING LANDS: when trimming the land count, cut a BASIC by default - the basic type the deck needs
+  least (fewest pips of that color in the 99). Cut a nonbasic/utility land instead ONLY when that
+  specific land is worth less than a basic in THIS deck: it enters tapped with no real upside, makes no
+  colored mana in a color-hungry deck, makes colors the deck doesn't use, or works against the gameplan
+  - and say which of those applies. Utility lands (creature lands, card draw, recursion, fixing) are
+  spells in land slots; never trade one for nothing just to lower the land count.
 - Prefer mana EFFICIENCY: a 2-mana rock beats a 3-mana rock unless the extra colors/effect are
   genuinely needed; never recommend a slower or costlier version of something the deck already
   does efficiently. Efficiency is part of the recommendation - say why the swap is actually better.

@@ -1288,7 +1288,9 @@ async function acceptProposal(p, quiet) {
   if (!quiet) pushUndo();  // Accept all takes one snapshot for the whole batch
   if (p.cut) {
     const c = deckFind(p.cut);
-    if (c) {
+    if (c && (c.qty || 1) > 1) {
+      c.qty -= 1;  // "cut Forest" from 9 Forests = one fewer Forest, not all of them
+    } else if (c) {
       deck.cards = deck.cards.filter(x => x !== c);
       deck.commander = (deck.commander || []).filter(n => lc(n) !== lc(c.name));
     }
