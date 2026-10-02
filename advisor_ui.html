@@ -199,8 +199,14 @@
   .lightbox[hidden] { display: none; }  /* author display:flex would otherwise defeat the hidden attribute */
   .lightbox .lb-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; max-height: 100%; }
   .lightbox .lb-img { max-height: 80vh; max-width: 90vw; border-radius: var(--radius-card); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
-  .lightbox .lb-bar { display: flex; align-items: center; gap: 16px; color: var(--text); font-size: 14px; }
+  .lightbox .lb-bar { display: flex; align-items: center; gap: 16px; color: var(--text); font-size: 14px;
+    background: var(--panel); border: 1.5px solid var(--ink-line, var(--border)); border-radius: var(--radius);
+    padding: 6px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
   .lightbox .lb-name { font-weight: 600; }
+  .lightbox .lb-name[hidden], .lightbox .lb-flip[hidden], .lightbox .lb-link[hidden] { display: none; }
+  .lightbox .lb-flip { background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text);
+    font: inherit; font-size: 13px; padding: 2px 10px; cursor: pointer; }
+  .lightbox .lb-flip:hover { border-color: var(--accent); color: var(--accent); }
   .lightbox .lb-link { color: var(--accent); text-decoration: none; font-size: 13px; }
   .lightbox .lb-link:hover { text-decoration: underline; }
 
@@ -332,6 +338,11 @@
   .ed-inner { display: flex; gap: 20px; align-items: flex-start; background: var(--panel); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 18px; max-width: 720px; width: 100%; max-height: 100%; overflow-y: auto; }
   .ed-img { width: 260px; max-width: 42%; border-radius: var(--radius-card); flex-shrink: 0; }
+  .ed-art { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 260px; max-width: 42%; flex-shrink: 0; }
+  .ed-art .ed-img { width: 100%; max-width: 100%; }
+  .ed-flip { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+    font: inherit; font-size: 13px; padding: 4px 12px; cursor: pointer; }
+  .ed-flip:hover { border-color: var(--accent); color: var(--accent); }
   .ed-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
   .ed-name { font-family: var(--font-head); font-size: 24px; font-weight: 600; margin: 0; }
   .ed-type { color: var(--muted); font-size: 13px; margin-top: -8px; }
@@ -1582,7 +1593,10 @@ function startDeckCard(sd, entry, bubble) {
   box.innerHTML = `<div class="prop-thumbs">${thumbs}</div><div class="prop-body">
     <div class="q-title">Start a deck with ${escapeHtml(names.join(' + '))}</div>
     ${meta ? `<div class="prop-reason">${meta}</div>` : ''}<div class="prop-actions"></div></div>`;
-  box.querySelectorAll('.prop-thumb').forEach(img => img.addEventListener('click', () => openLightbox({ img: img.src, canonical: '' })));
+  box.querySelectorAll('.prop-thumb').forEach((img, i) => img.addEventListener('click', () => {
+    const c = (sd.commander || []).filter(x => x.image)[i] || {};
+    openLightbox({ img: img.src, imgBack: c.image_back || null, canonical: c.name || '', scryfall: c.scryfall_uri || null });
+  }));
   const actions = box.querySelector('.prop-actions');
   if (sd.status === 'pending' && !(deck && deck.cards && deck.cards.length)) {
     const ok = document.createElement('button'); ok.className = 'prop-btn ok'; ok.textContent = 'Create deck';
@@ -1645,7 +1659,13 @@ function proposalCard(p, entry, bubble) {
     note.addEventListener('keydown', e => { if (e.key === 'Enter') note.blur(); });
     actions.appendChild(note);
   }
-  card.querySelectorAll('.prop-thumb').forEach(img => img.addEventListener('click', () => openLightbox({ img: img.src, canonical: '' })));
+  const out = cutCard || { name: p.cut, image: p.cutImage, image_back: p.cutBack, scryfall_uri: p.cutUri };
+  if (cutCard) { p.cutBack = cutCard.image_back || null; p.cutUri = cutCard.scryfall_uri || null; }
+  const inn = p.addCard || {};
+  card.querySelectorAll('.prop-thumb').forEach(img => img.addEventListener('click', () => {
+    const c = img.classList.contains('out') ? out : inn;
+    openLightbox({ img: img.src, imgBack: c.image_back || null, canonical: c.name || '', scryfall: c.scryfall_uri || null });
+  }));
   return card;
 }
 // Apply one proposal to the deck. `quiet` = the caller already took the undo snapshot (Accept all).
@@ -1782,6 +1802,28 @@ document.body.appendChild(editor);
 editor.addEventListener('click', (e) => { if (e.target === editor) closeEditor(); });
 function openEditor(name) { const c = deckFind(name); if (!c) return; hideTooltip(); editorName = c.name; renderEditor(c); editor.hidden = false; }
 function closeEditor() { editor.hidden = true; editorName = null; }
+// Deck card editor: a Flip button on two-faced cards. Decks saved before back faces were
+// stored look the back up once (type line "A // B" is the hint; adventures/splits have none).
+async function editorFlip(c) {
+  const img = editor.querySelector('.ed-img');
+  if (!img || !(c.image_back || / \/\/ /.test(c.type_line || ''))) return;
+  if (!c.image_back) {
+    try {
+      const r = await fetch('/cards', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ names: [c.name] }) });
+      const back = backImage(((await r.json()).cards || {})[c.name]);
+      if (!back) return;
+      c.image_back = back; saveState();
+    } catch (e) { return; }
+  }
+  if (editorName !== c.name || !img.isConnected) return;
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'ed-flip'; btn.textContent = 'Flip ↻';
+  btn.title = 'Show the other face';
+  let back = false;
+  btn.onclick = () => { back = !back; img.src = back ? c.image_back : c.image; };
+  const wrap = document.createElement('div'); wrap.className = 'ed-art';
+  img.replaceWith(wrap); wrap.append(img, btn);
+}
 function renderEditor(c) {
   const ident = commanderIdentity();
   const off = ident && (c.color_identity || []).some(x => !ident.has(x));
@@ -1803,6 +1845,7 @@ function renderEditor(c) {
       </div></div>`;
   const $ = s => editor.querySelector(s);
   if (c.image) $('.ed-img').src = c.image; else $('.ed-img').remove();
+  editorFlip(c);
   $('.ed-name').textContent = c.name;
   $('.ed-type').textContent = [c.type_line, c.mana_cost].filter(Boolean).join(' · ');
   const flag = (t, bad) => { const s = document.createElement('span'); s.className = 'ed-flag' + (bad ? ' bad' : ''); s.textContent = t; $('.ed-flags').appendChild(s); };
@@ -1865,7 +1908,8 @@ const lightbox = document.createElement('div');
 lightbox.className = 'lightbox';
 lightbox.hidden = true;
 lightbox.innerHTML = '<div class="lb-inner"><img class="lb-img" alt=""><div class="lb-bar">'
-  + '<span class="lb-name"></span><a class="lb-link" target="_blank" rel="noopener">View on Scryfall ↗</a>'
+  + '<span class="lb-name"></span><button type="button" class="lb-flip" title="Show the other face">Flip ↻</button>'
+  + '<a class="lb-link" target="_blank" rel="noopener">View on Scryfall ↗</a>'
   + '</div></div>';
 document.body.appendChild(lightbox);
 lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
@@ -1874,12 +1918,24 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeLig
 function openLightbox(entry) {
   hideTooltip();
   if (!entry || !entry.img) return;
-  lightbox.querySelector('.lb-img').src = entry.img;
-  lightbox.querySelector('.lb-name').textContent = entry.canonical || '';
+  const img = lightbox.querySelector('.lb-img');
+  img.src = entry.img;
+  const name = lightbox.querySelector('.lb-name');
+  name.textContent = entry.canonical || ''; name.hidden = !entry.canonical;
   const link = lightbox.querySelector('.lb-link');
   if (entry.scryfall) { link.href = entry.scryfall; link.hidden = false; }
   else { link.hidden = true; }
+  // two-faced cards: flip between the faces
+  const flip = lightbox.querySelector('.lb-flip');
+  flip.hidden = !entry.imgBack;
+  let back = false;
+  flip.onclick = () => { back = !back; img.src = back ? entry.imgBack : entry.img; };
   lightbox.hidden = false;
+}
+// back-face image of a two-faced card (transform / modal DFC), from a Scryfall-shaped card
+function backImage(data) {
+  const f = data && data.card_faces;
+  return (f && f.length > 1 && f[1].image_uris && f[1].image_uris.normal) || null;
 }
 function closeLightbox() { lightbox.hidden = true; }
 
@@ -2127,6 +2183,7 @@ function applyCard(name, entry, data) {
     entry.canonical = data.name;
     entry.img = img;
     entry.scryfall = data.scryfall_uri;
+    entry.imgBack = backImage(data);
     entry.identity = data.color_identity || [];
     entry.status = 'ok';
     entry.tile.className = 'card-tile';
