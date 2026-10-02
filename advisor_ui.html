@@ -93,6 +93,17 @@
   }
   .chip:hover { color: var(--accent-hover); background: var(--accent-tint-strong); }
   /* Advisor proposals (accept/reject) + questions */
+  #tray { display: flex; flex-direction: column; max-height: 48vh; border-top: 3px double var(--ink-line, var(--border));
+    background: var(--panel); }
+  #tray[hidden] { display: none; }
+  .tray-head { display: flex; align-items: center; gap: var(--s2); padding: 8px 20px 6px; }
+  .tray-title { flex: 1; font-family: var(--font-display, var(--font-head)); font-size: 17px; color: var(--accent); }
+  .tray-toggle { background: none; border: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .tray-toggle:hover { color: var(--text); }
+  .tray-body { overflow-y: auto; padding: 2px 20px 14px; display: flex; flex-direction: column; gap: 8px; }
+  #tray.collapsed .tray-body { display: none; }
+  .tray-pointer { font-size: 13px; color: var(--muted); font-style: italic; cursor: pointer; }
+  .tray-pointer:hover { color: var(--accent); }
   .turn-extras { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
   .prop-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; text-transform: uppercase;
     letter-spacing: .6px; color: var(--muted); font-weight: 650; }
@@ -537,6 +548,9 @@
           <div class="bubble">Tell me your commander and what you're working on — a decklist to tune, a brand-new build, or a specific problem (curve, mana, a matchup you keep losing). Cards I mention will appear on the right.</div>
         </div>
       </div>
+      <div id="tray" hidden><div class="tray-head"><span class="tray-title"></span>
+        <button type="button" class="tray-toggle" title="Collapse or expand">▾ Hide</button></div>
+        <div class="tray-body"></div></div>
       <div id="composer">
         <textarea id="input" placeholder="Ask anything, or paste a decklist" rows="1"></textarea>
         <button id="send">Send</button>
@@ -654,6 +668,7 @@ async function refreshDeckRoles() {
   } catch (e) {}
 }
 function loadActiveIntoUI() {
+  hideTray(); settleStale();
   messagesEl.innerHTML = '';
   cardCache.clear(); seenNames.clear(); resetGroups(); deckIdentity = null;
   resetCanvas(); undoStack = []; closeEditor();
@@ -1554,15 +1569,80 @@ intakeEl.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopProp
 intakeEl.addEventListener('click', e => { if (e.target === intakeEl) closeIntake(false); });
 
 // ---- advisor proposals (accept/reject) + questions (answer buttons) - workbench phase 3 ----
-// Rendered under the assistant message that made them; stored on that conversation entry
-// (entry.proposals[].status, entry.question.answer) so decisions persist and go back to the
-// advisor with the history.
+// What the advisor is waiting on (the LATEST reply's undecided proposals / question / start-deck
+// offer) lives in the decision tray docked above the message box - separate from the chat, like
+// Claude's question UI. The chat keeps a record under each reply. Sending a message moves on:
+// a pending question takes the message as its answer, undecided proposals become "skipped".
+// Older replies' undecided items are closed out as skipped, so a stale batch can never be
+// decided into a newer conversation. Decisions persist on the conversation entry and go back
+// to the advisor with the history.
+const trayEl = document.getElementById('tray');
+const trayBody = trayEl.querySelector('.tray-body');
+const trayTitle = trayEl.querySelector('.tray-title');
+let trayEntry = null;
+trayEl.querySelector('.tray-toggle').onclick = () => {
+  trayEl.classList.toggle('collapsed');
+  trayEl.querySelector('.tray-toggle').textContent = trayEl.classList.contains('collapsed') ? '▸ Show' : '▾ Hide';
+};
+const INPUT_HINT = 'Ask anything, or paste a decklist';
+function showTray(entry, title) {
+  trayEntry = entry; trayTitle.textContent = title; trayEl.hidden = false;
+  // say what typing does while something's waiting
+  inputEl.placeholder = !entryPending(entry) ? INPUT_HINT
+    : entry.question && !entry.question.answer ? 'Pick an answer above, or type your own'
+    : 'Decide above - or send a message to skip these and move on';
+}
+function hideTray() { trayEntry = null; trayEl.hidden = true; trayBody.innerHTML = ''; inputEl.placeholder = INPUT_HINT; }
+function entryPending(m) {
+  return (m.proposals || []).some(p => p.status === 'pending')
+    || !!(m.question && !m.question.answer && !m.question.skipped)
+    || !!(m.startDeck && m.startDeck.status === 'pending');
+}
+function lastAssistantEntry() {
+  for (let i = conversation.length - 1; i >= 0; i--) if (conversation[i].role === 'assistant') return conversation[i];
+  return null;
+}
+function activeDecisionEntry() { const m = lastAssistantEntry(); return m && entryPending(m) ? m : null; }
+// close out undecided items: `typed` = the player's message, which answers a pending question
+function skipPending(m, typed) {
+  (m.proposals || []).forEach(p => { if (p.status === 'pending') p.status = 'skipped'; });
+  if (m.question && !m.question.answer && !m.question.skipped) {
+    if (typed) { m.question.answer = typed; m.question.typed = true; } else m.question.skipped = true;
+  }
+  if (m.startDeck && m.startDeck.status === 'pending') m.startDeck.status = 'skipped';
+}
+function settleStale() {
+  const last = lastAssistantEntry();
+  for (const m of conversation) if (m.role === 'assistant' && m !== last && entryPending(m)) skipPending(m);
+}
+function trayLabel(m) {
+  const n = (m.proposals || []).filter(p => p.status === 'pending').length;
+  return [n ? `${n} proposed change${n > 1 ? 's' : ''}` : '',
+          m.question && !m.question.answer ? 'a question' : '',
+          m.startDeck && m.startDeck.status === 'pending' ? 'start a deck' : ''].filter(Boolean).join(' · ');
+}
+
 function renderTurnExtras(entry, bubble) {
   const msg = bubble && bubble.closest('.msg');
   if (!msg || (!(entry.proposals || []).length && !entry.question && !entry.startDeck)) return;
   let box = msg.querySelector('.turn-extras');
   if (!box) { box = document.createElement('div'); box.className = 'turn-extras'; msg.appendChild(box); }
   box.innerHTML = '';
+  if (entry === activeDecisionEntry()) {
+    // the live decision goes to the tray; the chat just points at it
+    const ptr = document.createElement('div'); ptr.className = 'tray-pointer';
+    ptr.textContent = 'Waiting on your decision below ↓';
+    ptr.onclick = () => { trayEl.classList.remove('collapsed'); trayEl.querySelector('.tray-toggle').textContent = '▾ Hide'; };
+    box.appendChild(ptr);
+    trayBody.innerHTML = '';
+    showTray(entry, 'Waiting on you · ' + trayLabel(entry));
+    fillExtras(trayBody, entry, bubble);
+    return;
+  }
+  if (trayEntry === entry) hideTray();
+  fillExtras(box, entry, bubble);
+}
+function fillExtras(box, entry, bubble) {
   const props = entry.proposals || [];
   if (props.length) {
     const pending = props.filter(p => p.status === 'pending');
@@ -1619,7 +1699,7 @@ function startDeckCard(sd, entry, bubble) {
     no.onclick = () => { sd.status = 'declined'; saveState(); renderTurnExtras(entry, bubble); };
     actions.append(ok, no);
   } else {
-    actions.innerHTML = `<span class="prop-status">${sd.status === 'created' ? '✓ Deck created' : sd.status === 'declined' ? 'Not now' : 'A deck is already loaded'}</span>`;
+    actions.innerHTML = `<span class="prop-status">${sd.status === 'created' ? '✓ Deck created' : sd.status === 'declined' ? 'Not now' : sd.status === 'skipped' ? '– Skipped' : 'A deck is already loaded'}</span>`;
   }
   return box;
 }
@@ -1643,7 +1723,7 @@ function proposalCard(p, entry, bubble) {
     no.onclick = () => { p.status = 'rejected'; afterDecision(entry, bubble); };
     actions.append(ok, no);
   } else {
-    actions.innerHTML = `<span class="prop-status">${p.status === 'accepted' ? '✓ Accepted' : p.status === 'rejected' ? '✗ Rejected' : 'No deck loaded'}</span>`;
+    actions.innerHTML = `<span class="prop-status">${p.status === 'accepted' ? '✓ Accepted' : p.status === 'rejected' ? '✗ Rejected' : p.status === 'skipped' ? '– Skipped' : 'No deck loaded'}</span>`;
   }
   // Optional reason - before or after deciding. It goes back to the advisor with the
   // decision ("rejected - I don't own it"), so it learns what this player values.
@@ -1705,15 +1785,19 @@ const AUTO_CONTINUE_SECS = 4;
 function maybeAutoContinue(entry, bubble) {
   const props = entry.proposals || [];
   if (!props.length || props.some(p => p.status === 'pending') || entry.continued) return;
-  const box = bubble && bubble.closest('.msg') && bubble.closest('.msg').querySelector('.turn-extras');
-  if (!box || box.querySelector('.auto-continue')) return;
+  // only the latest reply hands the turn back - a decision on an older batch must never
+  // read to the advisor as a verdict on its newest one
+  if (entry !== lastAssistantEntry() || entryPending(entry) || trayBody.querySelector('.auto-continue')) return;
+  const box = trayBody;
+  box.innerHTML = '';
+  showTray(entry, 'All decided');
   const bar = document.createElement('div'); bar.className = 'auto-continue';
   bar.innerHTML = '<span class="ac-text"></span><button class="prop-btn ok ac-go">Continue now</button><button class="prop-btn ac-wait">Wait</button>';
   box.appendChild(bar);
   let left = AUTO_CONTINUE_SECS, timer = null;
   const label = bar.querySelector('.ac-text');
   const paint = () => {
-    const typing = box.contains(document.activeElement) && document.activeElement.classList.contains('prop-note');
+    const typing = !!(document.activeElement && document.activeElement.classList.contains('prop-note'));
     label.textContent = typing ? 'All decided - continuing when you finish typing…' : `All decided - continuing in ${left}s…`;
     return typing;
   };
@@ -1722,7 +1806,7 @@ function maybeAutoContinue(entry, bubble) {
     if (entry.continued) return;
     if (streaming) { label.textContent = 'Waiting for the current answer…'; setTimeout(go, 1500); return; }
     entry.continued = true; saveState();
-    bar.remove();
+    hideTray();
     const acc = props.filter(p => p.status === 'accepted').length, rej = props.length - acc;
     inputEl.value = building()
       ? `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and move on to the next section.`
@@ -1734,7 +1818,7 @@ function maybeAutoContinue(entry, bubble) {
   bar.querySelector('.ac-go').onclick = go;
   bar.querySelector('.ac-wait').onclick = () => {
     clearInterval(timer); entry.continued = true; saveState();
-    bar.innerHTML = '<span class="ac-text">Okay - send a message whenever you\'re ready.</span>';
+    hideTray(); showToast("Okay - send a message whenever you're ready.");
   };
 }
 function questionCard(q) {
@@ -1745,13 +1829,16 @@ function questionCard(q) {
   const picked = new Set();
   for (const opt of q.options || []) {
     const b = document.createElement('button'); b.className = 'q-opt'; b.textContent = opt;
-    if (q.answer) { b.disabled = true; if (String(q.answer).split(' · ').includes(opt)) b.classList.add('sel'); }
+    if (q.answer || q.skipped) { b.disabled = true; if (q.answer && String(q.answer).split(' · ').includes(opt)) b.classList.add('sel'); }
     else if (q.multi) b.onclick = () => { picked.has(opt) ? picked.delete(opt) : picked.add(opt); b.classList.toggle('sel'); };
     else b.onclick = () => answerQuestion(q, opt, box);
     row.appendChild(b);
   }
   box.appendChild(row);
-  if (!q.answer) {
+  if (q.skipped) {
+    const own = document.createElement('div'); own.className = 'q-own'; own.textContent = '– Skipped';
+    box.appendChild(own);
+  } else if (!q.answer) {
     const foot = document.createElement('div'); foot.className = 'q-foot';
     if (q.multi) {
       const go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Send';
@@ -2293,6 +2380,15 @@ async function send(force) {
   const originSession = SESSION_ID;
   const originConv = chats[originId].conversation;
   const onScreen = () => activeId === originId;
+  // moving on: a pending question takes this message as its answer; undecided proposals
+  // are marked skipped (the advisor is told), and the tray clears
+  const live = activeDecisionEntry();
+  if (live) {
+    skipPending(live, force === true ? null : text);
+    hideTray();
+    const lb = [...messagesEl.querySelectorAll('.msg.assistant .bubble')].pop();
+    if (lb) renderTurnExtras(live, lb);
+  }
   streaming = true; sendBtn.disabled = true;
   const userEntry = { role: 'user', text };
   addMessage('user', text);

@@ -1322,7 +1322,8 @@ def _decisions_summary(m: dict) -> str:
     out = []
     props = [p for p in (m.get("proposals") or []) if isinstance(p, dict)][:12]
     if props:
-        mark = {"accepted": "ACCEPTED", "rejected": "REJECTED"}
+        mark = {"accepted": "ACCEPTED", "rejected": "REJECTED",
+                "skipped": "SKIPPED (they moved on without deciding - it's not in the deck)"}
         rows = []
         for p in props:
             what = " / ".join(x for x in (f"cut {p.get('cut')}" if p.get("cut") else "",
@@ -1338,12 +1339,15 @@ def _decisions_summary(m: dict) -> str:
     if isinstance(sd, dict) and sd.get("commander"):
         names = " + ".join(str(c.get("name") if isinstance(c, dict) else c) for c in sd["commander"])[:200]
         st = {"created": "they CREATED it - it's now their CURRENT DECK",
-              "declined": "they declined for now"}.get(sd.get("status"), "not decided yet")
+              "declined": "they declined for now",
+              "skipped": "they moved on without creating it"}.get(sd.get("status"), "not decided yet")
         out.append(f"[You offered to start a deck with {names} as commander - {st}.]")
     q = m.get("question")
     if isinstance(q, dict) and q.get("question"):
         out.append(f"[You asked: \"{str(q['question'])[:200]}\" - options: {', '.join(map(str, q.get('options') or []))[:300]}"
-                   + (f" - they answered: {str(q.get('answer'))[:200]}]" if q.get("answer") else "]"))
+                   + (f" - they answered by typing: {str(q.get('answer'))[:200]}]" if q.get("answer") and q.get("typed")
+                      else f" - they answered: {str(q.get('answer'))[:200]}]" if q.get("answer")
+                      else " - they skipped it]" if q.get("skipped") else "]"))
     return ("\n\n" + "\n".join(out)) if out else ""
 
 
