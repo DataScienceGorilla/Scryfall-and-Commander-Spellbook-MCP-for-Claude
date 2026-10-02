@@ -30,14 +30,24 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   assistant turn in the history, so the model knows what was accepted/rejected/answered. Tested live:
   3 swaps in 12 s; a direction question in 4 s; the follow-up built on the answer and didn't re-propose
   a rejected swap or touch a must-keep.
-- [ ] **Guided build from scratch** (user idea, 2026-09-30): start with no list - the agent runs the
+- [x] **Guided build from scratch** (user idea, 2026-09-30; built 2026-10-02): start with no list - the agent runs the
   brief (commander, bracket, gameplan, budget), then builds the 99 with the player section by section
   (ramp, draw, interaction, engine, payoffs, lands), proposing packages the player accepts/rejects
   into the empty deck. Builds on the Phase 3 proposal + question tools.
   - [x] First step (2026-10-02): `start_deck` UI tool - with no deck, once the commander is settled the
     advisor offers a "Start a deck with X" card; Create deck makes the deck object (commander, bracket,
-    plan) and auto-continues, then the advisor fills it with propose_changes batches. Still to do: a
-    fuller guided flow (brief questions up front, section-by-section progress toward 100).
+    plan) and auto-continues, then the advisor fills it with propose_changes batches.
+  - [x] Build mode (2026-10-02): "Build from scratch" button -> New build brief (commander-only search via
+    `/card/search?commander=1`) -> `deck.build` turns on BUILD MODE. Section targets (Rebel Lily: 38 lands,
+    24 ramp+draw split by commander MV, 10 interaction, 3 protection, gameplan = the rest; editable,
+    gameplan absorbs edits) with a progress panel; each card counts once (lands > ramp > draw >
+    interaction > protection > gameplan) - same rule in `_build_counts` and `buildCounts`. The CURRENT
+    DECK block carries the targets + next section; the advisor fills one section per proposal batch,
+    auto-continuing after decisions. "Fill N basics" splits by pips (smoothed). Proposals take `qty` for
+    basics. "Finish build" sets `build.done`. Scryfall calls are paced (~9/s) and 429s retried
+    (`mtg_tools._PacedTransport`).
+  - Ideas next: curve view while building, nonbasic land suggestions before basics fill, contextual
+    roles (Enabler/Payoff) feeding the Gameplan count.
 - [x] **Phase 4 - deck brief (commander picker + intake questionnaire)** (2026-09-30): a modal
   (`openIntake`) that opens when a pasted/linked deck arrives - *before* the advisor answers (`send()`
   awaits it) - and from the toolbar's 📝 Brief button. Commander: tiles of the deck's
