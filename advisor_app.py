@@ -325,6 +325,10 @@ THAT is their current deck - use it; do not ask them to paste it again.
      Forest, qty 9). The player can also fill basics with one click from the panel.
   5. If a section's direction is genuinely the player's call (which engine, which wincon), ask_player
      first. When every target is met, give a short summary of the finished build and offer a review.
+  NO COMMANDER YET: start there. From what they've told you (colors, mechanics, a card they love,
+  bracket, budget), put 3-5 fitting commanders in front of them with ask_player - each option the
+  commander's name plus a few words on why - or ask one quick question first if you know nothing about
+  what they want. Once they pick, call start_deck with that commander (and their bracket/plan).
   Sections are counted by each card's concrete role; it's fine if they don't match your contextual
   read exactly - aim for the totals, and the total of 100.
 
@@ -1975,8 +1979,8 @@ async def chat(request: Request, _: None = Depends(require_auth)):
     # deck-free trivia. Caching keeps Sonnet follow-ups cheap.
     convo_text = "\n".join(m["content"] for m in messages if isinstance(m.get("content"), str))
     model, extra = pick_model(convo_text + "\n" + memory_text)
-    if has_deck:
-        model, extra = REVIEW_MODEL, REVIEW_EXTRA  # a live deck is always deck work
+    if has_deck or (deck and isinstance(deck.get("build"), dict)):
+        model, extra = REVIEW_MODEL, REVIEW_EXTRA  # a live deck (or a build in progress) is always deck work
     preview = user_message.replace("\n", " ")[:200]
     ctx = []
     if has_deck:
@@ -2020,6 +2024,12 @@ async def chat(request: Request, _: None = Depends(require_auth)):
                 except Exception as e:  # never block the answer on memory upkeep
                     log_activity(f"MEMORY failed: {e}")
         deck_block, deck_text, deck_identity = await _deck_context(deck) if has_deck else ("", "", None)
+        if not has_deck and deck and isinstance(deck.get("build"), dict) and not deck["build"].get("done"):
+            deck_block = "\n".join(  # a guided build that hasn't picked its commander yet
+                ["# CURRENT DECK (live from the player's deck editor)",
+                 "BUILD MODE - a new deck with NO COMMANDER YET and no cards. Help the player choose the "
+                 "commander first (see BUILD MODE in your instructions).",
+                 f"Target bracket: {deck.get('bracket') or 'not set'}"] + _brief_lines(deck.get("intake")))
         memory_block = ("# SESSION MEMORY (condensed earlier conversation - see instructions)\n"
                         + memory_text) if memory_text else ""
         async for chunk in agent_stream(session_id, messages, model, extra,

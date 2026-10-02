@@ -831,10 +831,14 @@ async function loadDeckFromText(text) {
 
 // ---- deck -> advisor (phase 3): the AI gets the live deck + a note of edits since its last reply ----
 function deckForChat() {
-  if (!deck || !deck.cards || !deck.cards.length) return null;
+  if (!deck || !deck.cards) return null;
+  // an empty deck only matters while building (no commander picked yet)
+  if (!deck.cards.length && !building()) return null;
   return { commander: deck.commander || [], bracket: deck.bracket || null, intake: deck.intake || null,
+           build: deck.build || null,
            cards: deck.cards.map(c => ({ name: c.name, qty: c.qty || 1, role: c.role || null,
-                                         tags: c.tags || [], color_identity: c.color_identity || [] })) };
+                                         tags: c.tags || [], color_identity: c.color_identity || [],
+                                         roles: c.roles || [], cmc: c.cmc || 0, is_land: !!c.is_land })) };
 }
 function deckSnapshot() {
   if (!deck || !deck.cards) return null;
@@ -1055,15 +1059,16 @@ function startBuild(opts = {}) {
   if (opts.ask) deck.intake = { plan: opts.ask, styles: [], keep: [], avoid: [], avoidNote: '', budget: '', notes: '' };
   renderDeck();
   openIntake({ build: true }).then(saved => {
-    if (!saved || !(deck.commander || []).length) {
+    if (!saved) {
       deck = null; undoStack = []; deckChanged(); renderDeck();
-      if (saved) showToast('Pick a commander to start a build');
       if (opts.ask && !inputEl.value) inputEl.value = opts.ask;  // their message, back in the box
       return;
     }
     deck.cards = deck.cards.filter(c => (deck.commander || []).some(n => lc(n) === lc(c.name)));
     deckChanged();
-    inputEl.value = `Let's build this deck from scratch with ${deck.commander.join(' + ')} as commander. Start with the gameplan.`
+    inputEl.value = ((deck.commander || []).length
+      ? `Let's build this deck from scratch with ${deck.commander.join(' + ')} as commander. Start with the gameplan.`
+      : "Let's build a new deck from scratch. I haven't picked a commander yet - help me choose one.")
       + (opts.ask ? `\n\nWhat I originally asked: ${opts.ask}` : '');
     send(true);
   });
@@ -1182,7 +1187,8 @@ function renderDeck() {
     + (roleStr ? `<div class="deck-roles">${roleStr}</div>` : '');
   const warns = document.createElement('ul'); warns.className = 'deck-warns';
   const warn = (text, hint) => { const w = document.createElement('li'); w.className = 'deck-warn' + (hint ? ' hint' : ''); w.textContent = text; warns.appendChild(w); };
-  if (!deck.cards.length) warn('Empty deck - add cards with the search box, or paste a list in chat', true);
+  if (!deck.cards.length) warn(building() ? 'No commander yet - ask the advisor for ideas, or click the title to pick one'
+                                          : 'Empty deck - add cards with the search box, or paste a list in chat', true);
   else {
     if (!(deck.commander || []).length) warn('No commander yet - click the title to choose one', true);
     for (const n of deck.commander || []) {
@@ -1415,7 +1421,7 @@ function renderIntake(opts) {
     <button type="button" class="ed-close in-x" title="Close">×</button>
     <h2 class="in-title">${opts.build ? 'New build' : 'Deck brief'}</h2>
     <p class="in-sub">${opts.build ? "Pick your commander and tell the advisor what you're going for - it'll build the deck with you, one section at a time." : (opts.fromSend ? 'Before the advisor reads your deck - ' : '') + "tell it who leads the deck and what you're going for."}
-      Everything but the commander is optional.</p>
+      ${opts.build ? "Everything is optional - no commander yet? Leave it blank and the advisor will help you pick one." : 'Everything but the commander is optional.'}</p>
     <section><h3>Commander <span class="in-hint">pick up to 2 (partners / Background)</span></h3>
       <div class="in-cmdrs"></div>
       <div class="in-row"><input type="search" class="in-cmdr-search" list="inCmdrList" ${NO_AUTOFILL} placeholder="${opts.build ? 'Search for your commander…' : 'Not listed? Add your commander by name…'}"><button type="button" class="in-small in-cmdr-add">Add</button></div>
@@ -1580,9 +1586,12 @@ function startDeckCard(sd, entry, bubble) {
     ok.onclick = () => {
       if (streaming) { showToast('Wait for the current answer to finish'); return; }
       pushUndo();
-      deck = { commander: names, bracket: sd.bracket || null, not_found: [], build: { targets: null },
+      const prev = deck || {};  // an empty build deck (no commander yet) keeps its brief + targets
+      deck = { commander: names, bracket: sd.bracket || prev.bracket || null, not_found: [],
+               build: prev.build || { targets: null },
                cards: (sd.commander || []).map(c => Object.assign({}, c, { qty: 1 })),
-               intake: { plan: sd.plan || '', styles: [], keep: [], avoid: [], avoidNote: '', budget: '', notes: '' } };
+               intake: Object.assign({ plan: '', styles: [], keep: [], avoid: [], avoidNote: '', budget: '', notes: '' },
+                                     prev.intake || {}, sd.plan && !(prev.intake || {}).plan ? { plan: sd.plan } : {}) };
       sd.status = 'created';
       deckChanged();
       renderTurnExtras(entry, bubble);
