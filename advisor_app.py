@@ -1221,27 +1221,21 @@ def _default_build_targets(deck: dict) -> dict:
     return t
 
 
+_SECTION_OF = {"Lands": "lands", "Ramp": "ramp", "Draw": "draw", "Target Interaction": "interaction",
+               "Mass Interaction": "interaction", "Protection": "protection"}
+
+
 def _build_counts(deck: dict) -> dict:
-    """Each non-commander card counts once, in its first matching section (lands, ramp, draw,
-    interaction, protection, else gameplan) - so the sections add up to the deck size."""
+    """Each non-commander card counts once, by the group it sits in on the player's canvas: their
+    role if they set one, else Lands for lands, else its first concrete role, else Other. Groups
+    outside the five named sections are gameplan. Mirrors cardGroup/buildCounts in the page."""
     cmdrs = {n.lower() for n in deck.get("commander") or []}
     n = dict.fromkeys(("gameplan", "ramp", "draw", "interaction", "protection", "lands"), 0)
     for c in deck.get("cards") or []:
         if (c.get("name") or "").lower() in cmdrs:
             continue
-        q, roles = int(c.get("qty") or 1), set(c.get("roles") or [])
-        if c.get("is_land"):
-            n["lands"] += q
-        elif "Ramp" in roles:
-            n["ramp"] += q
-        elif "Draw" in roles:
-            n["draw"] += q
-        elif roles & {"Target Interaction", "Mass Interaction"}:
-            n["interaction"] += q
-        elif "Protection" in roles:
-            n["protection"] += q
-        else:
-            n["gameplan"] += q
+        group = c.get("role") or ("Lands" if c.get("is_land") else ((c.get("roles") or ["Other"])[0]))
+        n[_SECTION_OF.get(group, "gameplan")] += int(c.get("qty") or 1)
     return n
 
 

@@ -946,14 +946,11 @@ function deckComposition() {
   const offColor = [], dupes = [];
   for (const c of cards) {
     const q = c.qty || 1; total += q;
+    // one count per card, by its canvas group - the line matches the group headers below
+    const g = cardGroup(c);
+    if (g !== 'Commander' && g !== 'Lands') roleCounts[g] = (roleCounts[g] || 0) + q;
     if (c.is_land) lands += q;
-    else {
-      if (!isCommander(c)) {
-        const rs = c.role ? [c.role] : (c.roles || []);
-        for (const r of rs) roleCounts[r] = (roleCounts[r] || 0) + q;
-      }
-      if (typeof c.cmc === 'number') { mvSum += c.cmc * q; mvN += q; }
-    }
+    else if (typeof c.cmc === 'number') { mvSum += c.cmc * q; mvN += q; }
     if (c.game_changer) gc += q;
     for (const ci of (c.color_identity || [])) colors.add(ci);
     if (ident && (c.color_identity || []).some(x => !ident.has(x))) offColor.push(c.name);
@@ -993,18 +990,17 @@ function buildTargets() {
   return t;
 }
 // each non-commander card counts once, in its first matching section - same rule as the server
+// Sections count each card once, by the group it sits in on the canvas (your role if you set
+// one, else its first concrete role) - so the bars, the canvas groups and the stats line agree.
+// Every group other than the five named sections is gameplan.
+const SECTION_OF = { Lands: 'lands', Ramp: 'ramp', Draw: 'draw', 'Target Interaction': 'interaction',
+                     'Mass Interaction': 'interaction', Protection: 'protection' };
 function buildCounts() {
-  const cmdrs = (deck.commander || []).map(lc);
   const n = { gameplan: 0, ramp: 0, draw: 0, interaction: 0, protection: 0, lands: 0 };
   for (const c of deck.cards) {
-    if (cmdrs.includes(lc(c.name))) continue;
-    const q = c.qty || 1, r = new Set(c.roles || []);
-    if (c.is_land) n.lands += q;
-    else if (r.has('Ramp')) n.ramp += q;
-    else if (r.has('Draw')) n.draw += q;
-    else if (r.has('Target Interaction') || r.has('Mass Interaction')) n.interaction += q;
-    else if (r.has('Protection')) n.protection += q;
-    else n.gameplan += q;
+    const g = cardGroup(c);
+    if (g === 'Commander') continue;
+    n[SECTION_OF[g] || 'gameplan'] += c.qty || 1;
   }
   return n;
 }
@@ -1024,6 +1020,7 @@ function buildPanel(comp) {
   for (const [k, label] of BUILD_SECTIONS) {
     const row = document.createElement('div'); row.className = 'bp-row' + (have[k] >= t[k] ? ' full' : '');
     const pct = t[k] ? Math.min(100, Math.round(100 * have[k] / t[k])) : 100;
+    if (k === 'gameplan') row.title = 'Every card outside the other five sections: engine, payoffs, tutors, recursion, threats, finishers, other';
     row.innerHTML = `<span class="bp-label">${label}</span><span class="bp-bar"><i style="width:${pct}%"></i></span><span class="bp-num">${have[k]}/</span>`;
     if (buildEditing) {
       const inp = document.createElement('input'); inp.type = 'number'; inp.min = 0; inp.max = 99; inp.value = t[k];
