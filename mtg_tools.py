@@ -366,6 +366,8 @@ async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: 
                 type_line = card.get("type_line", "")
                 ci = "".join(card.get("color_identity", [])) or "C"
                 gc = " [GAME CHANGER]" if card.get("game_changer") else ""
+                if (card.get("legalities") or {}).get("commander") == "banned":
+                    gc += " [BANNED IN COMMANDER]"
                 rank = card.get("edhrec_rank")
                 pop = f" · EDHREC ~{rank} ({_pop_label(rank)})" if rank else " · EDHREC unranked"
                 lines.append(f"**{name}** {mana} - {type_line} [id:{ci}]{gc}{pop}")
@@ -426,6 +428,9 @@ async def scryfall_get_card(name: str, commander_identity: str = None) -> str:
                 return f"Could not find card: {name}"
 
             lines = []
+            if (card.get("legalities") or {}).get("commander") == "banned":
+                lines.append(f"[BANNED IN COMMANDER] {card.get('name')} is on the Commander ban list - "
+                             "never recommend it.")
             if others:
                 lines.append(
                     f"(\"{name}\" matches several cards - showing the most-played, {card.get('name')}. "
@@ -1099,6 +1104,8 @@ async def scryfall_get_decklist_details(decklist_text: str = None, decklist_url:
             ot = c.get("oracle_text", "")
         pt = f" [{c.get('power')}/{c.get('toughness')}]" if c.get("power") is not None else ""
         gc = " [GAME CHANGER]" if c.get("game_changer") else ""
+        if (c.get("legalities") or {}).get("commander") == "banned":
+            gc += " [BANNED IN COMMANDER]"
         return f"[{ci}] {name}{gc} {cost} - {tl}{pt}: {' '.join(ot.split())}"
 
     composition = f"MANA BASE: {land_count} land sources (authoritative count - use this, don't recount)."

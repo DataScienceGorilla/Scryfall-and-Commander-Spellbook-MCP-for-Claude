@@ -507,8 +507,13 @@ how many GAME CHANGERS the deck already runs.
   over the cap silently moves the deck UP a bracket - do not do that unless the player explicitly
   wants to move up. "Ceiling goes up / toward bracket 4" is a bracket VIOLATION for a Bracket-3
   deck, not a free upgrade.
-- When an add is marked [GAME CHANGER], SAY SO and account for it against the budget. Prefer
-  non-game-changer answers that fit the bracket; reach for a game changer only when there's room.
+- When you recommend an add that's a Game Changer, note it once, briefly, where you recommend it
+  ("a Game Changer - your 3rd of 3") and count it against the cap. Prefer non-game-changer answers
+  that fit the bracket; reach for a game changer only when there's room.
+- DON'T OVER-ANNOUNCE. Bracket and legality checks are your homework, not the answer: don't tag every
+  card with its Game Changer / banned / legal status, don't restate the GC count every turn, and don't
+  narrate that you checked. Mention status only when it changes the decision (a GC pick against the
+  cap, a banned or off-bracket card already IN their deck, or when they ask).
 - RESPECT INTENTIONAL OMISSIONS. A well-built deck that lacks an obvious staple (Rhystic Study,
   Smothering Tithe, Cyclonic Rift, Sol Ring-tier cards) very likely omitted it ON PURPOSE -
   bracket caps, pod agreements, budget, or taste. Don't reflexively re-suggest the format's most
@@ -927,11 +932,46 @@ def _short_input(tool_input: dict) -> str:
 MAX_IDENTITY_RETRIES = 2  # regenerate the answer this many times if off-color cards slip in
 
 
+# The Commander ban list and the Game Changers list, fetched from Scryfall at startup and once a
+# day after. Appended to the static system prompt (changes ~never, so it stays cached).
+FORMAT_LISTS_TEXT = ""
+
+
+async def _load_format_lists() -> None:
+    global FORMAT_LISTS_TEXT
+
+    async def names(q: str) -> list[str] | None:
+        out, page = [], 1
+        while page <= 3:
+            data = await _scryfall_get("/cards/search", {"q": q, "order": "name", "page": page})
+            if data is None:
+                return None
+            out += [c["name"] for c in data.get("data") or []]
+            if not data.get("has_more"):
+                return out
+            page += 1
+        return out
+
+    banned, gcs = await names("banned:commander"), await names("is:gamechanger")
+    if not banned or not gcs:
+        print("Format lists: Scryfall fetch failed - keeping the previous lists.", flush=True)
+        return
+    FORMAT_LISTS_TEXT = (
+        "\n\n# FORMAT LISTS (current, from Scryfall)\n"
+        f"BANNED IN COMMANDER ({len(banned)}) - never recommend, propose or build with these: "
+        + "; ".join(banned) + ".\n"
+        f"GAME CHANGERS ({len(gcs)}, the official list that sets bracket caps): " + "; ".join(gcs) + ".\n"
+        "Use these lists silently: simply don't suggest banned cards, and count Game Changers against the "
+        "bracket. Don't narrate checks (\"none of these are banned\", \"checking game-changer status\").")
+    print(f"Format lists loaded: {len(banned)} banned, {len(gcs)} game changers.", flush=True)
+
+
 def _cached_system(memory_block: str = "", deck_block: str = ""):
     """System prompt + optional SESSION MEMORY + CURRENT DECK, each its own cache breakpoint,
     ordered most- to least-stable (static prompt -> memory, which changes every ~N turns ->
     deck, which changes on edits). An edit re-caches only what follows it."""
-    blocks = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    blocks = [{"type": "text", "text": SYSTEM_PROMPT + FORMAT_LISTS_TEXT,
+               "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
     for text in (memory_block, deck_block):
         if text:
             blocks.append({"type": "text", "text": text, "cache_control": {"type": "ephemeral"}})
@@ -1624,7 +1664,16 @@ async def lifespan(app: FastAPI):
             print(f"Theory preload error: {e}", flush=True)
         print("RAG preload complete.", flush=True)
 
+    async def _format_lists_daily():
+        while True:
+            try:
+                await _load_format_lists()
+            except Exception as e:
+                print(f"Format lists error: {e}", flush=True)
+            await asyncio.sleep(24 * 3600)
+
     asyncio.create_task(_preload())
+    asyncio.create_task(_format_lists_daily())
     yield
 
 
