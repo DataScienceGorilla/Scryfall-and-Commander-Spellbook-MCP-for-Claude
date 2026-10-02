@@ -104,6 +104,13 @@ def main():
           r.text[:80])
     r = c.get("/card/search?q=krenko")
     check("/card/search", r.status_code == 200 and "Krenko, Mob Boss" in r.json().get("names", []))
+    r = c.post("/cards", json={"names": ["Sol Ring", "Fire // Ice", "craterhof", "Not A Real Card Xyz"]})
+    got = r.json().get("cards", {}) if r.status_code == 200 else {}
+    check("/cards batch (exact, split card, typo, miss)",
+          (got.get("Sol Ring") or {}).get("name") == "Sol Ring"
+          and (got.get("Fire // Ice") or {}).get("name") == "Fire // Ice"
+          and (got.get("craterhof") or {}).get("name") == "Craterhoof Behemoth"
+          and got.get("Not A Real Card Xyz") is None, str(got)[:200])
     r = c.post("/deck/parse", json={"text": "1 Sol Ring\n1 Glasspool Mimic // Glasspool Shore\n2 Island"})
     d = r.json()
     check("/deck/parse (incl. MDFC)", r.status_code == 200 and len(d.get("cards", [])) == 3 and not d.get("not_found"),
