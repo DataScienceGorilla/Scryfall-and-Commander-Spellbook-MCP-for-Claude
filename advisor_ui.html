@@ -218,7 +218,7 @@
   .role-group { margin-bottom: var(--s4); }
   .role-group-title { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
     color: var(--muted); margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
-  .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min, 105px), 100%), 1fr)); gap: var(--s2); align-content: start; }
+  .role-grid { display: grid; grid-template-columns: repeat(auto-fill, min(var(--card-min, 105px), 100%)); gap: var(--s2); align-content: start; }
   .card-tile { position: relative; border-radius: var(--radius-card); overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); transition: transform .12s, box-shadow .12s; aspect-ratio: 63/88; }
   .card-tile.offcolor { box-shadow: 0 0 0 2px var(--danger); }
   .card-tile.offcolor::after { content: "⚠ off-color"; position: absolute; top: 6px; left: 6px; right: 6px; text-align: center; background: rgba(217,86,79,.92); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 4px; border-radius: var(--radius); pointer-events: none; }
@@ -2057,7 +2057,12 @@ applyPrefs();
   document.body.appendChild(pop);
   const card = pop.querySelector('#setCard');
   const paint = () => {
-    card.value = prefs.cardMin;
+    // the slider tops out at the deck panel's width - past that a card can't get any bigger
+    const cardsEl = document.getElementById('cards');
+    const cs = getComputedStyle(cardsEl);
+    const avail = cardsEl.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    card.max = Math.max(150, Math.floor(avail / 5) * 5);
+    card.value = Math.min(prefs.cardMin, card.max);
     pop.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', !!prefs.proseSerif === (b.dataset.serif === '1')));
   };
   card.addEventListener('input', () => { prefs.cardMin = Number(card.value); applyPrefs(); });
