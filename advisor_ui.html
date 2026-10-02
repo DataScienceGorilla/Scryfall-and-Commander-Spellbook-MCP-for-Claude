@@ -140,7 +140,10 @@
   .q-opt:hover:not(:disabled) { border-color: var(--accent); }
   .q-opt.sel { background: var(--chip); color: var(--accent); border-color: var(--accent); }
   .q-opt:disabled:not(.sel) { opacity: .45; }
-  .q-foot { display: flex; gap: 6px; margin-top: 8px; }
+  .q-foot { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .q-own-row { display: flex; gap: 6px; flex: 1; min-width: 220px; }
+  .q-own-row .q-own-input { flex: 1; margin: 0; }
+  .q-own { margin-top: 8px; font-size: 13px; color: var(--muted); font-style: italic; }
   @media (max-width: 560px) { .prop-thumb { width: 48px; } }
   .export-menu { position: absolute; z-index: 40; background: var(--panel-2); border: 1px solid var(--border);
     border-radius: var(--radius); box-shadow: 0 10px 28px var(--shadow); padding: 4px; display: flex; flex-direction: column; min-width: 240px; }
@@ -1735,10 +1738,30 @@ function questionCard(q) {
       go.onclick = () => { if (picked.size) answerQuestion(q, [...picked].join(' · '), box); };
       foot.appendChild(go);
     }
+    // "Something else" opens an answer box right in the card (typing in the chat box works too)
     const other = document.createElement('button'); other.className = 'prop-btn'; other.textContent = 'Something else…';
-    other.onclick = () => { inputEl.focus(); };
+    other.onclick = () => {
+      other.remove();
+      const own = document.createElement('div'); own.className = 'q-own-row';
+      const inp = document.createElement('input'); inp.type = 'search'; inp.className = 'prop-note q-own-input';
+      inp.placeholder = 'Your answer…';
+      for (const a of NO_AUTOFILL.match(/[\w-]+(="[^"]*")?/g)) {
+        const [k, v] = a.split('='); inp.setAttribute(k, v ? v.replace(/"/g, '') : '');
+      }
+      const go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Send';
+      const submit = () => { const v = inp.value.trim(); if (v) answerQuestion(q, v, box); };
+      go.onclick = submit;
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+      own.append(inp, go);
+      foot.appendChild(own);
+      inp.focus();
+    };
     foot.appendChild(other);
     box.appendChild(foot);
+  } else if (!(q.options || []).some(o => String(q.answer).split(' · ').includes(o))) {
+    const own = document.createElement('div'); own.className = 'q-own';
+    own.textContent = 'You answered: ' + q.answer;
+    box.appendChild(own);
   }
   return box;
 }
