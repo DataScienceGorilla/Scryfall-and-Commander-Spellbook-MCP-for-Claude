@@ -128,6 +128,8 @@
     color: var(--muted); padding: 6px 2px; }
   .auto-continue .ac-text { flex: 1; min-width: 180px; }
   .q-card { background: var(--panel-2); border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px; }
+  .build-offer .q-quote { font-style: italic; color: var(--muted); font-size: 13px; margin: 6px 0 10px; }
+  .build-offer .prop-reason { font-size: 13.5px; }
   .sd-card { display: flex; gap: 12px; align-items: flex-start; }
   .sd-card .prop-body { flex: 1; min-width: 0; }
   .sd-card .prop-actions { margin-top: 8px; }
@@ -1047,20 +1049,23 @@ async function fillBasics(n) {
 }
 // Entry point: an empty deck in build mode + the brief (commander picker); saving it starts
 // the advisor on the first section.
-function startBuild() {
+function startBuild(opts = {}) {
   if (streaming) { showToast('Wait for the current answer to finish'); return; }
   deck = { commander: [], bracket: null, cards: [], not_found: [], build: { targets: null } };
+  if (opts.ask) deck.intake = { plan: opts.ask, styles: [], keep: [], avoid: [], avoidNote: '', budget: '', notes: '' };
   renderDeck();
   openIntake({ build: true }).then(saved => {
     if (!saved || !(deck.commander || []).length) {
       deck = null; undoStack = []; deckChanged(); renderDeck();
       if (saved) showToast('Pick a commander to start a build');
+      if (opts.ask && !inputEl.value) inputEl.value = opts.ask;  // their message, back in the box
       return;
     }
     deck.cards = deck.cards.filter(c => (deck.commander || []).some(n => lc(n) === lc(c.name)));
     deckChanged();
-    inputEl.value = `Let's build this deck from scratch with ${deck.commander.join(' + ')} as commander. Start with the gameplan.`;
-    send();
+    inputEl.value = `Let's build this deck from scratch with ${deck.commander.join(' + ')} as commander. Start with the gameplan.`
+      + (opts.ask ? `\n\nWhat I originally asked: ${opts.ask}` : '');
+    send(true);
   });
 }
 
@@ -1582,7 +1587,7 @@ function startDeckCard(sd, entry, bubble) {
       deckChanged();
       renderTurnExtras(entry, bubble);
       inputEl.value = `Deck created with ${names.join(' + ')} as commander. Start filling it in.`;
-      send();
+      send(true);
     };
     const no = document.createElement('button'); no.className = 'prop-btn'; no.textContent = 'Not yet';
     no.onclick = () => { sd.status = 'declined'; saveState(); renderTurnExtras(entry, bubble); };
@@ -1690,7 +1695,7 @@ function maybeAutoContinue(entry, bubble) {
     inputEl.value = building()
       ? `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and move on to the next section.`
       : `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and keep going.`;
-    send();
+    send(true);
   };
   timer = setInterval(() => { if (!paint() && --left <= 0) go(); else paint(); }, 1000);
   paint();
@@ -1734,7 +1739,7 @@ function answerQuestion(q, answer, box) {
   saveState();
   if (box) box.replaceWith(questionCard(q));  // lock the buttons, show the pick
   inputEl.value = answer;
-  send();
+  send(true);
 }
 
 // ---- card editor modal ----
@@ -2120,9 +2125,34 @@ function flashCard(name) {
 // ---- send / stream ----
 let streaming = false;
 
-async function send() {
+// "I want to build a ... deck" with no deck loaded -> offer the guided build first (once per chat).
+const BUILD_INTENT = /\bfrom scratch\b|\b(build|building|brew|brewing|make|making|start|starting|put together|create|creating)\b[^.?!\n]{0,60}\b(deck|commander|edh|list)\b|\bnew (deck|build|commander deck)\b|\b(build|brew)(ing)?\s+(something\s+|a\s+deck\s+)?(around|with)\b/i;
+function offerBuild(text) {
+  chats[activeId].buildOffered = true; saveState();
+  const card = document.createElement('div'); card.className = 'q-card build-offer';
+  card.innerHTML = `<div class="q-title">Building a new deck?</div>
+    <div class="prop-reason">Build it step by step: pick the commander and goals, and the advisor fills the deck in
+      the panel one section at a time while you accept or reject each card.</div>
+    <div class="q-quote"></div><div class="q-options"></div>`;
+  card.querySelector('.q-quote').textContent = '“' + (text.length > 160 ? text.slice(0, 157) + '…' : text) + '”';
+  const go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Build from scratch';
+  go.onclick = () => { card.remove(); startBuild({ ask: text }); };
+  const chat = document.createElement('button'); chat.className = 'prop-btn'; chat.textContent = 'Just chat';
+  chat.onclick = () => { card.remove(); inputEl.value = text; send(true); };
+  card.querySelector('.q-options').append(go, chat);
+  messagesEl.appendChild(card);
+  scrollToBottom();
+}
+
+async function send(force) {
   const text = inputEl.value.trim();
   if (!text || streaming) return;
+  if (force !== true && !deck && chats[activeId] && !chats[activeId].buildOffered
+      && !looksLikeDeck(text) && BUILD_INTENT.test(text)) {
+    inputEl.value = ''; inputEl.style.height = 'auto';
+    offerBuild(text);
+    return;
+  }
   inputEl.value = ''; inputEl.style.height = 'auto';
   // Bind this stream to the chat that started it, so switching tabs mid-stream
   // never misfiles the answer. All persistence targets originConv; DOM updates
