@@ -436,7 +436,7 @@
   }
 
   /* ---- Journal layer: an alchemist's notebook. Warm sepia ink, grainy stained paper,
-     old-print display type, ornamental rules and inked buttons. Original line art only. ---- */
+     old-print display type, ornamental rules and inked buttons. ---- */
   :root {
     --bg: #ead9b2; --panel: #f0e3c0; --panel-2: #e4d1a4; --border: #c4a674;
     --text: #2b1d10; --ink-strong: #1d1309; --muted: #6c5434;
@@ -444,7 +444,7 @@
     --ink-line: #5a4127;
     --shadow: rgba(70, 45, 15, .2);
     --font-display: 'IM Fell English', 'Cormorant Garamond', Georgia, serif;
-    --paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .32 0 0 0 0 .22 0 0 0 0 .08 0 0 0 .11 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='900'%3E%3Cfilter id='s'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.006' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .45 0 0 0 0 .3 0 0 0 0 .1 0 0 0 .55 -.22'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23s)'/%3E%3C/svg%3E"),
+    --paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .32 0 0 0 0 .22 0 0 0 0 .08 0 0 0 .11 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1000' preserveAspectRatio='none'%3E%3Cfilter id='s' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.006' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .45 0 0 0 0 .3 0 0 0 0 .1 0 0 0 .55 -.22'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23s)'/%3E%3C/svg%3E") center / 100% 100% no-repeat,
              radial-gradient(ellipse at 50% 40%, transparent 55%, rgba(110, 72, 25, .22) 100%);
     --radius: 3px;
   }
@@ -457,8 +457,6 @@
   .dt-name { font-family: var(--font-display); font-weight: 400; font-size: 31px; }
   .bubble h3, .bubble h2 { font-family: var(--font-display); font-weight: 400; font-size: 23px; }
 
-  /* engraved apparatus at the foot of the chat page */
-  #messages { background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 420 240' fill='none' stroke='%235a4127' stroke-opacity='.16' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 232H414M18 238H402'/%3E%3Cpath d='M72 232L94 176M148 232L126 176M84 176H136M80 204H140'/%3E%3Cpath d='M110 198c-6-8-3-14 0-20c3 6 6 12 0 20z'/%3E%3Ccircle cx='110' cy='140' r='34'/%3E%3Cpath d='M101 107V68M119 107V68M95 68H125M95 63H125'/%3E%3Cpath d='M78 146c20 8 44 8 64 0M84 158c16 6 36 6 52 0M90 168c12 4 28 4 40 0'/%3E%3Ccircle cx='104' cy='132' r='3'/%3E%3Ccircle cx='116' cy='124' r='2'/%3E%3Ccircle cx='110' cy='114' r='1.5'/%3E%3Cpath d='M119 78C170 58 222 74 262 128M119 86C166 68 214 82 255 134'/%3E%3Cpath d='M255 134l7-6l14 18c22-2 44 12 48 34c4 26-14 46-40 48c-26 2-46-16-46-40c0-16 8-28 22-36z'/%3E%3Cpath d='M244 196c16 8 40 10 76 0M250 210c14 6 34 7 64 0'/%3E%3Cpath d='M350 232V176c0-10 8-14 10-18V136h12v22c2 4 10 8 10 18V232z'/%3E%3Cpath d='M358 136V126h16V136M354 196H378M354 204H378'/%3E%3Cpath d='M394 232V200h10V232M392 200H406M396 194h6v6'/%3E%3Cpath d='M22 210h46c0 14-10 22-23 22s-23-8-23-22zM50 210l12-30'/%3E%3C/svg%3E") no-repeat center bottom 18px / min(460px, 78%) auto; }
 
   /* section titles become ruled with a diamond at each inner end */
   .role-group-title { display: flex; align-items: center; gap: 10px; border-bottom: none; padding-bottom: 0;
