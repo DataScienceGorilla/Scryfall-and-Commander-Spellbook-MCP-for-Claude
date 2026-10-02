@@ -36,7 +36,8 @@
     --shadow: rgba(50, 35, 10, .14);
     --font-body: 'Karla', system-ui, sans-serif;
     --font-head: 'Cormorant Garamond', Georgia, serif;
-    --radius: 2px;            /* near-square: paper and rules, not app cards */
+    --radius: 6px;            /* one subtle radius for all UI */
+    --s1: 4px; --s2: 8px; --s3: 16px; --s4: 24px; --s5: 32px;   /* spacing scale */
     --radius-card: 5px;       /* card art keeps a real card's corner */
   }
   * { box-sizing: border-box; }
@@ -64,9 +65,10 @@
 
   /* Chat pane */
   #chat { flex: 1.35; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
-  #messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-  .msg { max-width: 92%; }
-  .msg .role { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 5px; }
+  #messages { flex: 1; overflow-y: auto; padding: var(--s4) var(--s5); display: flex; flex-direction: column; gap: var(--s5); }
+  .msg { max-width: min(100%, 74ch); }
+  .msg.user { max-width: min(80%, 60ch); }
+  .msg .role { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }  /* screen readers only */
   .msg.user { align-self: flex-end; }
   .msg.user .bubble { background: var(--user); border: 1px solid var(--border); white-space: pre-wrap; }
   .msg.assistant .bubble { background: transparent; border: none; border-left: 2px solid var(--accent);
@@ -195,12 +197,13 @@
   .lightbox .lb-link:hover { text-decoration: underline; }
 
   /* Input */
-  #composer { border-top: 1px solid var(--border); padding: 12px; display: flex; gap: 10px; background: var(--panel); }
+  #composer { border-top: 1px solid var(--border); padding: var(--s3) var(--s5); display: flex; gap: var(--s2); align-items: flex-end; background: var(--panel); }
   #composer textarea {
     flex: 1; resize: none; background: var(--panel-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 13px;
-    font: inherit; max-height: 160px; min-height: 44px;
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 14px;
+    font: inherit; line-height: 1.45; max-height: 200px; min-height: 46px; overflow-y: hidden;
   }
+  #send { height: 46px; }
   #composer textarea:focus { outline: none; border-color: var(--accent); }
   #send {
     background: var(--accent); color: var(--on-accent); border: none; border-radius: var(--radius);
@@ -211,11 +214,11 @@
   /* Canvas pane */
   #canvas { flex: 1; display: flex; flex-direction: column; min-width: 300px; background: var(--panel); }
   #canvas .canvas-head { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--muted); display:flex; align-items:center; gap:8px;}
-  #cards { flex: 1; overflow-y: auto; padding: 14px; }
-  .role-group { margin-bottom: 16px; }
+  #cards { flex: 1; overflow-y: auto; padding: var(--s4); }
+  .role-group { margin-bottom: var(--s4); }
   .role-group-title { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
     color: var(--muted); margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
-  .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; align-content: start; }
+  .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: var(--s2); align-content: start; }
   .card-tile { position: relative; border-radius: var(--radius-card); overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); transition: transform .12s, box-shadow .12s; aspect-ratio: 63/88; }
   .card-tile.offcolor { box-shadow: 0 0 0 2px var(--danger); }
   .card-tile.offcolor::after { content: "⚠ off-color"; position: absolute; top: 6px; left: 6px; right: 6px; text-align: center; background: rgba(217,86,79,.92); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 4px; border-radius: var(--radius); pointer-events: none; }
@@ -225,10 +228,22 @@
   .card-tile.gc { box-shadow: 0 0 0 2px var(--accent); }
   .card-tile .qty { position: absolute; bottom: 5px; right: 5px; background: rgba(0,0,0,.82); color: #fff;
     font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: var(--radius); pointer-events: none; }
-  .deck-head { padding: 4px 2px 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+  body.has-deck #canvas .canvas-head { display: none; }   /* the deck title replaces it */
+  .deck-title { margin-bottom: var(--s3); }
+  .dt-name { background: none; border: none; padding: 0; cursor: pointer; text-align: left; font-family: var(--font-head);
+    font-size: 28px; font-weight: 600; line-height: 1.15; color: var(--ink-strong); }
+  .dt-name:hover { color: var(--accent); }
+  .dt-name.empty { color: var(--muted); font-style: italic; }
+  .dt-sub { margin-top: var(--s1); font-size: 13px; color: var(--muted); letter-spacing: .02em; }
+  .deck-head { padding: var(--s3) 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin-bottom: var(--s4); }
+  .deck-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s3); }
+  .ds { display: flex; flex-direction: column; }
+  .ds-n { font-size: 22px; font-weight: 600; line-height: 1.1; color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+  .ds-n small { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .ds-l { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .deck-stat { font-size: 13px; color: var(--text); }
   .deck-stat b { color: var(--accent); }
-  .deck-roles { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .deck-roles { font-size: 12.5px; color: var(--muted); margin-top: var(--s3); }
   .card-tile a { text-decoration: none; color: inherit; display:block; }
   .card-tile .cap { display:none; }
   .card-tile.loading { aspect-ratio: 63/88; display:flex; align-items:center; justify-content:center; color: var(--muted); font-size:12px; }
@@ -236,16 +251,17 @@
   .empty-note { color: var(--muted); font-size: 13px; padding: 8px; grid-column: 1/-1; }
 
   /* ---- Deck editor (workbench phase 2) ---- */
-  .deck-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .deck-toolbar { display: flex; gap: var(--s2); align-items: center; margin-bottom: var(--s3); }
+  .deck-toolbar .tb-icon { font-size: 16px; padding: 4px 10px; }
   .deck-toolbar select, .deck-toolbar .tb-btn, .add-wrap input {
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 6px 9px; font: inherit; font-size: 13px;
   }
   .deck-toolbar select:focus, .add-wrap input:focus { outline: none; border-color: var(--accent); }
-  .deck-toolbar .tb-btn { cursor: pointer; color: var(--muted); }
+  .deck-toolbar .tb-btn { cursor: pointer; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
   .deck-toolbar .tb-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
   .deck-toolbar .tb-btn:disabled { opacity: .45; cursor: default; }
-  .add-wrap { position: relative; flex: 1 1 200px; min-width: 160px; }
+  .add-wrap { position: relative; flex: 1 1 auto; min-width: 120px; }
   .add-wrap input { width: 100%; }
   .ac-list { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30; margin: 0; padding: 4px;
     list-style: none; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius);
@@ -253,10 +269,12 @@
   .ac-list[hidden] { display: none; }
   .ac-list li { padding: 6px 9px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
   .ac-list li.sel, .ac-list li:hover { background: var(--user); color: var(--ink-strong); }
-  .deck-warns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
-  .deck-warn { font-size: 11.5px; padding: 2px 8px; border-radius: var(--radius); border: 1px solid var(--danger);
-    color: var(--danger-text); background: var(--danger-tint); }
-  .deck-warn.hint { border-color: var(--border); color: var(--muted); background: transparent; }
+  .deck-warns { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
+  .deck-warn { font-size: 13px; color: var(--danger-text); padding-left: var(--s3); position: relative; }
+  .deck-warn::before { content: ""; position: absolute; left: 2px; top: .55em; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--danger); }
+  .deck-warn.hint { color: var(--muted); }
+  .deck-warn.hint::before { background: var(--border); }
   .role-group.empty-group { display: none; }
   body.dragging .role-group.empty-group { display: block; }
   body.dragging .role-group .role-grid { min-height: 56px; border: 1px dashed var(--border); border-radius: var(--radius); padding: 4px; }
@@ -411,7 +429,7 @@
         </div>
       </div>
       <div id="composer">
-        <textarea id="input" placeholder="e.g. I'm building [[Krenko, Mob Boss]] goblins for bracket 3, here's my list..." rows="1"></textarea>
+        <textarea id="input" placeholder="Ask anything, or paste a decklist" rows="1"></textarea>
         <button id="send">Send</button>
       </div>
     </section>
@@ -830,12 +848,9 @@ function buildToolbar() {
   tb.innerHTML =
     '<div class="add-wrap"><input type="search" id="addCardInput" placeholder="Add a card…" ' + NO_AUTOFILL + '>'
     + '<ul class="ac-list" hidden></ul></div>'
-    + '<select id="cmdrSelect" title="Commander"></select>'
-    + '<select id="bracketSelect" title="Bracket"><option value="">Bracket…</option>'
-    + Object.entries(BRACKETS).map(([n, l]) => `<option value="${n}">B${n} · ${l}</option>`).join('') + '</select>'
-    + '<button class="tb-btn" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>'
-    + '<button class="tb-btn" id="copyDeckBtn" title="Copy the decklist in a format your deckbuilder imports">⧉ Export list ▾</button>'
-    + '<button class="tb-btn" id="briefBtn" title="Commander, bracket, goals and limits for the advisor">📝 Brief</button>';
+    + '<button class="tb-btn" id="briefBtn" title="Commander, bracket, goals and limits for the advisor">Brief</button>'
+    + '<button class="tb-btn" id="copyDeckBtn" title="Copy the decklist in a format your deckbuilder imports">Export ▾</button>'
+    + '<button class="tb-btn tb-icon" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>';
   const input = tb.querySelector('#addCardInput');
   const list = tb.querySelector('.ac-list');
   let acTimer = null, acItems = [], acSel = -1, acSeq = 0;
@@ -876,34 +891,29 @@ function buildToolbar() {
   });
   input.addEventListener('blur', () => setTimeout(closeAc, 120));
 
-  tb.querySelector('#cmdrSelect').addEventListener('change', (e) => {
-    pushUndo();
-    deck.commander = e.target.value ? [e.target.value] : [];
-    deckChanged();
-  });
-  tb.querySelector('#bracketSelect').addEventListener('change', (e) => {
-    pushUndo();
-    deck.bracket = e.target.value ? Number(e.target.value) : null;
-    deckChanged();
-  });
   tb.querySelector('#undoBtn').addEventListener('click', undo);
   tb.querySelector('#copyDeckBtn').addEventListener('click', (e) => toggleExportMenu(e.currentTarget));
   tb.querySelector('#briefBtn').addEventListener('click', () => openIntake());
   return tb;
 }
 function syncToolbar() {
-  const sel = toolbarEl.querySelector('#cmdrSelect');
-  const cmdrs = deck.commander || [];
-  const candidates = deck.cards.filter(c => canCommand(c) || isCommander(c)).map(c => c.name).sort();
-  sel.innerHTML = '';
-  const none = document.createElement('option'); none.value = ''; none.textContent = 'Commander…'; sel.appendChild(none);
-  for (const n of candidates) { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
-  if (cmdrs.length > 1) {  // partners: show them together, picking one from the list replaces both
-    const o = document.createElement('option'); o.value = cmdrs[0]; o.textContent = cmdrs.join(' + ');
-    o.selected = true; sel.appendChild(o);
-  } else sel.value = cmdrs[0] || '';
-  toolbarEl.querySelector('#bracketSelect').value = deck.bracket || '';
   toolbarEl.querySelector('#undoBtn').disabled = !undoStack.length;
+}
+// Deck title: the commander is the deck's name. Clicking it opens the Brief, where the
+// commander, bracket and goals are set.
+function deckTitleBlock(comp) {
+  const t = document.createElement('div'); t.className = 'deck-title';
+  const cmdrs = deck.commander || [];
+  const name = document.createElement('button'); name.type = 'button';
+  name.className = 'dt-name' + (cmdrs.length ? '' : ' empty');
+  name.textContent = cmdrs.length ? cmdrs.join(' + ') : 'Choose a commander';
+  name.title = 'Open the deck brief';
+  name.onclick = () => openIntake();
+  const sub = document.createElement('div'); sub.className = 'dt-sub';
+  sub.textContent = [deck.bracket ? `Bracket ${deck.bracket} · ${BRACKETS[deck.bracket]}` : 'No bracket set',
+                     comp.colors.join('') || 'Colorless'].join('  ·  ');
+  t.append(name, sub);
+  return t;
 }
 
 function renderDeck() {
@@ -913,25 +923,29 @@ function renderDeck() {
   const scroll = cardsEl.scrollTop;
   const note = mentionView.querySelector('.empty-note');
   if (note) note.remove();
+  const comp = deckComposition();
   if (!toolbarEl) { deckView.innerHTML = ''; toolbarEl = buildToolbar(); deckView.appendChild(toolbarEl); }
   syncToolbar();
-  // everything below the toolbar is rebuilt on each change
+  // the title sits above the (persistent) toolbar; everything below it is rebuilt on each change
+  const oldTitle = deckView.querySelector('.deck-title');
+  if (oldTitle) oldTitle.remove();
+  deckView.insertBefore(deckTitleBlock(comp), toolbarEl);
   while (deckView.lastChild !== toolbarEl) deckView.removeChild(deckView.lastChild);
 
-  const comp = deckComposition();
   const head = document.createElement('div');
   head.className = 'deck-head';
-  const roleStr = DECK_ROLES.filter(r => comp.roleCounts[r]).map(r => `${r} ${comp.roleCounts[r]}`).join(' · ');
+  const roleStr = DECK_ROLES.filter(r => comp.roleCounts[r]).map(r => `${r} ${comp.roleCounts[r]}`).join('  ·  ');
   const cap = GC_CAP[deck.bracket];
+  const stat = (n, of, label) => `<div class="ds"><span class="ds-n">${n}${of !== undefined ? `<small>/${of}</small>` : ''}</span><span class="ds-l">${label}</span></div>`;
   head.innerHTML =
-    `<div class="deck-stat"><b>${comp.total}</b>/100 cards · <b>${comp.lands}</b> lands · avg MV <b>${comp.avgMv.toFixed(2)}</b> · `
-    + `${comp.colors.join('') || 'C'} · <b>${comp.gc}</b>${cap !== undefined ? '/' + cap : ''} game changer${comp.gc === 1 ? '' : 's'}</div>`
+    `<div class="deck-stats">${stat(comp.total, 100, 'cards')}${stat(comp.lands, undefined, 'lands')}`
+    + `${stat(comp.avgMv.toFixed(2), undefined, 'avg MV')}${stat(comp.gc, cap, 'game changers')}</div>`
     + (roleStr ? `<div class="deck-roles">${roleStr}</div>` : '');
-  const warns = document.createElement('div'); warns.className = 'deck-warns';
-  const warn = (text, hint) => { const w = document.createElement('span'); w.className = 'deck-warn' + (hint ? ' hint' : ''); w.textContent = text; warns.appendChild(w); };
+  const warns = document.createElement('ul'); warns.className = 'deck-warns';
+  const warn = (text, hint) => { const w = document.createElement('li'); w.className = 'deck-warn' + (hint ? ' hint' : ''); w.textContent = text; warns.appendChild(w); };
   if (!deck.cards.length) warn('Empty deck - add cards with the search box, or paste a list in chat', true);
   else {
-    if (!(deck.commander || []).length) warn('No commander set - open 📝 Brief or pick one above', true);
+    if (!(deck.commander || []).length) warn('No commander yet - click the title to choose one', true);
     for (const n of deck.commander || []) {
       const c = deckFind(n);
       if (c && !canCommand(c)) warn(`${c.name} can't normally be a commander`);
@@ -1560,7 +1574,9 @@ function evaluateTile(entry) {
 // ---- textarea auto-grow ----
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
+  // scrollbar only once the text is taller than the box can grow
+  inputEl.style.overflowY = inputEl.scrollHeight > 200 ? 'auto' : 'hidden';
 });
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
