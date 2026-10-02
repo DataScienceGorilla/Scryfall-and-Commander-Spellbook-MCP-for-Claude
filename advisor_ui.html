@@ -70,6 +70,8 @@
   .msg .role { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }  /* screen readers only */
   .msg.user { align-self: flex-end; }
   .msg.user .bubble { background: var(--user); border: 1px solid var(--border); white-space: pre-wrap; }
+  .msg.assistant .bubble { background: transparent; border: none; border-left: 2px solid var(--accent);
+    border-radius: 0; padding: 2px 0 2px 18px; }
   .bubble {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 12px 15px; white-space: normal; word-wrap: break-word;
