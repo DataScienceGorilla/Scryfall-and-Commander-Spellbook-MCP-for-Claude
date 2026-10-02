@@ -7,6 +7,13 @@
       "runtimeArgs": ["-m", "uvicorn", "advisor_app:app", "--host", "127.0.0.1", "--port", "8000"],
       "port": 8000,
       "autoPort": false
+    },
+    {
+      "name": "advisor-dev",
+      "runtimeExecutable": "C:/Users/brian/AppData/Local/Programs/Python/Python312/python.exe",
+      "runtimeArgs": ["dev_server.py"],
+      "port": 8001,
+      "autoPort": false
     }
   ]
 }

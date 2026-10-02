@@ -61,11 +61,14 @@
   .bubble li { margin: 3px 0; }
   .bubble a { color: var(--accent-2); }
 
+  /* Card names are pills, not underlines: names with commas ("Braids, Cabal Minion") stay one
+     visual unit, and the list's own commas/periods clearly sit between pills. */
   .chip {
-    display: inline; color: var(--accent); border-bottom: 1px dotted var(--chip-border);
-    cursor: pointer; font-weight: 550;
+    display: inline; color: var(--accent); cursor: pointer; font-weight: 550;
+    background: rgba(201,150,63,.13); border-radius: 4px; padding: 0 4px;
+    -webkit-box-decoration-break: clone; box-decoration-break: clone;
   }
-  .chip:hover { color: #f0c874; }
+  .chip:hover { color: #f0c874; background: rgba(201,150,63,.24); }
   /* Advisor proposals (accept/reject) + questions */
   .turn-extras { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
   .prop-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; text-transform: uppercase;
@@ -1603,8 +1606,13 @@ function showTooltip(name, e) {
 function renderTooltip(name) {
   if (ttCard !== keyFor(name)) return;
   const entry = cardCache.get(keyFor(name));
+  // Cards already in the deck aren't fetched again for the chat (they're on the right) -
+  // preview them from the deck's copy instead of waiting on a fetch that never happens.
+  const inDeck = !(entry && entry.img) && deckFind(name);
   if (entry && entry.img) {
     tooltip.innerHTML = `<img src="${entry.img}" alt="">`;
+  } else if (inDeck && inDeck.image) {
+    tooltip.innerHTML = `<img src="${escapeHtml(inDeck.image)}" alt="">`;
   } else if (entry && entry.status === 'missing') {
     tooltip.innerHTML = `<div class="tt-loading">"${name}" not found</div>`;
   } else {
