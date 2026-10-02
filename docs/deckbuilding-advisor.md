@@ -34,6 +34,10 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   brief (commander, bracket, gameplan, budget), then builds the 99 with the player section by section
   (ramp, draw, interaction, engine, payoffs, lands), proposing packages the player accepts/rejects
   into the empty deck. Builds on the Phase 3 proposal + question tools.
+  - [x] First step (2026-10-02): `start_deck` UI tool - with no deck, once the commander is settled the
+    advisor offers a "Start a deck with X" card; Create deck makes the deck object (commander, bracket,
+    plan) and auto-continues, then the advisor fills it with propose_changes batches. Still to do: a
+    fuller guided flow (brief questions up front, section-by-section progress toward 100).
 - [x] **Phase 4 - deck brief (commander picker + intake questionnaire)** (2026-09-30): a modal
   (`openIntake`) that opens when a pasted/linked deck arrives - *before* the advisor answers (`send()`
   awaits it) - and from the toolbar's 📝 Brief button. Commander: tiles of the deck's
