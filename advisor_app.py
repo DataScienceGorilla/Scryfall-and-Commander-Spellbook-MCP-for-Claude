@@ -903,30 +903,17 @@ async def _check_off_color(answer_text: str, identity_override: str | None = Non
     names = list(dict.fromkeys(_CARD_RE.findall(answer_text)))  # unique, in order
     if not names:
         return []
-
-    async with scryfall_client(
-        timeout=15.0, headers={"User-Agent": "mtg-advisor/1.0"}
-    ) as client:
-        sem = asyncio.Semaphore(6)
-
-        async def lookup(name):
-            async with sem:
-                try:
-                    r = await client.get(
-                        "https://api.scryfall.com/cards/named",
-                        params={"fuzzy": name},
-                    )
-                    if r.status_code != 200:
-                        return None
-                    ci = set(r.json().get("color_identity", []))
-                    if not ci.issubset(allowed):
-                        return {"name": name, "identity": "".join(sorted(ci)) or "C"}
-                except Exception:
-                    return None
-                return None
-
-        results = await asyncio.gather(*(lookup(n) for n in names))
-    return [r for r in results if r]
+    # one batched lookup for the whole answer, shared with the card panel's cache
+    await _batch_resolve(names)
+    off = []
+    for name in names:
+        slim = CARD_IMG_CACHE.get(name.lower())
+        if not slim:
+            continue
+        ci = set(slim.get("color_identity") or [])
+        if not ci.issubset(allowed):
+            off.append({"name": name, "identity": "".join(sorted(ci)) or "C"})
+    return off
 
 
 def _strip_off_color_lines(text: str, off_names: list) -> str:
@@ -1541,6 +1528,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 # Interactive tools put UI in front of the player (and can't run in the
                 # parallel pool - they emit events), so handle them first.
                 ui_results = {}
+                t_ui = time.monotonic()
                 for block in tool_blocks:
                     if block.name == "propose_changes":
                         if not deck:
@@ -1593,6 +1581,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     except Exception as e:
                         return f"Error running {block.name}: {e}"
 
+                if time.monotonic() - t_ui >= 1:
+                    timeline[-1] += f" -> ui {time.monotonic() - t_ui:.0f}s"
                 t_tools = time.monotonic()
                 tools_task = asyncio.ensure_future(asyncio.gather(*(_run(b) for b in tool_blocks)))
                 while not (await asyncio.wait({tools_task}, timeout=HEARTBEAT_SECS))[0]:
@@ -1622,10 +1612,13 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                 answer_text += "\n\n_(Answer cut off at the length limit.)_"
                 if STREAM_ANSWERS:
                     yield _sse("text", {"text": "\n\n_(Answer cut off at the length limit.)_"})
+            t_check = time.monotonic()
             try:
                 off = _not_in_deck(await _check_off_color(answer_text, deck_identity))
             except Exception:
                 off = None
+            if time.monotonic() - t_check >= 1:
+                timeline.append(f"color check {time.monotonic() - t_check:.0f}s")
 
             if STREAM_ANSWERS:
                 # Already on screen: strike any off-identity picks after the fact.
@@ -2023,7 +2016,10 @@ async def chat(request: Request, _: None = Depends(require_auth)):
                     yield _sse("memory", {"text": memory_text, "upTo": mem_upto})
                 except Exception as e:  # never block the answer on memory upkeep
                     log_activity(f"MEMORY failed: {e}")
+        t_prep = time.monotonic()
         deck_block, deck_text, deck_identity = await _deck_context(deck) if has_deck else ("", "", None)
+        if time.monotonic() - t_prep >= 2:
+            log_activity(f"PREP   sid={session_id[:8]} deck context {time.monotonic() - t_prep:.0f}s")
         if not has_deck and deck and isinstance(deck.get("build"), dict) and not deck["build"].get("done"):
             deck_block = "\n".join(  # a guided build that hasn't picked its commander yet
                 ["# CURRENT DECK (live from the player's deck editor)",
@@ -2314,13 +2310,9 @@ async def deck_card(name: str, _: None = Depends(require_auth)):
     return JSONResponse(card)
 
 
-@app.post("/cards")
-async def cards_batch(request: Request, _: None = Depends(require_auth)):
-    """Many /card lookups in one request: cached names answer at once, the rest go to
-    Scryfall's collection endpoint (75 per call); names it can't match fall back to the
-    fuzzy single-card resolver. -> {"cards": {requested name: card | null}}"""
-    body = await request.json()
-    names = [str(n).strip() for n in (body.get("names") or []) if str(n).strip()][:120]
+async def _batch_resolve(names: list[str]) -> None:
+    """Fill CARD_IMG_CACHE (and FULL_CARD_CACHE) for these names: Scryfall's collection endpoint
+    (75 per call) for exact names, the fuzzy resolver for the rest. Cached names cost nothing."""
     todo = [n for n in dict.fromkeys(names) if n.lower() not in CARD_IMG_CACHE]
     for i in range(0, len(todo), 75):
         chunk = todo[i:i + 75]
@@ -2346,6 +2338,16 @@ async def cards_batch(request: Request, _: None = Depends(require_auth)):
     rest = [n for n in todo if n.lower() not in CARD_IMG_CACHE]
     for n, slim in zip(rest, await asyncio.gather(*(_resolve_card(n) for n in rest))):
         CARD_IMG_CACHE[n.lower()] = slim
+
+
+@app.post("/cards")
+async def cards_batch(request: Request, _: None = Depends(require_auth)):
+    """Many /card lookups in one request: cached names answer at once, the rest go to
+    Scryfall's collection endpoint (75 per call); names it can't match fall back to the
+    fuzzy single-card resolver. -> {"cards": {requested name: card | null}}"""
+    body = await request.json()
+    names = [str(n).strip() for n in (body.get("names") or []) if str(n).strip()][:120]
+    await _batch_resolve(names)
     out = {}
     try:
         import role_index
