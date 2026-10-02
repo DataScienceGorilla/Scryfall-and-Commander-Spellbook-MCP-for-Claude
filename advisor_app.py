@@ -46,6 +46,7 @@ from mtg_tools import (
     get_rules_collection_async,
     SCRYFALL_API,
     SCRYFALL_HEADERS,
+    scryfall_client,
     _parse_decklist_to_main,
     parse_decklist,
     DECK_LINE_RE,
@@ -308,9 +309,24 @@ THAT is their current deck - use it; do not ask them to paste it again.
 - No deck loaded (or a quick question): answer in prose; don't call propose_changes.
 - BUILDING FROM SCRATCH (no deck in the editor, the player wants a new deck): settle the commander
   first (ask_player if it's open), then call start_deck so the deck exists in their editor - don't
-  just list a 99 in chat. After they create it, build it up with propose_changes adds in focused
-  batches (one part of the deck at a time: the engine/payoffs first, then ramp, draw, interaction,
-  lands), each batch building on what they accepted.
+  just list a 99 in chat.
+- BUILD MODE (the CURRENT DECK block says "BUILD MODE"): you're building the deck WITH the player,
+  section by section, toward the targets it lists. Each turn:
+  1. Fill the NEXT SECTION: one propose_changes batch of up to 10 adds for that section (fewer if
+     it needs fewer), best first, each with a one-line reason tied to the gameplan. Lead with the
+     GAMEPLAN section (it defines the deck: the engine, its enablers and payoffs, a few threats and
+     finishers), then ramp, draw, interaction, protection, and lands last.
+  2. Keep your prose short: a sentence or two on what this batch does for the deck and what's next.
+     No full deck review while building.
+  3. Respect the brief (bracket, Game Changer cap, budget, avoid list) and the curve - track the
+     mana values you've added so the deck doesn't get top-heavy.
+  4. LANDS: propose the nonbasic lands that earn their slot (fixing, utility that fits the plan, no
+     needless taplands), then fill with basics in one proposal per basic type using qty (e.g. add
+     Forest, qty 9). The player can also fill basics with one click from the panel.
+  5. If a section's direction is genuinely the player's call (which engine, which wincon), ask_player
+     first. When every target is met, give a short summary of the finished build and offer a review.
+  Sections are counted by each card's concrete role; it's fine if they don't match your contextual
+  read exactly - aim for the totals, and the total of 100.
 
 # USING YOUR TOOLS (judgment, not a fixed pipeline)
 Reach for the tools the request actually needs - do NOT run a full deck review on every message.
@@ -884,7 +900,7 @@ async def _check_off_color(answer_text: str, identity_override: str | None = Non
     if not names:
         return []
 
-    async with httpx.AsyncClient(
+    async with scryfall_client(
         timeout=15.0, headers={"User-Agent": "mtg-advisor/1.0"}
     ) as client:
         sem = asyncio.Semaphore(6)
@@ -1006,6 +1022,8 @@ UI_TOOLS = [
                         "properties": {
                             "add": {"type": "string", "description": "Exact card name to add (omit for a pure cut)."},
                             "cut": {"type": "string", "description": "Exact name of a card in the deck to cut (omit for a pure add)."},
+                            "qty": {"type": "integer", "minimum": 1, "maximum": 40,
+                                    "description": "Copies to add - only for basic lands (and other any-number cards)."},
                             "reason": {"type": "string", "description": "One or two sentences: why, in this deck."},
                         },
                         "required": ["reason"],
@@ -1102,6 +1120,12 @@ async def _validate_proposals(changes: list, deck: dict | None, identity: str | 
                     problem = f"add '{slim['name']}': already in the deck"
                 else:
                     item["add"] = slim["name"]
+                    try:
+                        q = int(ch.get("qty") or 1)
+                    except (TypeError, ValueError):
+                        q = 1
+                    if q > 1 and slim.get("any_qty"):
+                        item["qty"] = min(q, 40)
                     item["addCard"] = {k: slim.get(k) for k in ("name", "image", "type_line", "mana_cost",
                                                                 "color_identity", "game_changer", "scryfall_uri")}
         if problem:
@@ -1187,6 +1211,75 @@ def _brief_lines(intake) -> list[str]:
             "and limits: build your read and every recommendation around them):"] + rows
 
 
+# --- Guided build from scratch: section targets + progress ----------------------------------
+# Section targets follow the player's framework (Rebel Lily): ~38 lands and a 24-slot ramp+draw
+# budget split by commander mana value, plus interaction and protection; the rest is the
+# gameplan (engine, payoffs, threats, finishers). The page computes the same numbers.
+BUILD_SECTIONS = [("gameplan", "Gameplan (engine, payoffs, threats, finishers)"), ("ramp", "Ramp"),
+                  ("draw", "Card draw"), ("interaction", "Interaction (spot + mass)"),
+                  ("protection", "Protection"), ("lands", "Lands")]
+
+
+def _default_build_targets(deck: dict) -> dict:
+    cmdrs = {n.lower() for n in deck.get("commander") or []}
+    mvs = [float(c.get("cmc") or 0) for c in deck.get("cards") or [] if (c.get("name") or "").lower() in cmdrs]
+    mv = max(mvs) if mvs else 4
+    ramp, draw = (14, 10) if mv >= 5 else (12, 12) if mv >= 4 else (10, 14) if mv >= 3 else (8, 16)
+    t = {"lands": 38, "ramp": ramp, "draw": draw, "interaction": 10, "protection": 3}
+    t["gameplan"] = max(0, 100 - max(1, len(cmdrs)) - sum(t.values()))
+    return t
+
+
+def _build_counts(deck: dict) -> dict:
+    """Each non-commander card counts once, in its first matching section (lands, ramp, draw,
+    interaction, protection, else gameplan) - so the sections add up to the deck size."""
+    cmdrs = {n.lower() for n in deck.get("commander") or []}
+    n = dict.fromkeys(("gameplan", "ramp", "draw", "interaction", "protection", "lands"), 0)
+    for c in deck.get("cards") or []:
+        if (c.get("name") or "").lower() in cmdrs:
+            continue
+        q, roles = int(c.get("qty") or 1), set(c.get("roles") or [])
+        if c.get("is_land"):
+            n["lands"] += q
+        elif "Ramp" in roles:
+            n["ramp"] += q
+        elif "Draw" in roles:
+            n["draw"] += q
+        elif roles & {"Target Interaction", "Mass Interaction"}:
+            n["interaction"] += q
+        elif "Protection" in roles:
+            n["protection"] += q
+        else:
+            n["gameplan"] += q
+    return n
+
+
+def _build_lines(deck: dict) -> list[str]:
+    build = deck.get("build")
+    if not isinstance(build, dict) or build.get("done"):
+        return []
+    own = {k: int(v) for k, v in (build.get("targets") or {}).items()
+           if k in dict(BUILD_SECTIONS) and str(v).isdigit()}
+    targets = {**_default_build_targets(deck), **own}
+    if "gameplan" not in own:  # the gameplan takes whatever the player's other targets leave of 100
+        targets["gameplan"] = max(0, 100 - max(1, len(deck.get("commander") or []))
+                                  - sum(v for k, v in targets.items() if k != "gameplan"))
+    have = _build_counts(deck)
+    total = sum(int(c.get("qty") or 1) for c in deck.get("cards") or [])
+    rows, short = [], []
+    for key, label in BUILD_SECTIONS:
+        gap = targets[key] - have[key]
+        rows.append(f"- {label}: {have[key]}/{targets[key]}" + (f" (need {gap})" if gap > 0 else " (done)"))
+        if gap > 0:
+            short.append(key)
+    nxt = next((k for k in short if k != "lands"), "lands" if short else None)
+    return ["", "BUILD MODE - guided build from scratch (the player is building this deck with you; "
+            f"{total}/100 cards so far). Section targets (have/target):", *rows,
+            f"NEXT SECTION TO FILL: {dict(BUILD_SECTIONS)[nxt] if nxt else 'none - all targets met; '}"
+            + ("" if nxt else "review the whole list, then suggest the player finish the build."),
+            "Work one section per batch (see BUILD MODE in your instructions)."]
+
+
 async def _deck_context(deck) -> tuple[str, str, str | None]:
     """(CURRENT DECK block, canonical deck text, commander identity) - empty when no deck."""
     if not isinstance(deck, dict) or not deck.get("cards"):
@@ -1227,6 +1320,7 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
     if tagged:
         lines.append("Player tags: " + "; ".join(sorted(tagged)))
     lines += _brief_lines(deck.get("intake"))
+    lines += _build_lines(deck)
     lines += ["", "Decklist:", deck_text, "", details]
     return "\n".join(lines), deck_text, _deck_identity(deck)
 
@@ -1241,7 +1335,8 @@ def _decisions_summary(m: dict) -> str:
         rows = []
         for p in props:
             what = " / ".join(x for x in (f"cut {p.get('cut')}" if p.get("cut") else "",
-                                          f"add {p.get('add')}" if p.get("add") else "") if x)
+                                          (f"add {p.get('qty')}x {p.get('add')}" if (p.get("qty") or 1) > 1
+                                           else f"add {p.get('add')}") if p.get("add") else "") if x)
             why = " ".join(str(p.get("note") or "").split())[:240]
             rows.append(f"{what} -> {mark.get(p.get('status'), 'undecided')}"
                         + (f" (player's reason: \"{why}\")" if why else ""))
@@ -1980,7 +2075,7 @@ def _slim_card(data: dict) -> dict:
 async def _scryfall_get(path: str, params: dict) -> dict | None:
     """GET a Scryfall endpoint with correct headers, the concurrency cap, and one 429 retry."""
     async with _scry_sem:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with scryfall_client(timeout=10.0) as client:
             for attempt in range(2):
                 try:
                     r = await client.get(f"{SCRYFALL_API}{path}", params=params, headers=SCRYFALL_HEADERS)
@@ -2005,7 +2100,7 @@ async def _resolve_full_card(name: str) -> dict | None:
         card = await _scryfall_get("/cards/named", {"fuzzy": name})
         if card is None:  # ambiguous ("Krenko") or a heavier typo - search by popularity
             async with _scry_sem:
-                async with httpx.AsyncClient() as client:
+                async with scryfall_client() as client:
                     try:
                         card, _ = await resolve_card(client, name)
                     except httpx.HTTPError:
@@ -2073,7 +2168,7 @@ async def _apply_commander_eligibility(cards: list[dict]) -> None:
         q = COMMANDER_QUERY + " (" + " or ".join(
             f'!"{_collection_name(n).replace(chr(34), "")}"' for n in chunk) + ")"
         async with _scry_sem:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with scryfall_client(timeout=20.0) as client:
                 try:
                     r = await client.get(f"{SCRYFALL_API}/cards/search", params={"q": q},
                                          headers=SCRYFALL_HEADERS)
@@ -2119,7 +2214,7 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
         qty_by_name[e["card"]] = qty_by_name.get(e["card"], 0) + e["quantity"]
     names = list(qty_by_name)
     resolved, found_names = [], set()
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with scryfall_client(timeout=30.0) as client:
         for i in range(0, len(names), 75):
             chunk = names[i:i + 75]
             try:
@@ -2165,11 +2260,22 @@ AUTOCOMPLETE_CACHE: dict[str, list] = {}
 
 
 @app.get("/card/search")
-async def card_search(q: str, _: None = Depends(require_auth)):
-    """Card-name autocomplete for the deck editor's add-card box (Scryfall autocomplete, cached)."""
+async def card_search(q: str, commander: bool = False, _: None = Depends(require_auth)):
+    """Card-name autocomplete for the deck editor's add-card box (Scryfall autocomplete, cached).
+    commander=1: only cards that can lead a deck, most-played first (the build brief's picker)."""
     key = q.strip().lower()
     if len(key) < 2:
         return JSONResponse({"names": []})
+    if commander:
+        ckey = "cmdr:" + key
+        if ckey not in AUTOCOMPLETE_CACHE:
+            term = key.replace('"', "")
+            data = await _scryfall_get("/cards/search", {"q": f'name:"{term}" {COMMANDER_QUERY} legal:commander',
+                                                          "order": "edhrec"})
+            if data is None:  # 404 (no match) and failures both land here - don't cache
+                return JSONResponse({"names": []})
+            AUTOCOMPLETE_CACHE[ckey] = [c["name"] for c in data.get("data") or []][:12]
+        return JSONResponse({"names": AUTOCOMPLETE_CACHE[ckey]})
     if key not in AUTOCOMPLETE_CACHE:
         data = await _scryfall_get("/cards/autocomplete", {"q": key})
         if data is None:

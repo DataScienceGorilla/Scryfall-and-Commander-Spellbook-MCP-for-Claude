@@ -35,6 +35,51 @@ SCRYFALL_HEADERS = {
 SPELLBOOK_API = "https://backend.commanderspellbook.com"
 
 
+# Scryfall asks for <= ~10 requests/second and answers bursts with 429. Every client made here
+# goes through this transport: Scryfall calls are spaced out process-wide and a 429 is retried
+# after the Retry-After delay, so a busy turn (deck details + searches + the page's card
+# lookups) slows down a little instead of failing.
+_SCRYFALL_PACE = 0.11            # seconds between Scryfall requests
+_scryfall_lock = asyncio.Lock()
+_scryfall_last = 0.0
+
+
+class _PacedTransport(httpx.AsyncBaseTransport):
+    def __init__(self, **kw):
+        self._inner = httpx.AsyncHTTPTransport(**kw)
+
+    async def handle_async_request(self, request):
+        if request.url.host != "api.scryfall.com":
+            return await self._inner.handle_async_request(request)
+        global _scryfall_last
+        for attempt in range(4):
+            async with _scryfall_lock:
+                loop = asyncio.get_running_loop()
+                wait = _scryfall_last + _SCRYFALL_PACE - loop.time()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                _scryfall_last = loop.time()
+            response = await self._inner.handle_async_request(request)
+            if response.status_code != 429 or attempt == 3:
+                return response
+            await response.aread()
+            await response.aclose()
+            try:
+                delay = float(response.headers.get("retry-after") or 0)
+            except ValueError:
+                delay = 0
+            await asyncio.sleep(max(delay, 0.5 * (attempt + 1)))
+        return response
+
+    async def aclose(self):
+        await self._inner.aclose()
+
+
+def scryfall_client(**kw) -> httpx.AsyncClient:
+    """httpx.AsyncClient that paces Scryfall calls and retries 429s (see _PacedTransport)."""
+    return httpx.AsyncClient(transport=_PacedTransport(), **kw)
+
+
 # Rules database (lazy loaded)
 _rules_collection = None
 _rules_loading = False  # Prevents multiple simultaneous loads
@@ -332,7 +377,7 @@ async def scryfall_search_cards(query: str, limit: int = 5, commander_identity: 
         # and Commander-banned cards, so recommendations are real, paper-legal cards.
         q = f"({query}) {scope} legal:commander"
 
-    async with httpx.AsyncClient() as client:
+    async with scryfall_client() as client:
         try:
             response = await client.get(
                 f"{SCRYFALL_API}/cards/search",
@@ -421,7 +466,7 @@ async def scryfall_get_card(name: str, commander_identity: str = None) -> str:
     Look up a specific card by name. When commander_identity is provided, the
     result includes an explicit color-identity legality verdict for that deck.
     """
-    async with httpx.AsyncClient() as client:
+    async with scryfall_client() as client:
         try:
             card, others = await resolve_card(client, name)
             if card is None:
@@ -561,7 +606,7 @@ async def scryfall_get_rulings(card_name: str) -> str:
     search_term = card_name.lower().strip()
     is_keyword = search_term in KEYWORDS
     
-    async with httpx.AsyncClient() as client:
+    async with scryfall_client() as client:
         try:
             # If it's a keyword, search for a card with that keyword first
             if is_keyword:
@@ -663,7 +708,7 @@ async def scryfall_get_rulings(card_name: str) -> str:
 
 async def spellbook_search_combos(query: str, color_identity: Optional[str] = None, limit: int = 5) -> str:
     """Search for combos on Commander Spellbook."""
-    async with httpx.AsyncClient() as client:
+    async with scryfall_client() as client:
         try:
             params = {"q": query, "limit": limit}
             if color_identity:
@@ -801,7 +846,7 @@ async def _card_facts(names: list[str]) -> dict[str, dict]:
     lookup (front-face names)."""
     out: dict[str, dict] = {}
     names = list(dict.fromkeys(n for n in names if n))
-    async with httpx.AsyncClient(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
+    async with scryfall_client(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
         for i in range(0, len(names), 75):
             try:
                 r = await client.post(f"{SCRYFALL_API}/cards/collection",
@@ -1037,7 +1082,7 @@ async def scryfall_get_decklist_details(decklist_text: str = None, decklist_url:
         return "Couldn't parse any cards from that decklist."
 
     cards, not_found = [], []
-    async with httpx.AsyncClient(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
+    async with scryfall_client(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
         for i in range(0, len(names), 75):  # Scryfall collection endpoint caps at 75
             batch = [{"name": _collection_name(n)} for n in names[i:i + 75]]
             try:
@@ -1178,7 +1223,7 @@ async def spellbook_find_combos_in_decklist(
     """
     if not decklist_text and not decklist_url:
         return "Please paste a decklist (one card per line, e.g. '1 Sol Ring')."
-    async with httpx.AsyncClient() as client:
+    async with scryfall_client() as client:
         try:
             try:
                 main = await _decklist_to_main(client, decklist_url, decklist_text)
@@ -1305,7 +1350,7 @@ async def spellbook_estimate_bracket(
     """
     if not decklist_text and not decklist_url:
         return "Please paste a decklist to estimate its bracket."
-    async with httpx.AsyncClient() as client:
+    async with scryfall_client() as client:
         try:
             try:
                 main = await _decklist_to_main(client, decklist_url, decklist_text)

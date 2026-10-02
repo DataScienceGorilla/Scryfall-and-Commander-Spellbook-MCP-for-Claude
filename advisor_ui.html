@@ -276,6 +276,20 @@
   .ac-list[hidden] { display: none; }
   .ac-list li { padding: 6px 9px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
   .ac-list li.sel, .ac-list li:hover { background: var(--user); color: var(--ink-strong); }
+  .build-panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2);
+    padding: var(--s2) var(--s3) var(--s3); margin: calc(-1 * var(--s2)) 0 var(--s4); }
+  .bp-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
+  .bp-title { flex: 1; font-family: var(--font-display, var(--font-head)); font-size: 18px; }
+  .bp-btn { padding: 3px 10px !important; font-size: 12px !important; }
+  .bp-row { display: grid; grid-template-columns: 92px 1fr auto auto; align-items: center; gap: var(--s2); font-size: 13px; padding: 2px 0; }
+  .bp-bar { height: 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .bp-bar i { display: block; height: 100%; background: var(--accent); }
+  .bp-row.full .bp-bar i { background: var(--success); }
+  .bp-row.full .bp-label { color: var(--muted); }
+  .bp-num { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .bp-input { width: 52px; padding: 2px 4px; font: inherit; font-size: 13px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius); }
+  .bp-fill { margin-top: var(--s2); padding: 5px 12px !important; font-size: 13px !important; cursor: pointer; }
   .deck-warns { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
   .deck-warn { font-size: 13px; color: var(--danger-text); padding-left: var(--s3); position: relative; }
   .deck-warn::before { content: ""; position: absolute; left: 2px; top: .55em; width: 6px; height: 6px;
@@ -299,10 +313,12 @@
   @media (hover: hover) { .card-tile:hover .tile-actions { display: flex; } }
   .tile-add { position: absolute; top: 5px; right: 5px; width: auto; padding: 0 8px; font-size: 12px; font-weight: 600; display: none; }
   body.has-deck .card-tile .tile-add { display: block; }
-  #newDeckBtn { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius);
+  #newDeckBtn, #buildBtn { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 4px 10px; cursor: pointer; font-size: 12px; }
-  #newDeckBtn:hover { color: var(--text); border-color: var(--accent); }
-  body.has-deck #newDeckBtn { display: none; }
+  #newDeckBtn:hover, #buildBtn:hover { color: var(--text); border-color: var(--accent); }
+  body.has-deck #newDeckBtn, body.has-deck #buildBtn { display: none; }
+  #buildBtn { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+  #buildBtn:hover { color: var(--on-accent); filter: brightness(1.1); }
 
   /* Card editor modal */
   .editor { position: fixed; inset: 0; z-index: 100; background: var(--scrim);
@@ -513,6 +529,7 @@
     <div id="splitter" title="Drag to resize · double-click to reset" role="separator" aria-orientation="vertical"></div>
     <section id="canvas">
       <div class="canvas-head">🃏 <span id="canvasTitle">Card canvas</span> <span class="spacer" style="flex:1"></span>
+        <button id="buildBtn" title="Pick a commander and build the deck with the advisor, section by section">Build from scratch</button>
         <button id="newDeckBtn" title="Start an empty deck and build it by hand">＋ New deck</button></div>
       <div id="cards"></div>
     </section>
@@ -911,6 +928,142 @@ function deckComposition() {
            avgMv: mvN ? (mvSum / mvN) : 0 };
 }
 
+// ---- guided build from scratch ----
+// deck.build = { targets: {section: n} | null, done } turns on BUILD MODE: a progress panel in the
+// deck view and section-by-section proposals from the advisor. Targets follow the player's
+// framework (Rebel Lily): ~38 lands, 24 ramp+draw split by commander MV, interaction, protection,
+// the rest gameplan. The server computes the same numbers for the advisor.
+const BUILD_SECTIONS = [['gameplan', 'Gameplan'], ['ramp', 'Ramp'], ['draw', 'Draw'],
+                        ['interaction', 'Interaction'], ['protection', 'Protection'], ['lands', 'Lands']];
+const BASICS = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
+let buildEditing = false;
+function building() { return !!(deck && deck.build && !deck.build.done); }
+function defaultBuildTargets() {
+  const cmdrs = (deck.commander || []).map(lc);
+  const mvs = deck.cards.filter(c => cmdrs.includes(lc(c.name))).map(c => c.cmc || 0);
+  const mv = mvs.length ? Math.max(...mvs) : 4;
+  const [ramp, draw] = mv >= 5 ? [14, 10] : mv >= 4 ? [12, 12] : mv >= 3 ? [10, 14] : [8, 16];
+  const t = { lands: 38, ramp, draw, interaction: 10, protection: 3 };
+  t.gameplan = Math.max(0, 100 - Math.max(1, cmdrs.length) - Object.values(t).reduce((a, b) => a + b, 0));
+  return t;
+}
+// player overrides win; unless they set Gameplan themselves, it takes up whatever is left of 100
+function buildTargets() {
+  const own = (deck.build && deck.build.targets) || {};
+  const t = Object.assign(defaultBuildTargets(), own);
+  if (own.gameplan === undefined) {
+    const rest = Object.entries(t).filter(([k]) => k !== 'gameplan').reduce((a, [, v]) => a + v, 0);
+    t.gameplan = Math.max(0, 100 - Math.max(1, (deck.commander || []).length) - rest);
+  }
+  return t;
+}
+// each non-commander card counts once, in its first matching section - same rule as the server
+function buildCounts() {
+  const cmdrs = (deck.commander || []).map(lc);
+  const n = { gameplan: 0, ramp: 0, draw: 0, interaction: 0, protection: 0, lands: 0 };
+  for (const c of deck.cards) {
+    if (cmdrs.includes(lc(c.name))) continue;
+    const q = c.qty || 1, r = new Set(c.roles || []);
+    if (c.is_land) n.lands += q;
+    else if (r.has('Ramp')) n.ramp += q;
+    else if (r.has('Draw')) n.draw += q;
+    else if (r.has('Target Interaction') || r.has('Mass Interaction')) n.interaction += q;
+    else if (r.has('Protection')) n.protection += q;
+    else n.gameplan += q;
+  }
+  return n;
+}
+function buildPanel(comp) {
+  const t = buildTargets(), have = buildCounts();
+  const el = document.createElement('div'); el.className = 'build-panel';
+  const head = document.createElement('div'); head.className = 'bp-head';
+  head.innerHTML = `<span class="bp-title">Building · ${comp.total}/100</span>`;
+  const edit = document.createElement('button'); edit.className = 'tb-btn bp-btn'; edit.textContent = buildEditing ? 'Done' : 'Targets';
+  edit.title = 'Change how many cards each section should get';
+  edit.onclick = () => { buildEditing = !buildEditing; renderDeck(); };
+  const fin = document.createElement('button'); fin.className = 'tb-btn bp-btn'; fin.textContent = 'Finish build';
+  fin.title = 'Leave build mode - the advisor goes back to normal reviews';
+  fin.onclick = () => { pushUndo(); deck.build.done = true; deckChanged(); showToast('Build finished', true); };
+  head.append(edit, fin);
+  el.appendChild(head);
+  for (const [k, label] of BUILD_SECTIONS) {
+    const row = document.createElement('div'); row.className = 'bp-row' + (have[k] >= t[k] ? ' full' : '');
+    const pct = t[k] ? Math.min(100, Math.round(100 * have[k] / t[k])) : 100;
+    row.innerHTML = `<span class="bp-label">${label}</span><span class="bp-bar"><i style="width:${pct}%"></i></span><span class="bp-num">${have[k]}/</span>`;
+    if (buildEditing) {
+      const inp = document.createElement('input'); inp.type = 'number'; inp.min = 0; inp.max = 99; inp.value = t[k];
+      inp.className = 'bp-input';
+      inp.onchange = () => {
+        const v = Math.max(0, Math.min(99, parseInt(inp.value, 10) || 0));
+        deck.build.targets = Object.assign({}, deck.build.targets || {}, { [k]: v }); saveState(); renderDeck();
+      };
+      row.querySelector('.bp-num').after(inp);
+    } else {
+      row.querySelector('.bp-num').textContent = `${have[k]}/${t[k]}`;
+    }
+    el.appendChild(row);
+  }
+  const gap = Math.min(t.lands - have.lands, 100 - comp.total);
+  if (gap > 0 && (deck.commander || []).length) {
+    const fill = document.createElement('button'); fill.className = 'tb-btn bp-fill';
+    fill.textContent = `Fill ${gap} basic land${gap > 1 ? 's' : ''}`;
+    fill.title = "Split by your spells' color requirements";
+    fill.onclick = () => fillBasics(gap);
+    el.appendChild(fill);
+  }
+  return el;
+}
+// Fill land slots with basics, split by how many colored pips the nonland cards ask for.
+async function fillBasics(n) {
+  const ident = [...(commanderIdentity() || [])].filter(x => BASICS[x]);
+  const names = ident.length ? ident : ['C'];
+  const pips = Object.fromEntries(names.map(x => [x, 0]));
+  for (const c of deck.cards) {
+    if (c.is_land) continue;
+    for (const m of (c.mana_cost || '').matchAll(/\{([^}]+)\}/g))
+      for (const x of names) if (m[1].includes(x)) pips[x] += (c.qty || 1);
+  }
+  // smoothing: early in a build the pips are few and lopsided, so every color keeps a fair floor
+  const raw = Object.values(pips).reduce((a, b) => a + b, 0);
+  names.forEach(x => { pips[x] += Math.max(1, raw) * 0.5 / names.length; });
+  const sum = Object.values(pips).reduce((a, b) => a + b, 0);
+  const share = {}; let given = 0;
+  names.forEach(x => { share[x] = Math.floor(n * pips[x] / sum); given += share[x]; });
+  // hand out the remainder to the hungriest colors
+  [...names].sort((a, b) => pips[b] - pips[a]).forEach(x => { if (given < n) { share[x]++; given++; } });
+  pushUndo();
+  for (const x of names) {
+    if (!share[x]) continue;
+    const name = BASICS[x] || 'Wastes';
+    const have = deckFind(name);
+    if (have) { have.qty = (have.qty || 1) + share[x]; continue; }
+    try {
+      const r = await fetch('/deck/card?name=' + encodeURIComponent(name));
+      if (r.ok) { const c = await r.json(); c.qty = share[x]; deck.cards.push(c); }
+    } catch (e) {}
+  }
+  deckChanged();
+  showToast(`Added ${n} basics`, true);
+}
+// Entry point: an empty deck in build mode + the brief (commander picker); saving it starts
+// the advisor on the first section.
+function startBuild() {
+  if (streaming) { showToast('Wait for the current answer to finish'); return; }
+  deck = { commander: [], bracket: null, cards: [], not_found: [], build: { targets: null } };
+  renderDeck();
+  openIntake({ build: true }).then(saved => {
+    if (!saved || !(deck.commander || []).length) {
+      deck = null; undoStack = []; deckChanged(); renderDeck();
+      if (saved) showToast('Pick a commander to start a build');
+      return;
+    }
+    deck.cards = deck.cards.filter(c => (deck.commander || []).some(n => lc(n) === lc(c.name)));
+    deckChanged();
+    inputEl.value = `Let's build this deck from scratch with ${deck.commander.join(' + ')} as commander. Start with the gameplan.`;
+    send();
+  });
+}
+
 function startNewDeck() {
   pushUndo();
   deck = { commander: [], bracket: null, cards: [], not_found: [] };
@@ -1031,7 +1184,7 @@ function renderDeck() {
       const c = deckFind(n);
       if (c && !canCommand(c)) warn(`${c.name} can't normally be a commander`);
     }
-    if (comp.total !== 100) warn(comp.total < 100 ? `${100 - comp.total} short of 100` : `${comp.total - 100} over 100`);
+    if (comp.total !== 100 && !building()) warn(comp.total < 100 ? `${100 - comp.total} short of 100` : `${comp.total - 100} over 100`);
     if (cap !== undefined && comp.gc > cap) warn(`${comp.gc - cap} game changer${comp.gc - cap > 1 ? 's' : ''} over the B${deck.bracket} cap`);
     if (comp.offColor.length) warn(`Off-color: ${comp.offColor.join(', ')}`);
     if (comp.dupes.length) warn(`Not singleton: ${comp.dupes.join(', ')}`);
@@ -1039,6 +1192,7 @@ function renderDeck() {
   }
   if (warns.childNodes.length) head.appendChild(warns);
   deckView.appendChild(head);
+  if (building()) deckView.appendChild(buildPanel(comp));
 
   // group -> cards, in taxonomy order (plus any custom role names at the end)
   const byGroup = {};
@@ -1254,12 +1408,13 @@ function renderIntake(opts) {
   const esc = s => escapeHtml(String(s || '')).replace(/"/g, '&quot;');
   intakeEl.innerHTML = `<form class="in-inner" autocomplete="off">
     <button type="button" class="ed-close in-x" title="Close">×</button>
-    <h2 class="in-title">Deck brief</h2>
-    <p class="in-sub">${opts.fromSend ? 'Before the advisor reads your deck - ' : ''}tell it who leads the deck and what you're going for.
+    <h2 class="in-title">${opts.build ? 'New build' : 'Deck brief'}</h2>
+    <p class="in-sub">${opts.build ? "Pick your commander and tell the advisor what you're going for - it'll build the deck with you, one section at a time." : (opts.fromSend ? 'Before the advisor reads your deck - ' : '') + "tell it who leads the deck and what you're going for."}
       Everything but the commander is optional.</p>
     <section><h3>Commander <span class="in-hint">pick up to 2 (partners / Background)</span></h3>
       <div class="in-cmdrs"></div>
-      <div class="in-row"><input type="search" class="in-cmdr-search" ${NO_AUTOFILL} placeholder="Not listed? Add your commander by name…"><button type="button" class="in-small in-cmdr-add">Add</button></div></section>
+      <div class="in-row"><input type="search" class="in-cmdr-search" list="inCmdrList" ${NO_AUTOFILL} placeholder="${opts.build ? 'Search for your commander…' : 'Not listed? Add your commander by name…'}"><button type="button" class="in-small in-cmdr-add">Add</button></div>
+      <datalist id="inCmdrList"></datalist></section>
     <section><h3>Target bracket</h3><div class="in-pills in-bracket"></div></section>
     <section><h3>Gameplan <span class="in-hint">how do you want to win?</span></h3>
       <textarea class="in-plan" rows="3" ${NO_AUTOFILL} placeholder="e.g. Drain everyone out with sacrifice triggers; Gut is a payoff, the treasure engine is the deck.">${esc(brief.plan)}</textarea>
@@ -1274,14 +1429,14 @@ function renderIntake(opts) {
     <section class="in-two"><div><h3>Budget</h3><input type="search" class="in-budget" ${NO_AUTOFILL} placeholder="e.g. under $10 a card" value="${esc(brief.budget)}"></div>
       <div><h3>Playgroup notes</h3><input type="search" class="in-notes" ${NO_AUTOFILL} placeholder="e.g. lots of flyers, no stax at our table" value="${esc(brief.notes)}"></div></section>
     <div class="in-actions"><button type="button" class="in-skip">Skip</button>
-      <button type="submit" class="primary">${opts.fromSend ? 'Save & ask' : 'Save brief'}</button></div>
+      <button type="submit" class="primary">${opts.build ? 'Start building' : opts.fromSend ? 'Save & ask' : 'Save brief'}</button></div>
   </form>`;
   const $ = s => intakeEl.querySelector(s);
 
   const paintCmdrs = () => {
     const box = $('.in-cmdrs'); box.innerHTML = '';
     const cands = deck.cards.filter(c => canCommand(c) || cmdrs.some(n => lc(n) === lc(c.name)));
-    if (!cands.length) box.innerHTML = '<div class="in-hint">No legal commanders found in the list - add yours below.</div>';
+    if (!cands.length) box.innerHTML = opts.build ? '<div class="in-hint">Search for your commander below.</div>' : '<div class="in-hint">No legal commanders found in the list - add yours below.</div>';
     for (const c of cands) {
       const t = document.createElement('button'); t.type = 'button';
       t.className = 'in-cmdr' + (cmdrs.some(n => lc(n) === lc(c.name)) ? ' sel' : '');
@@ -1306,6 +1461,19 @@ function renderIntake(opts) {
   };
   $('.in-cmdr-add').onclick = addCmdr;
   $('.in-cmdr-search').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCmdr(); } });
+  // commander-only suggestions (Scryfall is:commander, most-played first)
+  let cmdrTimer = null;
+  $('.in-cmdr-search').addEventListener('input', e => {
+    clearTimeout(cmdrTimer);
+    const q = e.target.value.trim(); if (q.length < 2) return;
+    cmdrTimer = setTimeout(async () => {
+      try {
+        const r = await fetch('/card/search?commander=1&q=' + encodeURIComponent(q));
+        const { names } = await r.json();
+        $('#inCmdrList').innerHTML = (names || []).map(n => `<option value="${esc(n)}">`).join('');
+      } catch (err) {}
+    }, 200);
+  });
 
   const paintPills = () => {
     const box = $('.in-bracket'); box.innerHTML = '';
@@ -1407,7 +1575,7 @@ function startDeckCard(sd, entry, bubble) {
     ok.onclick = () => {
       if (streaming) { showToast('Wait for the current answer to finish'); return; }
       pushUndo();
-      deck = { commander: names, bracket: sd.bracket || null, not_found: [],
+      deck = { commander: names, bracket: sd.bracket || null, not_found: [], build: { targets: null },
                cards: (sd.commander || []).map(c => Object.assign({}, c, { qty: 1 })),
                intake: { plan: sd.plan || '', styles: [], keep: [], avoid: [], avoidNote: '', budget: '', notes: '' } };
       sd.status = 'created';
@@ -1432,7 +1600,7 @@ function proposalCard(p, entry, bubble) {
   const thumb = (src, cls) => src ? `<img class="prop-thumb ${cls}" src="${escapeHtml(src)}" alt="">` : '';
   const verb = p.cut && p.add ? 'Swap' : p.add ? 'Add' : 'Cut';
   card.innerHTML = `<div class="prop-thumbs">${thumb(p.cutImage, 'out')}${p.cut && p.add ? '<span class="prop-arrow">→</span>' : ''}${thumb(p.addCard && p.addCard.image, 'in')}</div>
-    <div class="prop-body"><div class="prop-title"><span class="prop-verb">${verb}</span> ${p.cut ? `<s>${escapeHtml(p.cut)}</s>` : ''}${p.cut && p.add ? ' → ' : ''}${p.add ? `<b>${escapeHtml(p.add)}</b>` : ''}
+    <div class="prop-body"><div class="prop-title"><span class="prop-verb">${verb}</span> ${p.cut ? `<s>${escapeHtml(p.cut)}</s>` : ''}${p.cut && p.add ? ' → ' : ''}${p.add ? `<b>${p.qty > 1 ? p.qty + '× ' : ''}${escapeHtml(p.add)}</b>` : ''}
       ${p.addCard && p.addCard.game_changer ? '<span class="prop-gc">game changer</span>' : ''}</div>
       <div class="prop-reason"></div><div class="prop-actions"></div></div>`;
   card.querySelector('.prop-reason').textContent = p.reason || '';
@@ -1476,10 +1644,12 @@ async function acceptProposal(p, quiet) {
       deck.commander = (deck.commander || []).filter(n => lc(n) !== lc(c.name));
     }
   }
-  if (p.add && !deckFind(p.add)) {
+  const have = p.add && deckFind(p.add);
+  if (have && anyQty(have)) have.qty = (have.qty || 1) + (p.qty || 1);  // more basics
+  else if (p.add && !have) {
     try {
       const r = await fetch('/deck/card?name=' + encodeURIComponent(p.add));
-      if (r.ok) deck.cards.push(await r.json());
+      if (r.ok) { const c = await r.json(); if (p.qty > 1 && anyQty(c)) c.qty = p.qty; deck.cards.push(c); }
     } catch (e) {}
   }
   p.status = 'accepted';
@@ -1517,7 +1687,9 @@ function maybeAutoContinue(entry, bubble) {
     entry.continued = true; saveState();
     bar.remove();
     const acc = props.filter(p => p.status === 'accepted').length, rej = props.length - acc;
-    inputEl.value = `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and keep going.`;
+    inputEl.value = building()
+      ? `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and move on to the next section.`
+      : `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and keep going.`;
     send();
   };
   timer = setInterval(() => { if (!paint() && --left <= 0) go(); else paint(); }, 1000);
@@ -1643,6 +1815,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 document.getElementById('newDeckBtn').addEventListener('click', startNewDeck);
+document.getElementById('buildBtn').addEventListener('click', startBuild);
 
 // Floating hover-preview tooltip
 const tooltip = document.createElement('div');
