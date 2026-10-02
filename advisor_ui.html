@@ -474,6 +474,10 @@
   #send, #newChat { border: 1.5px solid var(--ink-strong); box-shadow: 2px 2px 0 var(--ink-strong); }
   #send:active:not(:disabled), #newChat:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink-strong); }
   #composer textarea, .settings-pop, .export-menu { border-color: var(--ink-line); }
+  /* deck title + toolbar on an inked double-ruled plate, like the sign-in card */
+  .deck-plate { background: var(--panel); border: 1.5px solid var(--ink-line); border-radius: var(--radius);
+    padding: var(--s3) var(--s3) 0; margin: 6px 6px var(--s4);
+    box-shadow: 0 0 0 4px var(--panel), 0 0 0 5.5px var(--ink-line), 6px 6px 0 5.5px rgba(90, 65, 39, .3); }
   .card-tile { border-color: var(--ink-line); }
 </style>
 </head>
@@ -995,13 +999,18 @@ function renderDeck() {
   const note = mentionView.querySelector('.empty-note');
   if (note) note.remove();
   const comp = deckComposition();
-  if (!toolbarEl) { deckView.innerHTML = ''; toolbarEl = buildToolbar(); deckView.appendChild(toolbarEl); }
+  // title + toolbar share one framed plate; the toolbar persists so the add-card box keeps focus
+  if (!toolbarEl) {
+    deckView.innerHTML = '';
+    const plate = document.createElement('div'); plate.className = 'deck-plate';
+    toolbarEl = buildToolbar(); plate.appendChild(toolbarEl); deckView.appendChild(plate);
+  }
   syncToolbar();
   // the title sits above the (persistent) toolbar; everything below it is rebuilt on each change
   const oldTitle = deckView.querySelector('.deck-title');
   if (oldTitle) oldTitle.remove();
-  deckView.insertBefore(deckTitleBlock(comp), toolbarEl);
-  while (deckView.lastChild !== toolbarEl) deckView.removeChild(deckView.lastChild);
+  toolbarEl.parentNode.insertBefore(deckTitleBlock(comp), toolbarEl);
+  while (deckView.lastChild !== toolbarEl.parentNode) deckView.removeChild(deckView.lastChild);
 
   const head = document.createElement('div');
   head.className = 'deck-head';
