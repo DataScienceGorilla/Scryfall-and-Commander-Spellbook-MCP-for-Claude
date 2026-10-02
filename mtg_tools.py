@@ -35,13 +35,15 @@ SCRYFALL_HEADERS = {
 SPELLBOOK_API = "https://backend.commanderspellbook.com"
 
 
-# Scryfall asks for <= ~10 requests/second and answers bursts with 429. Every client made here
-# goes through this transport: Scryfall calls are spaced out process-wide and a 429 is retried
-# after the Retry-After delay, so a busy turn (deck details + searches + the page's card
-# lookups) slows down a little instead of failing.
-_SCRYFALL_PACE = 0.11            # seconds between Scryfall requests
+# Scryfall asks for <= ~10 requests/second and answers bursts with 429 + Retry-After. Every
+# client made here goes through this transport: Scryfall calls are spaced out process-wide, and
+# a 429 pauses ALL Scryfall traffic until Retry-After has passed (requests that keep arriving
+# during a block extend it), then the request is retried. A busy turn slows down instead of
+# failing or digging the hole deeper.
+_SCRYFALL_PACE = 0.13            # seconds between Scryfall requests (~7.5/s, headroom for a 2nd process)
 _scryfall_lock = asyncio.Lock()
 _scryfall_last = 0.0
+_scryfall_blocked_until = 0.0    # loop time before which nothing goes to Scryfall
 
 
 class _PacedTransport(httpx.AsyncBaseTransport):
@@ -51,16 +53,16 @@ class _PacedTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request):
         if request.url.host != "api.scryfall.com":
             return await self._inner.handle_async_request(request)
-        global _scryfall_last
-        for attempt in range(4):
+        global _scryfall_last, _scryfall_blocked_until
+        for attempt in range(3):
             async with _scryfall_lock:
                 loop = asyncio.get_running_loop()
-                wait = _scryfall_last + _SCRYFALL_PACE - loop.time()
+                wait = max(_scryfall_last + _SCRYFALL_PACE, _scryfall_blocked_until) - loop.time()
                 if wait > 0:
                     await asyncio.sleep(wait)
                 _scryfall_last = loop.time()
             response = await self._inner.handle_async_request(request)
-            if response.status_code != 429 or attempt == 3:
+            if response.status_code != 429 or attempt == 2:
                 return response
             await response.aread()
             await response.aclose()
@@ -68,7 +70,9 @@ class _PacedTransport(httpx.AsyncBaseTransport):
                 delay = float(response.headers.get("retry-after") or 0)
             except ValueError:
                 delay = 0
-            await asyncio.sleep(max(delay, 0.5 * (attempt + 1)))
+            loop = asyncio.get_running_loop()
+            _scryfall_blocked_until = max(_scryfall_blocked_until, loop.time() + max(delay, 1.0))
+            print(f"Scryfall 429 - pausing Scryfall calls {max(delay, 1.0):.0f}s", flush=True)
         return response
 
     async def aclose(self):

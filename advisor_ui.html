@@ -719,7 +719,7 @@ const sidebarToggle = document.getElementById('sidebarToggle');
 
 const cardCache = new Map();   // canonical/lookup name -> {status, tile, img, group}
 const seenNames = new Set();   // names already requested
-let scryfallQueue = Promise.resolve();
+let cardBatch = new Map(), cardBatchTimer = null;  // names waiting for one /cards lookup
 
 // The canvas has two areas: the DECK (the editable deck object, when there is one)
 // and MENTIONS (cards the advisor names in chat). With no deck, mentions are grouped
@@ -2095,20 +2095,32 @@ function requestCard(name) {
   setTileGroup(entry, 'Loading');  // grouped into its concrete role once /card resolves
 
   // throttle Scryfall calls (~100ms apart)
-  // .catch: one failed lookup must never stall every later one (the queue is a promise chain)
-  scryfallQueue = scryfallQueue.then(() => new Promise(res => setTimeout(res, 100)))
-    .then(() => fetchCard(name, key, entry)).catch(() => {});
+  // collect names for a moment and look them all up in one request (the server batches
+  // them into Scryfall's collection endpoint) instead of one round trip per card
+  cardBatch.set(key, { name, entry });
+  if (!cardBatchTimer) cardBatchTimer = setTimeout(flushCardBatch, 120);
 }
 
-async function fetchCard(name, key, entry) {
-  // queued before a chat switch? that chat's canvas is gone - skip it
-  if (cardCache.get(key) !== entry) return;
+async function flushCardBatch() {
+  const batch = [...cardBatch.values()];
+  cardBatch = new Map(); cardBatchTimer = null;
+  for (let i = 0; i < batch.length; i += 60) {
+    const part = batch.slice(i, i + 60);
+    let found = {};
+    try {
+      const r = await fetch('/cards', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ names: part.map(p => p.name) }) });
+      if (r.ok) found = (await r.json()).cards || {};
+    } catch (e) {}
+    for (const { name, entry } of part) applyCard(name, entry, found[name]);
+  }
+}
+
+function applyCard(name, entry, data) {
+  // looked up before a chat switch? that chat's canvas is gone - skip it
+  if (cardCache.get(keyFor(name)) !== entry) return;
   try {
-    // Go through our cached backend proxy (not Scryfall directly) so a full
-    // decklist across several viewers doesn't trip Scryfall's rate limit.
-    const resp = await fetch('/card?name=' + encodeURIComponent(name));
-    if (!resp.ok) throw new Error('not found');
-    const data = await resp.json();
+    if (!data) throw new Error('not found');
     const img = (data.image_uris && data.image_uris.normal) ||
                 (data.card_faces && data.card_faces[0].image_uris && data.card_faces[0].image_uris.normal);
     if (!img) throw new Error('no image');

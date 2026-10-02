@@ -2172,6 +2172,13 @@ async def _apply_commander_eligibility(cards: list[dict]) -> None:
     """Set each deck card's can_command from Scryfall (batched exact-name searches,
     cached). On a Scryfall failure the type-line fallback from _slim_deck_card stays."""
     names = [c["name"] for c in cards if c.get("name")]
+    # Only legendary cards (and the type-line/oracle guesses: Backgrounds, "can be your commander")
+    # can lead a deck - everything else is a no without asking Scryfall.
+    for c in cards:
+        n = (c.get("name") or "").lower()
+        if n and n not in _COMMANDER_OK and "Legendary" not in (c.get("type_line") or "") \
+                and not c.get("can_command"):
+            _COMMANDER_OK[n] = False
     unknown = [n for n in dict.fromkeys(names) if n.lower() not in _COMMANDER_OK]
     for i in range(0, len(unknown), 30):  # keep the query URL a sane length
         chunk = unknown[i:i + 30]
@@ -2303,6 +2310,55 @@ async def deck_card(name: str, _: None = Depends(require_auth)):
     card = _slim_deck_card(data, 1)
     await _apply_commander_eligibility([card])
     return JSONResponse(card)
+
+
+@app.post("/cards")
+async def cards_batch(request: Request, _: None = Depends(require_auth)):
+    """Many /card lookups in one request: cached names answer at once, the rest go to
+    Scryfall's collection endpoint (75 per call); names it can't match fall back to the
+    fuzzy single-card resolver. -> {"cards": {requested name: card | null}}"""
+    body = await request.json()
+    names = [str(n).strip() for n in (body.get("names") or []) if str(n).strip()][:120]
+    todo = [n for n in dict.fromkeys(names) if n.lower() not in CARD_IMG_CACHE]
+    for i in range(0, len(todo), 75):
+        chunk = todo[i:i + 75]
+        async with _scry_sem:
+            async with scryfall_client(timeout=30.0) as client:
+                try:
+                    r = await client.post(f"{SCRYFALL_API}/cards/collection", headers=SCRYFALL_HEADERS,
+                                          json={"identifiers": [{"name": _collection_name(n)} for n in chunk]})
+                    data = (r.json().get("data") or []) if r.status_code == 200 else []
+                except (httpx.HTTPError, ValueError):
+                    data = []
+        by_name = {}
+        for full in data:
+            by_name[full["name"].lower()] = full
+            by_name[_collection_name(full["name"]).lower()] = full
+        for n in chunk:
+            full = by_name.get(n.lower()) or by_name.get(_collection_name(n).lower())
+            if full:
+                for k in (n.lower(), full["name"].lower()):  # warms /deck/card for "+ Add"
+                    FULL_CARD_CACHE.setdefault(k, full)
+                CARD_IMG_CACHE[n.lower()] = _slim_card(full)
+    # typos, nicknames, partial names: the fuzzy resolver (paced, cached)
+    rest = [n for n in todo if n.lower() not in CARD_IMG_CACHE]
+    for n, slim in zip(rest, await asyncio.gather(*(_resolve_card(n) for n in rest))):
+        CARD_IMG_CACHE[n.lower()] = slim
+    out = {}
+    try:
+        import role_index
+    except Exception:
+        role_index = None
+    for n in names:
+        slim = CARD_IMG_CACHE.get(n.lower())
+        if slim:
+            slim = dict(slim)
+            try:
+                slim["roles"] = role_index.roles_for(slim.get("name") or n) if role_index else []
+            except Exception:
+                slim["roles"] = []
+        out[n] = slim
+    return JSONResponse({"cards": out})
 
 
 @app.get("/card")
