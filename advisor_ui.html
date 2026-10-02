@@ -218,7 +218,7 @@
   .role-group { margin-bottom: var(--s4); }
   .role-group-title { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
     color: var(--muted); margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
-  .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 104px), 1fr)); gap: var(--s2); align-content: start; }
+  .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min, 105px), 100%), 1fr)); gap: var(--s2); align-content: start; }
   .card-tile { position: relative; border-radius: var(--radius-card); overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); transition: transform .12s, box-shadow .12s; aspect-ratio: 63/88; }
   .card-tile.offcolor { box-shadow: 0 0 0 2px var(--danger); }
   .card-tile.offcolor::after { content: "⚠ off-color"; position: absolute; top: 6px; left: 6px; right: 6px; text-align: center; background: rgba(217,86,79,.92); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 4px; border-radius: var(--radius); pointer-events: none; }
@@ -2001,7 +2001,7 @@ function parseFrame(frame) {
 // ---- per-browser layout/text preferences (chat:deck ratio, card size, chat font) ----
 // Stored in localStorage: a convenience for this viewer only, never needed for correctness.
 const PREFS_KEY = 'brewbot_prefs_v1';
-const PREF_DEFAULTS = { canvasW: null, cardMin: 104, proseSerif: true };
+const PREF_DEFAULTS = { canvasW: null, cardMin: 105, proseSerif: true };
 let prefs = { ...PREF_DEFAULTS };
 try { prefs = { ...PREF_DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch (e) {}
 function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) {} }
@@ -2049,7 +2049,7 @@ applyPrefs();
   pop.className = 'settings-pop'; pop.hidden = true;
   pop.innerHTML = `
     <div class="row"><h4>Card size</h4>
-      <input type="range" id="setCard" min="72" max="200" step="4" aria-label="Card size"></div>
+      <input type="range" id="setCard" min="90" max="340" step="5" aria-label="Card size"></div>
     <div class="row"><h4>Chat text</h4>
       <div class="seg"><button type="button" data-serif="1">Cormorant</button><button type="button" data-serif="0">Karla</button></div></div>
     <div class="row" style="margin-bottom:0"><div class="hint">Drag the line between the chat and the deck to resize them.</div>
