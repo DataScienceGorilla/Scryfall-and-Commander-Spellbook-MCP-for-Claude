@@ -20,7 +20,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py", "accounts.py"]
 UI_MARKERS = ["function send(", "function renderDeck(", "function initChats(", "initChats();",
-              "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "function openIntake(",
+              "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "function openIntake(", "function startDeckCard(",
               "function renderTurnExtras(", "function acceptProposal(", "</html>"]
 
 failures = []

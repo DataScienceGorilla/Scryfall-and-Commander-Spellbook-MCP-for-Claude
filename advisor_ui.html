@@ -128,6 +128,9 @@
     color: var(--muted); padding: 6px 2px; }
   .auto-continue .ac-text { flex: 1; min-width: 180px; }
   .q-card { background: var(--panel-2); border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px; }
+  .sd-card { display: flex; gap: 12px; align-items: flex-start; }
+  .sd-card .prop-body { flex: 1; min-width: 0; }
+  .sd-card .prop-actions { margin-top: 8px; }
   .q-title { font-weight: 600; margin-bottom: 8px; }
   .q-options { display: flex; flex-wrap: wrap; gap: 6px; }
   .q-opt { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
@@ -718,7 +721,7 @@ function resetGroups() { for (const k in roleGroups) delete roleGroups[k]; }
 function updateGroupTitle(role) {
   const g = roleGroups[role];
   if (!g) return;
-  const label = role === 'Mentioned' ? 'Mentioned in chat · not in deck' : role;
+  const label = role === 'Mentioned' ? (deck ? 'Mentioned in chat · not in deck' : 'Mentioned in chat') : role;
   g.title.textContent = role === 'Loading' ? `Loading… · ${g.n}` : `${label} · ${g.n}`;
   g.section.style.display = g.n > 0 ? '' : 'none';  // hide empty groups (e.g. Loading when done)
 }
@@ -748,10 +751,8 @@ function dropMentionTile(entry) {
   entry.group = null; entry.inDeck = true;
   entry.tile.remove();
 }
-function mentionRole(entry) {
-  if (deck) return 'Mentioned';
-  return (entry.roles && entry.roles.length) ? entry.roles[0] : 'Other';
-}
+// Role sorting is for the deck being built; mentions are one flat list either way.
+function mentionRole(entry) { return 'Mentioned'; }
 // Re-file every resolved mention after the deck appears/changes.
 function regroupMentions() {
   for (const entry of new Set(cardCache.values())) {
@@ -1365,7 +1366,7 @@ intakeEl.addEventListener('click', e => { if (e.target === intakeEl) closeIntake
 // advisor with the history.
 function renderTurnExtras(entry, bubble) {
   const msg = bubble && bubble.closest('.msg');
-  if (!msg || (!(entry.proposals || []).length && !entry.question)) return;
+  if (!msg || (!(entry.proposals || []).length && !entry.question && !entry.startDeck)) return;
   let box = msg.querySelector('.turn-extras');
   if (!box) { box = document.createElement('div'); box.className = 'turn-extras'; msg.appendChild(box); }
   box.innerHTML = '';
@@ -1384,7 +1385,44 @@ function renderTurnExtras(entry, bubble) {
     box.appendChild(head);
     for (const p of props) box.appendChild(proposalCard(p, entry, bubble));
   }
+  if (entry.startDeck) box.appendChild(startDeckCard(entry.startDeck, entry, bubble));
   if (entry.question) box.appendChild(questionCard(entry.question));
+}
+// From-scratch builds: the advisor offers to create the deck object (commander only); the
+// player creates it with one click and the advisor then fills it with proposals.
+function startDeckCard(sd, entry, bubble) {
+  const box = document.createElement('div'); box.className = 'q-card sd-card';
+  const names = (sd.commander || []).map(c => c.name);
+  const thumbs = (sd.commander || []).filter(c => c.image)
+    .map(c => `<img class="prop-thumb" src="${escapeHtml(c.image)}" alt="">`).join('');
+  const meta = [sd.bracket ? `Bracket ${sd.bracket}${BRACKETS[sd.bracket] ? ' · ' + BRACKETS[sd.bracket] : ''}` : '', sd.plan || '']
+    .filter(Boolean).map(escapeHtml).join(' — ');
+  box.innerHTML = `<div class="prop-thumbs">${thumbs}</div><div class="prop-body">
+    <div class="q-title">Start a deck with ${escapeHtml(names.join(' + '))}</div>
+    ${meta ? `<div class="prop-reason">${meta}</div>` : ''}<div class="prop-actions"></div></div>`;
+  box.querySelectorAll('.prop-thumb').forEach(img => img.addEventListener('click', () => openLightbox({ img: img.src, canonical: '' })));
+  const actions = box.querySelector('.prop-actions');
+  if (sd.status === 'pending' && !(deck && deck.cards && deck.cards.length)) {
+    const ok = document.createElement('button'); ok.className = 'prop-btn ok'; ok.textContent = 'Create deck';
+    ok.onclick = () => {
+      if (streaming) { showToast('Wait for the current answer to finish'); return; }
+      pushUndo();
+      deck = { commander: names, bracket: sd.bracket || null, not_found: [],
+               cards: (sd.commander || []).map(c => Object.assign({}, c, { qty: 1 })),
+               intake: { plan: sd.plan || '', styles: [], keep: [], avoid: [], avoidNote: '', budget: '', notes: '' } };
+      sd.status = 'created';
+      deckChanged();
+      renderTurnExtras(entry, bubble);
+      inputEl.value = `Deck created with ${names.join(' + ')} as commander. Start filling it in.`;
+      send();
+    };
+    const no = document.createElement('button'); no.className = 'prop-btn'; no.textContent = 'Not yet';
+    no.onclick = () => { sd.status = 'declined'; saveState(); renderTurnExtras(entry, bubble); };
+    actions.append(ok, no);
+  } else {
+    actions.innerHTML = `<span class="prop-status">${sd.status === 'created' ? '✓ Deck created' : sd.status === 'declined' ? 'Not now' : 'A deck is already loaded'}</span>`;
+  }
+  return box;
 }
 function proposalCard(p, entry, bubble) {
   const card = document.createElement('div');
@@ -1847,11 +1885,14 @@ function requestCard(name) {
   setTileGroup(entry, 'Loading');  // grouped into its concrete role once /card resolves
 
   // throttle Scryfall calls (~100ms apart)
-  scryfallQueue = scryfallQueue.then(() => new Promise(res => setTimeout(res, 100))).then(() => fetchCard(name, key));
+  // .catch: one failed lookup must never stall every later one (the queue is a promise chain)
+  scryfallQueue = scryfallQueue.then(() => new Promise(res => setTimeout(res, 100)))
+    .then(() => fetchCard(name, key, entry)).catch(() => {});
 }
 
-async function fetchCard(name, key) {
-  const entry = cardCache.get(key);
+async function fetchCard(name, key, entry) {
+  // queued before a chat switch? that chat's canvas is gone - skip it
+  if (cardCache.get(key) !== entry) return;
   try {
     // Go through our cached backend proxy (not Scryfall directly) so a full
     // decklist across several viewers doesn't trip Scryfall's rate limit.
@@ -1941,7 +1982,7 @@ async function send() {
   saveState();
 
   let bubble = null;
-  const turnProposals = []; let turnQuestion = null;  // interactive UI the advisor put up this turn
+  const turnProposals = []; let turnQuestion = null, turnStartDeck = null;  // interactive UI the advisor put up this turn
   let acc = '';
   const activity = addActivity();  // "Thinking…" appears immediately
 
@@ -2001,6 +2042,8 @@ async function send() {
           turnProposals.push(...(ev.data.items || []));
         } else if (ev.event === 'question') {
           turnQuestion = ev.data;
+        } else if (ev.event === 'start_deck') {
+          turnStartDeck = ev.data;
         } else if (ev.event === 'stale') {
           showStaleBanner();
         } else if (ev.event === 'memory') {
@@ -2018,8 +2061,9 @@ async function send() {
   } finally {
     if (onScreen()) activity.finish();
     // Always persist the answer to the chat that ASKED, wherever the user is now.
-    if (acc.trim() || turnProposals.length || turnQuestion) {
+    if (acc.trim() || turnProposals.length || turnQuestion || turnStartDeck) {
       const entry = { role: 'assistant', text: acc };
+      if (turnStartDeck) entry.startDeck = turnStartDeck;
       if (turnProposals.length) entry.proposals = turnProposals;
       if (turnQuestion) entry.question = turnQuestion;
       originConv.push(entry);

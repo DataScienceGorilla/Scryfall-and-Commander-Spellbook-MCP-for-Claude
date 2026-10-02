@@ -306,6 +306,11 @@ THAT is their current deck - use it; do not ask them to paste it again.
 - Their decisions come back in the conversation ("[Your proposals and the player's decisions: ...]").
   Never re-propose something they rejected; build on what they accepted.
 - No deck loaded (or a quick question): answer in prose; don't call propose_changes.
+- BUILDING FROM SCRATCH (no deck in the editor, the player wants a new deck): settle the commander
+  first (ask_player if it's open), then call start_deck so the deck exists in their editor - don't
+  just list a 99 in chat. After they create it, build it up with propose_changes adds in focused
+  batches (one part of the deck at a time: the engine/payoffs first, then ramp, draw, interaction,
+  lands), each batch building on what they accepted.
 
 # USING YOUR TOOLS (judgment, not a fixed pipeline)
 Reach for the tools the request actually needs - do NOT run a full deck review on every message.
@@ -987,6 +992,25 @@ UI_TOOLS = [
         },
     },
 ]
+UI_TOOLS.append({
+    "name": "start_deck",
+    "description": (
+        "The player is building a NEW deck and there is no deck in their editor yet: once the commander is "
+        "settled, call this to offer creating the deck in the editor. It shows a 'Start this deck' card with "
+        "the commander; when they create it, the deck (just the commander) appears as CURRENT DECK on their "
+        "next message and you fill it in with propose_changes adds. End your turn after calling it."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "commander": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 2,
+                          "description": "Exact commander name(s) - two only for partners / a Background."},
+            "bracket": {"type": "integer", "minimum": 1, "maximum": 5,
+                        "description": "Target bracket, if the player has said."},
+            "plan": {"type": "string", "description": "One or two sentences: the gameplan they've described."},
+        },
+        "required": ["commander"],
+    },
+})
 UI_TOOL_NAMES = {t["name"] for t in UI_TOOLS}
 
 
@@ -1045,6 +1069,41 @@ async def _validate_proposals(changes: list, deck: dict | None, identity: str | 
         else:
             shown.append(item)
     return shown, refused
+
+
+async def _start_deck_offer(inp: dict, deck: dict | None) -> tuple[str, dict | None]:
+    """(tool result for the model, start_deck event for the page or None). Commanders are
+    resolved and must be able to lead a deck (Scryfall is:commander / Background)."""
+    if isinstance(deck, dict) and deck.get("cards"):
+        return ("A deck is already loaded in the editor - build on it with propose_changes instead.", None)
+    names = [" ".join(str(n).split())[:120] for n in (inp.get("commander") or []) if str(n).strip()][:2]
+    if not names:
+        return ("Give the commander's name.", None)
+    cards, problems = [], []
+    for n in names:
+        full = await _resolve_full_card(n)
+        if not full:
+            problems.append(f"'{n}': no such card")
+            continue
+        if (full.get("legalities") or {}).get("commander") not in ("legal", None):
+            problems.append(f"'{full.get('name')}': not legal in Commander")
+            continue
+        cards.append(_slim_deck_card(full, 1))
+    if cards:
+        await _apply_commander_eligibility(cards)
+        problems += [f"'{c['name']}': can't be a commander" for c in cards if not c.get("can_command")]
+        cards = [c for c in cards if c.get("can_command")]
+    if problems or not cards:
+        return ("NOT shown: " + "; ".join(problems or ["no commander"]) + ". Fix the commander and try again.", None)
+    try:
+        bracket = int(inp.get("bracket")) if inp.get("bracket") is not None else None
+    except (TypeError, ValueError):
+        bracket = None
+    offer = {"id": uuid.uuid4().hex[:8], "commander": cards,
+             "bracket": bracket if bracket in (1, 2, 3, 4, 5) else None,
+             "plan": " ".join(str(inp.get("plan") or "").split())[:400], "status": "pending"}
+    return ("The 'Start this deck' card is on screen. End your turn now (a sentence or two at most); "
+            "once they create the deck it arrives as CURRENT DECK and you fill it with propose_changes.", offer)
 
 
 def _deck_to_text(deck: dict) -> str:
@@ -1149,6 +1208,12 @@ def _decisions_summary(m: dict) -> str:
         out.append("[Your proposals and the player's decisions: " + "; ".join(rows)
                    + ". Don't re-propose rejected ones, and learn from their reasons - they tell you what "
                    "this player values.]")
+    sd = m.get("startDeck")
+    if isinstance(sd, dict) and sd.get("commander"):
+        names = " + ".join(str(c.get("name") if isinstance(c, dict) else c) for c in sd["commander"])[:200]
+        st = {"created": "they CREATED it - it's now their CURRENT DECK",
+              "declined": "they declined for now"}.get(sd.get("status"), "not decided yet")
+        out.append(f"[You offered to start a deck with {names} as commander - {st}.]")
     q = m.get("question")
     if isinstance(q, dict) and q.get("question"):
         out.append(f"[You asked: \"{str(q['question'])[:200]}\" - options: {', '.join(map(str, q.get('options') or []))[:300]}"
@@ -1341,7 +1406,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     if block.name == "propose_changes":
                         if not deck:
                             ui_results[block.id] = ("No deck is loaded in the player's editor, so proposals can't "
-                                                    "be shown - give your suggestions in prose instead.")
+                                                    "be shown. If they're building a new deck, call start_deck "
+                                                    "first; otherwise give your suggestions in prose.")
                             continue
                         shown, refused = await _validate_proposals((block.input or {}).get("changes"), deck, deck_identity)
                         if shown:
@@ -1362,6 +1428,12 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                                                 "options": opts, "multi": bool(inp.get("allow_multiple"))})
                         ui_results[block.id] = ("The question is on screen with answer buttons. End your turn now "
                                                 "(a sentence or two at most) and wait for their answer.")
+                    elif block.name == "start_deck":
+                        ui_results[block.id], offer = await _start_deck_offer(block.input or {}, deck)
+                        if offer:
+                            yield _sse("start_deck", offer)
+                        log_activity(f"STARTDECK sid={session_id[:8]} "
+                                     + (", ".join(c["name"] for c in offer["commander"]) if offer else "refused"))
 
                 async def _run(block):
                     if block.id in ui_results:
