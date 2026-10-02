@@ -3,31 +3,31 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f6f1e7' stroke='%23ddd2bf' stroke-width='2'/%3E%3Cpath d='M25 9h14M28 9v15L15 46a6 6 0 0 0 5 9h24a6 6 0 0 0 5-9L36 24V9' fill='none' stroke='%235b2a86' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M19.5 41h25L49 48.5A4 4 0 0 1 45.5 54h-27A4 4 0 0 1 15 48.5z' fill='%235b2a86'/%3E%3Ccircle cx='29' cy='35' r='2.2' fill='%235b2a86'/%3E%3Ccircle cx='35' cy='30' r='1.6' fill='%235b2a86'/%3E%3C/svg%3E" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f1e8cf' stroke='%23d2c39c' stroke-width='2'/%3E%3Cpath d='M25 9h14M28 9v15L15 46a6 6 0 0 0 5 9h24a6 6 0 0 0 5-9L36 24V9' fill='none' stroke='%233b1858' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M19.5 41h25L49 48.5A4 4 0 0 1 45.5 54h-27A4 4 0 0 1 15 48.5z' fill='%233b1858'/%3E%3Ccircle cx='29' cy='35' r='2.2' fill='%233b1858'/%3E%3Ccircle cx='35' cy='30' r='1.6' fill='%233b1858'/%3E%3C/svg%3E" />
 <title>Create account · Brew Bot</title>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Karla:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Karla:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #f6f1e7;
-    --panel: #fbf8f2;
-    --panel-2: #efe8db;
-    --border: #ddd2bf;
-    --text: #2b241e;
-    --muted: #6f6457;
-    --accent: #5b2a86;      /* royal purple */
+    --bg: #f1e8cf;
+    --panel: #f7f0db;
+    --panel-2: #e9dfc2;
+    --border: #d2c39c;
+    --text: #17130f;
+    --muted: #5f5442;
+    --accent: #3b1858;      /* deep royal purple */
     --danger: #a5352b;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg); color: var(--text);
-    font: 15px/1.55 'Karla', system-ui, sans-serif;
+    font: 500 15px/1.6 'Karla', system-ui, sans-serif;
     display: flex; align-items: center; justify-content: center; padding: 16px;
   }
   .card {
     width: 100%; max-width: 360px;
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 14px; padding: 28px 26px 24px;
+    border-radius: 2px; padding: 28px 26px 24px;
   }
   .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
   .logo { width: 22px; height: 22px; color: var(--accent); flex-shrink: 0; }
@@ -38,17 +38,17 @@
   .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
   input {
     width: 100%; padding: 10px 12px; font: inherit; color: var(--text);
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; outline: none;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 2px; outline: none;
   }
   input:focus { border-color: var(--accent); }
   button {
     width: 100%; margin-top: 22px; padding: 11px; font: inherit; font-weight: 600;
-    color: #fbf8f2; background: var(--accent); border: 0; border-radius: 8px; cursor: pointer;
+    color: #f7f0db; background: var(--accent); border: 0; border-radius: 2px; cursor: pointer;
   }
   button:hover { filter: brightness(1.08); }
   .err {
     display: none; margin-top: 16px; padding: 9px 12px; font-size: 13px;
-    color: var(--danger); border: 1px solid var(--danger); border-radius: 8px;
+    color: var(--danger); border: 1px solid var(--danger); border-radius: 2px;
     background: rgba(165, 53, 43, .08);
   }
   .alt { margin-top: 16px; text-align: center; font-size: 13px; color: var(--muted); }
