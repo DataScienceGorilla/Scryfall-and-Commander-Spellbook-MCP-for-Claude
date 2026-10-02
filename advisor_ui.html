@@ -1931,6 +1931,37 @@ function openLightbox(entry) {
   let back = false;
   flip.onclick = () => { back = !back; img.src = back ? entry.imgBack : entry.img; };
   lightbox.hidden = false;
+  // a "Front // Back" name without a stored back face (e.g. proposals saved earlier): look it up once
+  if (!entry.imgBack && / \/\/ /.test(entry.canonical || '')) {
+    const want = entry.canonical;
+    fetch('/cards', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [want] }) })
+      .then(r => r.json()).then(d => {
+        const b = backImage((d.cards || {})[want]);
+        if (!b) return;
+        entry.imgBack = b;
+        if (!lightbox.hidden && lightbox.querySelector('.lb-name').textContent === want) flip.hidden = false;
+      }).catch(() => {});
+  }
+}
+// Card names in chat open the card viewer: the canvas copy if it's loaded, else the deck's
+// copy, else look it up.
+async function openCardPopup(name) {
+  const entry = cardCache.get(keyFor(name));
+  if (entry && entry.img) { openLightbox(entry); return; }
+  const dc = deckFind(name);
+  if (dc && dc.image) {
+    openLightbox({ img: dc.image, imgBack: dc.image_back || null, canonical: dc.name, scryfall: dc.scryfall_uri || null });
+    return;
+  }
+  try {
+    const r = await fetch('/cards', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ names: [name] }) });
+    const data = ((await r.json()).cards || {})[name];
+    const img = data && ((data.image_uris && data.image_uris.normal)
+                         || (data.card_faces && data.card_faces[0].image_uris && data.card_faces[0].image_uris.normal));
+    if (img) openLightbox({ img, imgBack: backImage(data), canonical: data.name, scryfall: data.scryfall_uri });
+    else showToast(`Couldn't find "${name}"`);
+  } catch (e) { showToast(`Couldn't find "${name}"`); }
 }
 // back-face image of a two-faced card (transform / modal DFC), from a Scryfall-shaped card
 function backImage(data) {
@@ -2012,7 +2043,7 @@ function bindChips(container) {
     chip._bound = true;
     const name = chip.getAttribute('data-card');
     requestCard(name);
-    chip.addEventListener('click', () => flashCard(name));
+    chip.addEventListener('click', () => { hideTooltip(); openCardPopup(name); });
     chip.addEventListener('mouseenter', (e) => { requestCard(name); showTooltip(name, e); });
     chip.addEventListener('mousemove', moveTooltip);
     chip.addEventListener('mouseleave', hideTooltip);
