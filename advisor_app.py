@@ -1130,7 +1130,7 @@ async def _validate_proposals(changes: list, deck: dict | None, identity: str | 
                         q = 1
                     if q > 1 and slim.get("any_qty"):
                         item["qty"] = min(q, 40)
-                    item["addCard"] = {k: slim.get(k) for k in ("name", "image", "type_line", "mana_cost",
+                    item["addCard"] = {k: slim.get(k) for k in ("name", "image", "image_back", "type_line", "mana_cost",
                                                                 "color_identity", "game_changer", "scryfall_uri")}
         if problem:
             refused.append(problem)
@@ -2147,6 +2147,8 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         "mana_cost": c.get("mana_cost", "") or (faces[0].get("mana_cost", "") if faces else ""),
         "color_identity": c.get("color_identity", []),
         "image": img,
+        # back face of a transform / modal double-faced card (adventures and splits have one image)
+        "image_back": (faces[1].get("image_uris") or {}).get("normal") if len(faces) > 1 else None,
         "game_changer": bool(c.get("game_changer")),
         "is_land": "Land" in tl and "Creature" not in tl.split("//")[0],
         # singleton exemptions: basic lands, and "a deck can have any number of cards named ..."
