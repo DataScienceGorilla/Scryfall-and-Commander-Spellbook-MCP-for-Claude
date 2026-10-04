@@ -104,6 +104,15 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   `COMMANDER_QUERY = (is:commander or t:background)` (batched exact-name searches, cached per card)
   in `/deck/parse` + `/deck/card`; the type-line guess is only an offline fallback. Fixes Backgrounds
   (Agent of the Iron Throne) being flagged "can't normally be a commander".
+- [x] **Companions + deck stats** (2026-10-03): `companions.py` checks the 10 Ikoria companions against the
+  whole deck incl. the commander (front faces; Zirda approximate). Companion lives on `deck.companion`
+  (outside the 100): Brief picker (`/deck/companion` options in the commander's colors), panel slot with
+  status, exports, paste "Companion" section / Archidekt "Companion" category. Lutri = banned as a
+  companion; Yorion only under a "no maximum deck size" commander (Whtz) with 120+ cards. Curve (nonland,
+  commander excluded, creature vs other) + one-main-type breakdown in the panel and the CURRENT DECK block.
+- [x] **Rulebreaker commanders** (2026-10-03): `rulebreakers.py` (+ `rbExempt` in the page) - the 8
+  Mystery Booster Commander Edition "Rulebreaker" commanders' color-identity exceptions are honored by the
+  panel's off-color flags, proposal validation and the reply color check; Whtz lifts the 100 max.
 - [ ] Nice-to-haves: compact
   `mtg_rules_data/` (7 stale segment dirs from past re-ingests).
 

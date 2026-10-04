@@ -294,6 +294,12 @@ THAT is their current deck - use it; do not ask them to paste it again.
 - These blocks are plumbing: never mention "the session memory", "the deck block" or "@deck" to the
   player - just talk about their deck and what they told you.
 
+# RULEBREAKER COMMANDERS (Mystery Booster Commander Edition)
+- Eight commanders bend deckbuilding rules (not legal in sanctioned Commander - played by agreement).
+  When the CURRENT DECK block names one, its exception is real for this deck: cards it allows outside
+  the color identity are legal here (search for them WITHOUT commander_identity), and Whtz removes
+  the maximum deck size. Say once that it's a casual / Rule-0 commander if it matters; don't nag.
+
 # COMPANIONS (Ikoria)
 - In Commander a companion sits OUTSIDE the 100 (the deck stays exactly 100), must be inside the
   commander's color identity, and its condition applies to the whole deck INCLUDING the commander.
@@ -896,7 +902,7 @@ _CARD_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _IDENT_RE = re.compile(r"%%IDENTITY:([WUBRGC]+)%%", re.I)
 
 
-async def _check_off_color(answer_text: str, identity_override: str | None = None):
+async def _check_off_color(answer_text: str, identity_override: str | None = None, deck: dict | None = None):
     """
     Deterministic color-identity guardrail. Uses identity_override when given
     (captured authoritatively from the model's commander_identity tool args),
@@ -923,6 +929,9 @@ async def _check_off_color(answer_text: str, identity_override: str | None = Non
             continue
         ci = set(slim.get("color_identity") or [])
         if not ci.issubset(allowed):
+            full = FULL_CARD_CACHE.get(name.lower()) or FULL_CARD_CACHE.get((slim.get("name") or "").lower())
+            if deck and full and rulebreakers.exempt(full, deck.get("commander") or [], allowed, deck.get("cards")):
+                continue
             off.append({"name": name, "identity": "".join(sorted(ci)) or "C"})
     return off
 
@@ -1116,7 +1125,8 @@ async def _validate_proposals(changes: list, deck: dict | None, identity: str | 
                 ci = set(card.get("color_identity") or [])
                 if (card.get("legalities") or {}).get("commander") != "legal":
                     problem = f"add '{slim['name']}': not legal in Commander"
-                elif allowed is not None and not ci <= allowed:
+                elif allowed is not None and not ci <= allowed and not rulebreakers.exempt(
+                        card, (deck or {}).get("commander") or [], allowed, (deck or {}).get("cards")):
                     problem = f"add '{slim['name']}': color identity {''.join(sorted(ci))} is outside {identity}"
                 elif slim["name"].lower() in idx and not slim.get("any_qty"):
                     problem = f"add '{slim['name']}': already in the deck"
@@ -1278,6 +1288,7 @@ def _build_lines(deck: dict) -> list[str]:
 
 # --- Ikoria companions + curve/type stats ------------------------------------------------------
 import companions as companions_mod
+import rulebreakers
 
 
 async def _full_cards(entries: list) -> list:
@@ -1404,6 +1415,7 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
     if tagged:
         lines.append("Player tags: " + "; ".join(sorted(tagged)))
     lines += _brief_lines(deck.get("intake"))
+    lines += rulebreakers.context_lines(cmdrs, deck.get("cards"), set(_deck_identity(deck) or "") - {"C"})
     lines += await _companion_and_stats_lines(deck)
     lines += _build_lines(deck)
     lines += ["", "Decklist:", deck_text, "", details]
@@ -1712,7 +1724,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                     yield _sse("text", {"text": "\n\n_(Answer cut off at the length limit.)_"})
             t_check = time.monotonic()
             try:
-                off = _not_in_deck(await _check_off_color(answer_text, deck_identity))
+                off = _not_in_deck(await _check_off_color(answer_text, deck_identity, deck))
             except Exception:
                 off = None
             if time.monotonic() - t_check >= 1:
@@ -1794,7 +1806,7 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
             answer_text = "\n\n".join(kept_parts + ["".join(final_parts)]).strip()
             streamed = streamed or bool(kept_parts and STREAM_ANSWERS)
             try:
-                off = _not_in_deck(await _check_off_color(answer_text, deck_identity))
+                off = _not_in_deck(await _check_off_color(answer_text, deck_identity, deck))
             except Exception:
                 off = None
             if off:
@@ -2170,6 +2182,8 @@ def _slim_card(data: dict) -> dict:
         "name": data.get("name"),
         "scryfall_uri": data.get("scryfall_uri"),
         "color_identity": data.get("color_identity", []),
+        "type_line": data.get("type_line") or " // ".join(f.get("type_line", "") for f in data.get("card_faces") or []),
+        "cmc": data.get("cmc"),
         "image_uris": ({"normal": data["image_uris"].get("normal")}
                        if data.get("image_uris") else None),
         "card_faces": faces,

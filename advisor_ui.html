@@ -899,7 +899,8 @@ function deckForChat() {
            build: deck.build || null, companion: deck.companion ? { name: deck.companion.name } : null,
            cards: deck.cards.map(c => ({ name: c.name, qty: c.qty || 1, role: c.role || null,
                                          tags: c.tags || [], color_identity: c.color_identity || [],
-                                         roles: c.roles || [], cmc: c.cmc || 0, is_land: !!c.is_land })) };
+                                         roles: c.roles || [], cmc: c.cmc || 0, is_land: !!c.is_land,
+                                         type_line: c.type_line || '' })) };
 }
 function deckSnapshot() {
   if (!deck || !deck.cards) return null;
@@ -986,7 +987,7 @@ function deckComposition() {
     else if (typeof c.cmc === 'number') { mvSum += c.cmc * q; mvN += q; }
     if (c.game_changer) gc += q;
     for (const ci of (c.color_identity || [])) colors.add(ci);
-    if (ident && (c.color_identity || []).some(x => !ident.has(x))) offColor.push(c.name);
+    if (offColorFor(c, ident)) offColor.push(c.name);
     if (q > 1 && !anyQty(c)) dupes.push(c.name);
   }
   return { total, lands, gc, colors: ident ? [...ident] : [...colors], roleCounts, offColor, dupes,
@@ -1226,6 +1227,50 @@ function statsPanel() {
   return el;
 }
 
+// Rulebreaker commanders (Mystery Booster Commander Edition): cards they allow outside the
+// commander's colors aren't flagged off-color. Mirrors rulebreakers.exempt() on the server.
+const RULEBREAKERS = ['Grizzlegom, Hurloon Hero', 'Maular, the Next Evolution', 'Seluma, Light of Aysen', 'The Everforger',
+                      'The Unluckiest Planeswalker', 'Tolabow, Loch Rascal', 'Valko Indorian', 'Whtz, the Bibliophile'];
+function activeRulebreakers() {
+  const cm = ((deck && deck.commander) || []).map(lc);
+  return RULEBREAKERS.filter(n => cm.includes(lc(n)));
+}
+function typeWords(c) { return new Set((c.type_line || '').split(' // ')[0].replace(/—/g, ' ').split(/\s+/)); }
+function tolabowColor(ident) {
+  const counts = {};
+  for (const c of (deck && deck.cards) || []) {
+    const w = typeWords(c);
+    if (!w.has('Instant') && !w.has('Sorcery')) continue;
+    for (const x of (c.color_identity || [])) if (!ident.has(x)) counts[x] = (counts[x] || 0) + (c.qty || 1);
+  }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0] : null;
+}
+function rbExempt(c, ident) {
+  const rbs = activeRulebreakers();
+  if (!rbs.length || !c) return false;
+  const w = typeWords(c), basic = w.has('Basic') && w.has('Land');
+  for (const rb of rbs) {
+    if (rb.startsWith('Grizzlegom') && w.has('Land')) return true;
+    if (rb.startsWith('Whtz')) continue;
+    if (basic) return true;
+    if (rb.startsWith('Maular') && w.has('Creature') && (c.cmc || 0) >= 7) return true;
+    if (rb.startsWith('Seluma') && w.has('Angel')) return true;
+    if (rb === 'The Everforger' && ((w.has('Artifact') && w.has('Creature')) || w.has('Equipment'))) return true;
+    if (rb === 'The Unluckiest Planeswalker' && w.has('Aura')) return true;
+    if (rb.startsWith('Valko') && w.has('Phyrexian')) return true;
+    if (rb.startsWith('Tolabow') && (w.has('Instant') || w.has('Sorcery'))) {
+      const extra = (c.color_identity || []).filter(x => !ident.has(x));
+      const chosen = tolabowColor(ident);
+      if (new Set(extra).size <= 1 && (!chosen || extra.every(x => x === chosen))) return true;
+    }
+  }
+  return false;
+}
+function offColorFor(c, ident) {
+  return !!ident && (c.color_identity || []).some(x => !ident.has(x)) && !rbExempt(c, ident);
+}
+
 function startNewDeck() {
   pushUndo();
   deck = { commander: [], bracket: null, cards: [], not_found: [] };
@@ -1388,7 +1433,7 @@ function renderDeck() {
 function deckCardTile(c, ident) {
   const tile = document.createElement('div');
   tile.className = 'card-tile' + (c.game_changer ? ' gc' : '') + (isCommander(c) ? ' commander' : '');
-  if (ident && (c.color_identity || []).some(x => !ident.has(x))) tile.classList.add('offcolor');
+  if (offColorFor(c, ident)) tile.classList.add('offcolor');
   tile.title = c.name + (c.qty > 1 ? ` (x${c.qty})` : '') + ' - click to edit, drag to change role';
   if (c.image) {
     const img = document.createElement('img'); img.loading = 'lazy'; img.src = c.image; img.alt = c.name; img.draggable = false;
@@ -2244,7 +2289,8 @@ function setDeckIdentity(letters) {
 }
 function evaluateTile(entry) {
   if (!entry || !entry.tile || deckIdentity === null || entry.status !== 'ok') return;
-  const off = (entry.identity || []).some(c => !deckIdentity.has(c));
+  const off = (entry.identity || []).some(c => !deckIdentity.has(c))
+    && !rbExempt({ type_line: entry.typeLine, cmc: entry.cmc, color_identity: entry.identity }, deckIdentity);
   entry.tile.classList.toggle('offcolor', off);
   if (off) entry.tile.title = `${entry.canonical || ''} is outside this deck's color identity`;
 }
@@ -2478,6 +2524,7 @@ function applyCard(name, entry, data) {
     entry.img = img;
     entry.scryfall = data.scryfall_uri;
     entry.imgBack = backImage(data);
+    entry.typeLine = data.type_line || ''; entry.cmc = data.cmc || 0;  // for rulebreaker exceptions
     entry.identity = data.color_identity || [];
     entry.status = 'ok';
     entry.tile.className = 'card-tile';
