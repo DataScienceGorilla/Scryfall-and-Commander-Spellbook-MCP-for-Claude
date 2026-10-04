@@ -1347,7 +1347,10 @@ function renderDeck() {
       const c = deckFind(n);
       if (c && !canCommand(c)) warn(`${c.name} can't normally be a commander`);
     }
-    if (comp.total !== 100 && !building()) warn(comp.total < 100 ? `${100 - comp.total} short of 100` : `${comp.total - 100} over 100`);
+    // a commander can lift the maximum (Whtz, the Bibliophile: "no maximum deck size")
+    const noMax = deck.cards.some(c => isCommander(c) && c.no_max_deck);
+    if ((comp.total < 100 || (comp.total > 100 && !noMax)) && !building())
+      warn(comp.total < 100 ? `${100 - comp.total} short of 100` : `${comp.total - 100} over 100`);
     if (cap !== undefined && comp.gc > cap) warn(`${comp.gc - cap} game changer${comp.gc - cap > 1 ? 's' : ''} over the B${deck.bracket} cap`);
     if (comp.offColor.length) warn(`Off-color: ${comp.offColor.join(', ')}`);
     if (comp.dupes.length) warn(`Not singleton: ${comp.dupes.join(', ')}`);
@@ -1700,7 +1703,8 @@ function renderIntake(opts) {
       const b = document.createElement('button'); b.type = 'button';
       b.className = 'in-comp' + (compPick && lc(compPick) === lc(o.name) ? ' sel' : '');
       b.dataset.name = o.name;
-      const status = o.note ? o.note : o.ok ? 'your deck already qualifies ✓' : `${o.n_bad} card${o.n_bad > 1 ? 's' : ''} break it`;
+      const status = o.note ? o.note : o.ok ? 'your deck already qualifies ✓'
+        : o.short ? o.short : `${o.n_bad} card${o.n_bad > 1 ? 's' : ''} break it`;
       b.innerHTML = `<b></b><span class="ic-cond"></span><span class="ic-st ${o.ok ? 'ok' : 'bad'}"></span>`;
       b.querySelector('b').textContent = o.name;
       b.querySelector('.ic-cond').textContent = o.condition;

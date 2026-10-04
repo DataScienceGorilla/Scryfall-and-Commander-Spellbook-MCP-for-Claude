@@ -298,7 +298,8 @@ THAT is their current deck - use it; do not ask them to paste it again.
 - In Commander a companion sits OUTSIDE the 100 (the deck stays exactly 100), must be inside the
   commander's color identity, and its condition applies to the whole deck INCLUDING the commander.
   Once per game, {3} at sorcery speed puts it into your hand - a free extra card if the deck already
-  qualifies. Yorion can never be a companion in Commander.
+  qualifies. Lutri is legal in the 99 but BANNED AS A COMPANION. Yorion needs 120+ cards, so it only
+  works under a commander that removes the maximum deck size (e.g. Whtz, the Bibliophile).
 - The CURRENT DECK block reports the player's companion and whether the condition is met (naming the
   cards that break it), plus companions the deck already qualifies for. If one fits for free, say so
   once; if they have one that's broken, list what to change. Never suggest adds that break a chosen
@@ -1310,14 +1311,17 @@ async def _companion_report(cards: list, commanders: list, companion: str | None
             card = by_name.get(name)
             if not card or not set(card.get("color_identity") or []) <= ident:
                 continue
-            r = companions_mod.check(name, full)
-            options.append({"name": name, "condition": r["condition"], "ok": r["ok"], "note": r["note"],
+            r = companions_mod.check(name, full, cmdr)
+            # a Yorion that's merely short of 120 cards is a fixable goal, not a dead option
+            fixable = name.startswith("Yorion") and r["note"].startswith("needs")
+            options.append({"name": name, "condition": r["condition"], "ok": r["ok"],
+                            "note": "" if fixable else r["note"], "short": r["note"] if fixable else "",
                             "n_bad": len(r["violations"]), "bad": r["violations"][:12],
                             "image": (card.get("image_uris") or {}).get("normal")})
     chosen = None
     identity_ok = True
     if companion:
-        chosen = companions_mod.check(companion, full)
+        chosen = companions_mod.check(companion, full, cmdr)
         card = by_name.get(chosen["name"])
         identity_ok = bool(card) and (not cmdr or set(card.get("color_identity") or []) <= ident)
     return {"chosen": chosen, "identity_ok": identity_ok, "options": options}
@@ -2243,6 +2247,8 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         "is_land": "Land" in tl and "Creature" not in tl.split("//")[0],
         # singleton exemptions: basic lands, and "a deck can have any number of cards named ..."
         "any_qty": "Basic" in tl or "any number of cards named" in oracle,
+        # a commander that lifts the 100-card maximum (Whtz, the Bibliophile)
+        "no_max_deck": "no maximum deck size" in oracle.lower(),
         # could lead the deck. Overwritten by the Scryfall COMMANDER_QUERY result in
         # /deck/parse and /deck/card; this type-line guess is only the offline fallback.
         "can_command": ("Legendary" in tl and "Creature" in tl) or "Background" in tl

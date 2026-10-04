@@ -2,8 +2,10 @@
 
 In Commander a companion sits outside the 100 (deck size stays exactly 100), must be within the
 commander's color identity, and its condition applies to the whole starting deck INCLUDING the
-commander(s). Putting it into your hand costs {3} (sorcery speed). Yorion can never be a
-companion in Commander (100 is both the minimum and the maximum).
+commander(s). Putting it into your hand costs {3} (sorcery speed).
+- Yorion needs 20 cards over the minimum: impossible at exactly 100, possible only under a commander
+  that removes the maximum deck size (e.g. Whtz, the Bibliophile - "no maximum deck size"), with 120+.
+- Lutri is legal in the 99 but BANNED AS A COMPANION in Commander.
 
 Cards are judged by the face they have in the library: the front face of transform / modal
 double-faced cards; split and adventure cards use their full mana value.
@@ -101,17 +103,32 @@ CONDITIONS = {
 }
 
 
-def check(companion: str, cards: list) -> dict:
-    """cards: [(full Scryfall card, qty)] for the whole starting deck INCLUDING the commander(s).
-    -> {name, condition, ok, violations: [names], note}."""
+def no_max_deck_size(card: dict) -> bool:
+    """A commander whose text lifts the 100-card maximum (Whtz, the Bibliophile)."""
+    text = card.get("oracle_text") or " ".join(f.get("oracle_text", "") for f in card.get("card_faces") or [])
+    return "no maximum deck size" in text.lower()
+
+
+def check(companion: str, cards: list, commanders: set = frozenset()) -> dict:
+    """cards: [(full Scryfall card, qty)] for the whole starting deck INCLUDING the commander(s);
+    commanders: lowercased commander names. -> {name, condition, ok, violations: [names], note}."""
     name = next((n for n in CONDITIONS if n.lower() == (companion or "").lower()), None)
     if not name:
         return {"name": companion, "condition": "", "ok": False, "violations": [],
                 "note": "not an Ikoria companion"}
     cond, fn = CONDITIONS[name]
-    if name.startswith("Yorion"):
+    if name.startswith("Lutri"):
         return {"name": name, "condition": cond, "ok": False, "violations": [],
-                "note": "impossible in Commander - decks are exactly 100 cards"}
+                "note": "banned as a companion in Commander (it can still be in the 99)"}
+    if name.startswith("Yorion"):
+        if not any(no_max_deck_size(c) for c, _ in cards if c.get("name", "").lower() in commanders):
+            return {"name": name, "condition": cond, "ok": False, "violations": [],
+                    "note": "impossible in Commander - decks are exactly 100 cards (unless your commander "
+                            "removes the maximum deck size)"}
+        size = sum(q for _, q in cards)
+        cond = "at least 120 cards (your commander removes the 100-card maximum)"
+        return {"name": name, "condition": cond, "ok": size >= 120, "violations": [],
+                "note": "" if size >= 120 else f"needs at least 120 cards - the deck has {size}"}
     fronts = [(c, q, _front(c)) for c, q in cards]
     if name.startswith("Lutri"):
         bad = [c["name"] for c, q, f in fronts if q > 1 and not _is_land(f)]
