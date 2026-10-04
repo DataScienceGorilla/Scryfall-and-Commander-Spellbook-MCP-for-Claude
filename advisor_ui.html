@@ -312,6 +312,37 @@
   .bp-input { width: 52px; padding: 2px 4px; font: inherit; font-size: 13px; background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: var(--radius); }
   .bp-fill { margin-top: var(--s2); padding: 5px 12px !important; font-size: 13px !important; cursor: pointer; }
+  .companion-group .role-group-title .cmp-st.ok { color: var(--success-text); }
+  .companion-group .role-group-title .cmp-st.bad { color: var(--danger-text); }
+  .companion-group .card-tile { box-shadow: 0 0 0 2px var(--accent-2); cursor: zoom-in; }
+  .cmp-why { font-size: 12.5px; color: var(--danger-text); margin-top: var(--s2); }
+  .deck-statspanel { margin: calc(-1 * var(--s2)) 0 var(--s4); }
+  .deck-statspanel summary { cursor: pointer; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .st-wrap { display: flex; gap: var(--s4); flex-wrap: wrap; margin-top: var(--s2); }
+  .cv { flex: 1 1 220px; min-width: 200px; }
+  .cv-cols { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; height: 120px; align-items: end; }
+  .cv-col { display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+  .cv-n { font-size: 11px; color: var(--muted); min-height: 14px; }
+  .cv-bar { width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; display: flex; flex-direction: column-reverse; min-height: 0; overflow: hidden; }
+  .cv-bar i { display: block; background: var(--success); opacity: .85; }
+  .cv-x { font-size: 11.5px; margin-top: 3px; color: var(--text); }
+  .cv-key { display: flex; gap: var(--s3); font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .cv-key i { display: inline-block; width: 9px; height: 9px; margin-right: 4px; vertical-align: -1px; border-radius: 2px; }
+  .cv-key .k-cr { background: var(--success); opacity: .85; } .cv-key .k-ot { background: var(--accent); }
+  .ty { flex: 1 1 200px; min-width: 180px; display: flex; flex-direction: column; gap: 4px; }
+  .ty-row { display: grid; grid-template-columns: 92px 1fr 28px; gap: var(--s2); align-items: center; font-size: 12.5px; }
+  .ty-bar { height: 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .ty-bar i { display: block; height: 100%; background: var(--accent-2); }
+  .ty-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .in-comps { display: flex; flex-direction: column; gap: 6px; }
+  .in-comp { text-align: left; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .in-comp b { font-weight: 650; }
+  .in-comp .ic-cond { grid-column: 1; color: var(--muted); font-size: 12px; }
+  .in-comp .ic-st { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 12px; }
+  .in-comp .ic-st.ok { color: var(--success-text); } .in-comp .ic-st.bad { color: var(--danger-text); }
+  .in-comp.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-tint-strong); }
+  .in-comp:disabled { opacity: .5; cursor: default; }
   .deck-warns { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
   .deck-warn { font-size: 13px; color: var(--danger-text); padding-left: var(--s3); position: relative; }
   .deck-warn::before { content: ""; position: absolute; left: 2px; top: .55em; width: 6px; height: 6px;
@@ -844,6 +875,7 @@ async function loadDeckFromText(text) {
     if (data.commander && data.commander.length) deck.commander = data.commander.filter(n => deckFind(n));
     else deck.commander = (deck.commander || []).filter(n => deckFind(n));
     if (data.bracket >= 1 && data.bracket <= 5) deck.bracket = data.bracket;
+    if (data.companion) deck.companion = data.companion;  // a "Companion" section / category
     deckChanged();
     if (data.source) {
       showToast(`Imported "${data.name || 'deck'}" from ${data.source}`
@@ -864,7 +896,7 @@ function deckForChat() {
   // an empty deck only matters while building (no commander picked yet)
   if (!deck.cards.length && !building()) return null;
   return { commander: deck.commander || [], bracket: deck.bracket || null, intake: deck.intake || null,
-           build: deck.build || null,
+           build: deck.build || null, companion: deck.companion ? { name: deck.companion.name } : null,
            cards: deck.cards.map(c => ({ name: c.name, qty: c.qty || 1, role: c.role || null,
                                          tags: c.tags || [], color_identity: c.color_identity || [],
                                          roles: c.roles || [], cmc: c.cmc || 0, is_land: !!c.is_land })) };
@@ -873,7 +905,7 @@ function deckSnapshot() {
   if (!deck || !deck.cards) return null;
   const q = {}; for (const c of deck.cards) q[c.name] = c.qty || 1;
   return { commander: [...(deck.commander || [])], bracket: deck.bracket || null, q,
-           brief: JSON.stringify(deck.intake || null) };
+           brief: JSON.stringify(deck.intake || null), companion: deck.companion ? deck.companion.name : null };
 }
 function deckEditNote(prev, cur) {
   if (!prev || !cur) return '';
@@ -891,6 +923,7 @@ function deckEditNote(prev, cur) {
   if (prev.commander.join('|') !== cur.commander.join('|'))
     parts.push(`commander -> ${cur.commander.join(' + ') || 'unset'}`);
   if (prev.bracket !== cur.bracket) parts.push(`bracket -> ${cur.bracket || 'unset'}`);
+  if ((prev.companion || null) !== (cur.companion || null)) parts.push(`companion -> ${cur.companion || 'none'}`);
   if (prev.brief !== undefined && prev.brief !== cur.brief) parts.push('player updated their deck brief (see PLAYER BRIEF)');
   return parts.length ? `[Deck edits since your last reply: ${parts.join('; ')}]` : '';
 }
@@ -1100,6 +1133,99 @@ function startBuild(opts = {}) {
   });
 }
 
+// ---- Ikoria companion (outside the 100) + curve / type stats ----
+// deck.companion = a deck-card object kept apart from deck.cards. The server checks its condition
+// against the whole deck (commander included); the report is cached per deck version.
+let companionReport = null, companionKey = '', companionTimer = null;
+function companionPayload(cmdrs) {
+  return { cards: deck.cards.map(c => ({ name: c.name, qty: c.qty || 1 })), commander: cmdrs || deck.commander || [],
+           companion: deck.companion ? deck.companion.name : null };
+}
+async function fetchCompanion(cmdrs) {
+  const r = await fetch('/deck/companion', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                             body: JSON.stringify(companionPayload(cmdrs)) });
+  return r.ok ? r.json() : null;
+}
+function refreshCompanion() {
+  if (!deck || !deck.companion || !deck.cards.length) { companionReport = null; companionKey = ''; return; }
+  const key = JSON.stringify(companionPayload());
+  if (key === companionKey) return;
+  companionKey = key;
+  clearTimeout(companionTimer);
+  companionTimer = setTimeout(async () => {
+    try { const rep = await fetchCompanion(); if (key === companionKey) { companionReport = rep; renderDeck(); } } catch (e) {}
+  }, 300);
+}
+function companionStatus() {
+  const ch = companionReport && companionReport.chosen;
+  if (!ch || !deck.companion || lc(ch.name) !== lc(deck.companion.name)) return { cls: '', text: 'checking…', tip: '' };
+  if (ch.note) return { cls: 'bad', text: ch.note, tip: ch.condition };
+  if (!companionReport.identity_ok) return { cls: 'bad', text: "outside the commander's colors", tip: ch.condition };
+  if (ch.ok) return { cls: 'ok', text: 'condition met ✓', tip: ch.condition };
+  return { cls: 'bad', text: `${ch.violations.length} card${ch.violations.length > 1 ? 's' : ''} break it`,
+           tip: ch.condition + '\nBreaks it: ' + ch.violations.join(', ') };
+}
+function companionSection() {
+  const c = deck.companion;
+  const st = companionStatus();
+  const section = document.createElement('div'); section.className = 'role-group companion-group';
+  const title = document.createElement('div'); title.className = 'role-group-title';
+  title.innerHTML = `Companion · <span class="cmp-st ${st.cls}"></span>`;
+  title.querySelector('.cmp-st').textContent = st.text;
+  title.title = (st.tip ? st.tip + '\n' : '') + 'Outside the 100 - change it in the deck brief';
+  const grid = document.createElement('div'); grid.className = 'role-grid';
+  const tile = document.createElement('div'); tile.className = 'card-tile companion';
+  tile.title = `${c.name} - companion (click to view)`;
+  tile.innerHTML = c.image ? `<img loading="lazy" src="${escapeHtml(c.image)}" alt="">` : `<span>${escapeHtml(c.name)}</span>`;
+  tile.onclick = () => openLightbox({ img: c.image, imgBack: c.image_back || null, canonical: c.name, scryfall: c.scryfall_uri || null });
+  grid.appendChild(tile);
+  if (st.cls === 'bad' && companionReport && companionReport.chosen && companionReport.chosen.violations.length) {
+    const why = document.createElement('div'); why.className = 'cmp-why';
+    why.textContent = 'Breaks it: ' + companionReport.chosen.violations.slice(0, 12).join(', ')
+      + (companionReport.chosen.violations.length > 12 ? ` +${companionReport.chosen.violations.length - 12} more` : '');
+    section.append(title, grid, why);
+  } else section.append(title, grid);
+  return section;
+}
+
+// Curve (nonland, commander excluded, 7+ bucket; creature vs other) and one main type per card -
+// the same rules the server uses for the advisor.
+const TYPE_ORDER = ['Land', 'Creature', 'Planeswalker', 'Battle', 'Instant', 'Sorcery', 'Artifact', 'Enchantment'];
+function mainType(c) {
+  const front = (c.type_line || '').split(' // ')[0].split(' — ')[0];
+  return TYPE_ORDER.find(t => front.includes(t)) || 'Other';
+}
+function statsPanel() {
+  const curve = Array.from({ length: 8 }, () => ({ creature: 0, other: 0 }));
+  const types = {};
+  for (const c of deck.cards) {
+    if (isCommander(c)) continue;
+    const q = c.qty || 1, t = mainType(c);
+    types[t] = (types[t] || 0) + q;
+    if (t === 'Land') continue;
+    curve[Math.min(7, Math.floor(c.cmc || 0))][t === 'Creature' ? 'creature' : 'other'] += q;
+  }
+  const el = document.createElement('details'); el.className = 'deck-statspanel';
+  el.open = prefs.statsOpen !== false;
+  el.addEventListener('toggle', () => { prefs.statsOpen = el.open; savePrefs(); });
+  const max = Math.max(1, ...curve.map(b => b.creature + b.other));
+  const bars = curve.map((b, i) => {
+    const n = b.creature + b.other;
+    return `<div class="cv-col" title="${i === 7 ? '7+' : i} MV: ${n} (${b.creature} creature${b.creature === 1 ? '' : 's'}, ${b.other} other)">
+      <span class="cv-n">${n || ''}</span>
+      <div class="cv-bar" style="height:${Math.round(100 * n / max)}%"><i style="height:${n ? Math.round(100 * b.creature / n) : 0}%"></i></div>
+      <span class="cv-x">${i === 7 ? '7+' : i}</span></div>`;
+  }).join('');
+  const total = Object.values(types).reduce((a, b) => a + b, 0) || 1;
+  const typeRows = Object.entries(types).sort((a, b) => b[1] - a[1]).map(([t, n]) =>
+    `<div class="ty-row"><span class="ty-l">${t}</span><span class="ty-bar"><i style="width:${Math.round(100 * n / total)}%"></i></span><span class="ty-n">${n}</span></div>`).join('');
+  el.innerHTML = `<summary>Curve &amp; card types</summary>
+    <div class="st-wrap"><div class="cv"><div class="cv-cols">${bars}</div>
+      <div class="cv-key"><span><i class="k-cr"></i>creatures</span><span><i class="k-ot"></i>other spells</span></div></div>
+      <div class="ty">${typeRows}</div></div>`;
+  return el;
+}
+
 function startNewDeck() {
   pushUndo();
   deck = { commander: [], bracket: null, cards: [], not_found: [] };
@@ -1230,6 +1356,8 @@ function renderDeck() {
   if (warns.childNodes.length) head.appendChild(warns);
   deckView.appendChild(head);
   if (building()) deckView.appendChild(buildPanel(comp));
+  if (deck.cards.length) deckView.appendChild(statsPanel());
+  refreshCompanion();
 
   // group -> cards, in taxonomy order (plus any custom role names at the end)
   const byGroup = {};
@@ -1249,6 +1377,7 @@ function renderDeck() {
     section.appendChild(title); section.appendChild(grid);
     bindDropZone(section);
     deckView.appendChild(section);
+    if (g === 'Commander' && deck.companion) deckView.appendChild(companionSection());
   }
   cardsEl.scrollTop = scroll;
 }
@@ -1379,11 +1508,13 @@ function decklistText(format) {
   const cmdrs = deck.cards.filter(isCommander);
   const rest = deck.cards.filter(c => !isCommander(c)).sort((a, b) => a.name.localeCompare(b.name));
   const line = c => `${c.qty || 1} ${c.name}`;
+  const comp = deck.companion;
   if (format === 'archidekt')
-    return cmdrs.map(c => `${c.qty || 1}x ${c.name} [Commander{top}]`).concat(rest.map(c => `${c.qty || 1}x ${c.name}`)).join('\n');
+    return cmdrs.map(c => `${c.qty || 1}x ${c.name} [Commander{top}]`).concat(rest.map(c => `${c.qty || 1}x ${c.name}`))
+      .concat(comp ? [`1x ${comp.name} [Companion]`] : []).join('\n');
   if (format === 'arena' && cmdrs.length)
-    return `Commander\n${cmdrs.map(line).join('\n')}\n\nDeck\n${rest.map(line).join('\n')}`;
-  return cmdrs.concat(rest).map(line).join('\n');
+    return (comp ? `Companion\n1 ${comp.name}\n\n` : '') + `Commander\n${cmdrs.map(line).join('\n')}\n\nDeck\n${rest.map(line).join('\n')}`;
+  return cmdrs.concat(rest).map(line).join('\n') + (comp ? `\n\nCompanion\n1 ${comp.name}` : '');
 }
 function copyDecklist(format = 'plain') {
   if (!deck || !deck.cards.length) return;
@@ -1456,6 +1587,8 @@ function renderIntake(opts) {
     <section><h3>Gameplan <span class="in-hint">how do you want to win?</span></h3>
       <textarea class="in-plan" rows="3" ${NO_AUTOFILL} placeholder="e.g. Drain everyone out with sacrifice triggers; Gut is a payoff, the treasure engine is the deck.">${esc(brief.plan)}</textarea>
       <div class="in-chips in-styles"></div></section>
+    <section><h3>Companion <span class="in-hint">optional - an Ikoria companion outside the 100, in your commander's colors</span></h3>
+      <div class="in-comps"><div class="in-hint">Pick a commander to see which companions fit.</div></div></section>
     <section><h3>Must keep <span class="in-hint">pet cards the advisor should never suggest cutting</span></h3>
       <div class="in-row"><input type="search" class="in-keep-input" list="inKeepList" ${NO_AUTOFILL} placeholder="Type a card from your deck…"><button type="button" class="in-small in-keep-add">Add</button></div>
       <datalist id="inKeepList">${deck.cards.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
@@ -1470,7 +1603,7 @@ function renderIntake(opts) {
   </form>`;
   const $ = s => intakeEl.querySelector(s);
 
-  const paintCmdrs = () => {
+  let paintCmdrs = () => {
     const box = $('.in-cmdrs'); box.innerHTML = '';
     const cands = deck.cards.filter(c => canCommand(c) || cmdrs.some(n => lc(n) === lc(c.name)));
     if (!cands.length) box.innerHTML = opts.build ? '<div class="in-hint">Search for your commander below.</div>' : '<div class="in-hint">No legal commanders found in the list - add yours below.</div>';
@@ -1543,6 +1676,45 @@ function renderIntake(opts) {
   $('.in-keep-add').onclick = addKeep;
   $('.in-keep-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addKeep(); } });
 
+  // companion picker: the Ikoria companions in the chosen commander's colors, with how far the
+  // deck is from each one's condition (checked by the server against every card)
+  let compPick = deck.companion ? deck.companion.name : null;
+  let compSeq = 0;
+  const paintComps = async () => {
+    const box = $('.in-comps');
+    const sel = cmdrs.filter(n => deckFind(n));
+    if (!sel.length) { box.innerHTML = '<div class="in-hint">Pick a commander to see which companions fit.</div>'; return; }
+    box.innerHTML = '<div class="in-hint">Checking companions…</div>';
+    const seq = ++compSeq;
+    let rep = null;
+    try { rep = await fetchCompanion(sel); } catch (e) {}
+    if (seq !== compSeq) return;
+    const opts = (rep && rep.options) || [];
+    if (!opts.length) { box.innerHTML = '<div class="in-hint">No Ikoria companion fits these colors.</div>'; return; }
+    box.innerHTML = '';
+    const none = document.createElement('button'); none.type = 'button';
+    none.className = 'in-comp' + (compPick ? '' : ' sel'); none.innerHTML = '<b>No companion</b>';
+    none.onclick = () => { compPick = null; paintCompSel(); };
+    box.appendChild(none);
+    for (const o of opts) {
+      const b = document.createElement('button'); b.type = 'button';
+      b.className = 'in-comp' + (compPick && lc(compPick) === lc(o.name) ? ' sel' : '');
+      b.dataset.name = o.name;
+      const status = o.note ? o.note : o.ok ? 'your deck already qualifies ✓' : `${o.n_bad} card${o.n_bad > 1 ? 's' : ''} break it`;
+      b.innerHTML = `<b></b><span class="ic-cond"></span><span class="ic-st ${o.ok ? 'ok' : 'bad'}"></span>`;
+      b.querySelector('b').textContent = o.name;
+      b.querySelector('.ic-cond').textContent = o.condition;
+      b.querySelector('.ic-st').textContent = status;
+      if (o.bad && o.bad.length) b.title = 'Breaks it: ' + o.bad.join(', ') + (o.n_bad > o.bad.length ? ` +${o.n_bad - o.bad.length} more` : '');
+      if (o.note) b.disabled = true;
+      else b.onclick = () => { compPick = o.name; paintCompSel(); };
+      box.appendChild(b);
+    }
+  };
+  const paintCompSel = () => intakeEl.querySelectorAll('.in-comp').forEach(b =>
+    b.classList.toggle('sel', compPick ? lc(b.dataset.name || '') === lc(compPick) : !b.dataset.name));
+  const _paintCmdrs = paintCmdrs;
+  paintCmdrs = () => { _paintCmdrs(); paintComps(); };
   paintCmdrs(); paintPills();
   chipGroup('.in-styles', INTAKE_STYLES, styles);
   chipGroup('.in-avoid', INTAKE_AVOID, avoid);
@@ -1558,8 +1730,11 @@ function renderIntake(opts) {
     deck.intake = { plan: $('.in-plan').value.trim(), styles, keep, avoid,
                     avoidNote: $('.in-avoid-note').value.trim(), budget: $('.in-budget').value.trim(),
                     notes: $('.in-notes').value.trim() };
-    deckChanged();
-    closeIntake(true);
+    const finish = () => { deckChanged(); closeIntake(true); };
+    if (!compPick) { deck.companion = null; finish(); return; }
+    if (deck.companion && lc(deck.companion.name) === lc(compPick)) { finish(); return; }
+    fetch('/deck/card?name=' + encodeURIComponent(compPick)).then(r => r.ok ? r.json() : null)
+      .then(c => { if (c) deck.companion = c; finish(); }).catch(finish);
   };
 }
 intakeEl.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeIntake(false); } });

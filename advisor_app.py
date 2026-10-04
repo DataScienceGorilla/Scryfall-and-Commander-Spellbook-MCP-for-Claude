@@ -294,6 +294,16 @@ THAT is their current deck - use it; do not ask them to paste it again.
 - These blocks are plumbing: never mention "the session memory", "the deck block" or "@deck" to the
   player - just talk about their deck and what they told you.
 
+# COMPANIONS (Ikoria)
+- In Commander a companion sits OUTSIDE the 100 (the deck stays exactly 100), must be inside the
+  commander's color identity, and its condition applies to the whole deck INCLUDING the commander.
+  Once per game, {3} at sorcery speed puts it into your hand - a free extra card if the deck already
+  qualifies. Yorion can never be a companion in Commander.
+- The CURRENT DECK block reports the player's companion and whether the condition is met (naming the
+  cards that break it), plus companions the deck already qualifies for. If one fits for free, say so
+  once; if they have one that's broken, list what to change. Never suggest adds that break a chosen
+  companion's condition. Companions are set in the deck brief - you can't set one with proposals.
+
 # PROPOSING CHANGES & ASKING THE PLAYER (the player stays in control of their deck)
 - When a deck is loaded and you recommend concrete cuts, adds or swaps, put them through
   propose_changes - they appear as accept/reject cards beside the player's deck and accepting applies
@@ -1265,6 +1275,91 @@ def _build_lines(deck: dict) -> list[str]:
             "Work one section per batch (see BUILD MODE in your instructions)."]
 
 
+# --- Ikoria companions + curve/type stats ------------------------------------------------------
+import companions as companions_mod
+
+
+async def _full_cards(entries: list) -> list:
+    """[(name, qty)] -> [(full Scryfall card, qty)] via the shared batch cache (unresolved dropped)."""
+    await _batch_resolve([n for n, _ in entries])
+    out = []
+    for n, q in entries:
+        full = FULL_CARD_CACHE.get(n.lower())
+        if full is None:
+            slim = CARD_IMG_CACHE.get(n.lower())
+            full = FULL_CARD_CACHE.get((slim or {}).get("name", "").lower()) if slim else None
+        if full:
+            out.append((full, q))
+    return out
+
+
+async def _companion_report(cards: list, commanders: list, companion: str | None) -> dict:
+    """{chosen: check | None, identity_ok, options: [{name, condition, ok, n_bad, bad}]} for the
+    deck (commander included). Options = the Ikoria companions inside the commander's colors."""
+    full = await _full_cards(cards)
+    cmdr = {n.lower() for n in commanders}
+    ident = set()
+    for c, _ in full:
+        if c["name"].lower() in cmdr:
+            ident |= set(c.get("color_identity") or [])
+    comp_full = await _full_cards([(n, 1) for n in companions_mod.CONDITIONS])
+    by_name = {c["name"]: c for c, _ in comp_full}
+    options = []
+    if cmdr:
+        for name in companions_mod.CONDITIONS:
+            card = by_name.get(name)
+            if not card or not set(card.get("color_identity") or []) <= ident:
+                continue
+            r = companions_mod.check(name, full)
+            options.append({"name": name, "condition": r["condition"], "ok": r["ok"], "note": r["note"],
+                            "n_bad": len(r["violations"]), "bad": r["violations"][:12],
+                            "image": (card.get("image_uris") or {}).get("normal")})
+    chosen = None
+    identity_ok = True
+    if companion:
+        chosen = companions_mod.check(companion, full)
+        card = by_name.get(chosen["name"])
+        identity_ok = bool(card) and (not cmdr or set(card.get("color_identity") or []) <= ident)
+    return {"chosen": chosen, "identity_ok": identity_ok, "options": options}
+
+
+async def _companion_and_stats_lines(deck: dict) -> list[str]:
+    entries = [(c["name"], int(c.get("qty") or 1)) for c in deck.get("cards") or [] if c.get("name")]
+    cmdrs = deck.get("commander") or []
+    companion = (deck.get("companion") or {}).get("name") if isinstance(deck.get("companion"), dict) \
+        else deck.get("companion")
+    lines = []
+    try:
+        full = await _full_cards(entries)
+        st = companions_mod.deck_stats(full, {n.lower() for n in cmdrs})
+        curve = " ".join(f"{'7+' if b == 7 else b}:{v['creature'] + v['other']}" for b, v in sorted(st["curve"].items()))
+        types = ", ".join(f"{t} {n}" for t, n in sorted(st["types"].items(), key=lambda x: -x[1]))
+        lines += ["", f"MANA CURVE (nonland cards by mana value, commander excluded): {curve}",
+                  f"CARD TYPES (one main type per card, commander excluded): {types}"]
+        rep = await _companion_report(entries, cmdrs, companion)
+    except Exception:
+        return lines
+    ch = rep["chosen"]
+    if ch:
+        if ch["note"]:
+            status = ch["note"]
+        elif not rep["identity_ok"]:
+            status = "ILLEGAL - outside the commander's color identity"
+        elif ch["ok"]:
+            status = "condition MET"
+        else:
+            status = (f"condition NOT MET - {len(ch['violations'])} card(s) break it: "
+                      + ", ".join(ch["violations"][:15]))
+        lines += ["", f"COMPANION (outside the 100): {ch['name']} - {ch['condition']} - {status}"]
+    fits = [o["name"] for o in rep["options"] if o["ok"]]
+    close = [f"{o['name']} ({o['n_bad']} break it)" for o in rep["options"]
+             if not o["ok"] and not o["note"] and 0 < o["n_bad"] <= 8]
+    if (fits or close) and not (ch and ch["ok"]):
+        lines.append("Companion options in these colors: "
+                     + "; ".join([f"{n} - deck already qualifies" for n in fits] + close))
+    return lines
+
+
 async def _deck_context(deck) -> tuple[str, str, str | None]:
     """(CURRENT DECK block, canonical deck text, commander identity) - empty when no deck."""
     if not isinstance(deck, dict) or not deck.get("cards"):
@@ -1305,6 +1400,7 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
     if tagged:
         lines.append("Player tags: " + "; ".join(sorted(tagged)))
     lines += _brief_lines(deck.get("intake"))
+    lines += await _companion_and_stats_lines(deck)
     lines += _build_lines(deck)
     lines += ["", "Decklist:", deck_text, "", details]
     return "\n".join(lines), deck_text, _deck_identity(deck)
@@ -2206,7 +2302,7 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
     into structured deck cards (name-resolved, role-tagged)."""
     body = await request.json()
     text = body.get("text") or ""
-    meta = {}
+    meta, companion_name = {}, None
     url = find_deck_url(text) if len(_DECK_LINE.findall(text)) < 15 else None
     if url:
         try:
@@ -2218,10 +2314,16 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
         text = "\n".join(f"{q} {n}" for q, n in imp["cards"])
         meta = {"commander": imp["commanders"], "bracket": imp["bracket"], "source": imp["source"],
                 "name": imp["name"], "skipped": imp["skipped"]}
+        companion_name = imp.get("companion")
     parsed = parse_decklist(text)
     main = parsed["main"]
-    if not url:  # a pasted export can name its commander and board sections too
+    if not url:  # a pasted export can name its commander, companion and board sections too
         meta = {"commander": parsed["commanders"], "skipped": parsed["skipped"]}
+        companion_name = (parsed.get("companions") or [None])[0]
+    if companion_name:
+        full = await _resolve_full_card(companion_name)
+        if full:
+            meta["companion"] = _slim_deck_card(full, 1)
     qty_by_name = {}
     for e in main:
         qty_by_name[e["card"]] = qty_by_name.get(e["card"], 0) + e["quantity"]
@@ -2336,6 +2438,15 @@ async def _batch_resolve(names: list[str]) -> None:
     rest = [n for n in todo if n.lower() not in CARD_IMG_CACHE]
     for n, slim in zip(rest, await asyncio.gather(*(_resolve_card(n) for n in rest))):
         CARD_IMG_CACHE[n.lower()] = slim
+
+
+@app.post("/deck/companion")
+async def deck_companion(request: Request, _: None = Depends(require_auth)):
+    """Companion check for the page: {cards: [{name, qty}], commander: [names], companion: name}."""
+    body = await request.json()
+    entries = [(str(c.get("name")), int(c.get("qty") or 1)) for c in (body.get("cards") or [])[:250] if c.get("name")]
+    return JSONResponse(await _companion_report(entries, [str(n) for n in body.get("commander") or []],
+                                                body.get("companion")))
 
 
 @app.post("/cards")

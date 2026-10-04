@@ -766,7 +766,8 @@ async def spellbook_find_combos_for_cards(cards: list, limit: int = 5) -> str:
 DECK_LINE_RE = re.compile(r"^\s*\d+\s*[xX]?\s+\S", re.M)
 
 # Section headers and per-card categories that mean "not in the 99".
-_SECTION_COMMANDER = {"commander", "commanders", "companion"}
+_SECTION_COMMANDER = {"commander", "commanders"}
+_SECTION_COMPANION = {"companion", "companions"}
 _SECTION_MAIN = {"deck", "main", "mainboard", "main deck", "the 99"}
 _SECTION_SKIP = {"sideboard", "maybeboard", "maybe", "considering", "tokens", "token", "attractions",
                  "stickers", "contraptions"}
@@ -776,13 +777,14 @@ _LINE_RE = re.compile(r"^\s*(\d+)\s*[xX]?\s+(.+?)\s*$")
 def parse_decklist(text: str) -> dict:
     """Parse a pasted decklist in any common export format into
     {"main": [{"card", "quantity"}] (the playable deck INCLUDING commanders),
-     "commanders": [names], "skipped": n (maybe/side-board cards left out)}.
+     "commanders": [names], "companions": [names] (outside the 100),
+     "skipped": n (maybe/side-board cards left out)}.
 
     Understands: plain "1 Sol Ring" / "1x Sol Ring"; set/collector suffixes "(C21) 263";
     section headers ("Commander", "// Sideboard", "MAYBEBOARD:", "Deck (99)"); and
     Archidekt's text export, where each line carries its categories and tags:
     "1x Agent of the Iron Throne (clb) 107 [Commander{top}] ^Sleeved,#fb00e5^"."""
-    main, commanders, skipped = [], [], 0
+    main, commanders, companions, skipped = [], [], [], 0
     section = "main"
     # Bare names (no quantity) only count in a names-only list or under a Commander
     # header - otherwise the chat text around a pasted list would become "cards".
@@ -797,6 +799,8 @@ def parse_decklist(text: str) -> dict:
             header = " ".join(header.split())
             if header in _SECTION_COMMANDER:
                 section = "commander"
+            elif header in _SECTION_COMPANION:
+                section = "companion"
             elif header in _SECTION_SKIP:
                 section = "skip"
             elif header in _SECTION_MAIN:
@@ -804,7 +808,9 @@ def parse_decklist(text: str) -> dict:
             elif (names_only or section == "commander") and len(line) < 60 and not re.search(r"https?://", line):
                 # a bare card name (quantity 1) - old behavior kept for "Sol Ring" lines
                 name = re.split(r"\s\(|\s\[|\s\^", line)[0].strip()
-                if name and section != "skip" and not header.endswith("board"):
+                if name and section == "companion":
+                    companions.append(name)
+                elif name and section != "skip" and not header.endswith("board"):
                     main.append({"card": name, "quantity": 1})
                     if section == "commander":
                         commanders.append(name)
@@ -819,13 +825,16 @@ def parse_decklist(text: str) -> dict:
         name = re.split(r"\s\(", name, 1)[0].strip()    # (set) collector#
         if not name:
             continue
+        if section == "companion" or "companion" in cats:
+            companions.append(name)  # sits outside the 100
+            continue
         if section == "skip" or any(c in _SECTION_SKIP for c in cats):
             skipped += qty
             continue
         if section == "commander" or "commander" in cats:
             commanders.append(name)
         main.append({"card": name, "quantity": qty})
-    return {"main": main, "commanders": commanders, "skipped": skipped}
+    return {"main": main, "commanders": commanders, "companions": companions, "skipped": skipped}
 
 
 def _parse_decklist_to_main(text: str) -> list[dict]:
@@ -977,12 +986,15 @@ async def import_deck_url(url: str) -> dict:
             d = r.json()
             included = {c["name"]: c.get("includedInDeck", True) for c in d.get("categories", [])}
             premier = {c["name"] for c in d.get("categories", []) if c.get("isPremier")}
-            cards, commanders, skipped = [], [], 0
+            cards, commanders, skipped, companion = [], [], 0, None
             for c in d.get("cards", []):
                 if c.get("deletedAt"):
                     continue
                 name = c["card"]["oracleCard"]["name"]
                 cats = c.get("categories") or []
+                if any(x.lower() == "companion" for x in cats):
+                    companion = companion or name  # outside the 100
+                    continue
                 if cats and not included.get(cats[0], True):  # primary category = its board
                     skipped += c.get("quantity", 1)
                     continue
@@ -990,7 +1002,8 @@ async def import_deck_url(url: str) -> dict:
                     commanders.append(name)
                 cards.append((c.get("quantity", 1), name))
             return {"source": "Archidekt", "name": d.get("name"), "commanders": commanders,
-                    "cards": cards, "skipped": skipped, "bracket": d.get("edhBracket")}
+                    "cards": cards, "skipped": skipped, "bracket": d.get("edhBracket"),
+                    "companion": companion}
 
         if m.group("mox"):
             r = await client.get(f"https://api2.moxfield.com/v3/decks/all/{m.group('mox')}")

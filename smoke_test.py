@@ -106,6 +106,18 @@ def main():
     check("/card/search", r.status_code == 200 and "Krenko, Mob Boss" in r.json().get("names", []))
     r = c.post("/cards", json={"names": ["Sol Ring", "Fire // Ice", "craterhof", "Not A Real Card Xyz"]})
     got = r.json().get("cards", {}) if r.status_code == 200 else {}
+    r = c.post("/deck/parse", json={"text": "Companion\n1 Lurrus of the Dream-Den\n\nCommander\n1 Kaya, Ghost Assassin\n\n"
+                                            "Deck\n1 Sol Ring\n1 Sun Titan\n10 Plains"})
+    d = r.json() if r.status_code == 200 else {}
+    check("/deck/parse companion section (outside the 100)",
+          (d.get("companion") or {}).get("name") == "Lurrus of the Dream-Den"
+          and "Lurrus of the Dream-Den" not in [x["name"] for x in d.get("cards", [])], str(d.get("companion"))[:120])
+    r = c.post("/deck/companion", json={"cards": [{"name": "Kaya, Ghost Assassin", "qty": 1}, {"name": "Sol Ring", "qty": 1},
+                                                  {"name": "Sun Titan", "qty": 1}, {"name": "Plains", "qty": 10}],
+                                        "commander": ["Kaya, Ghost Assassin"], "companion": "Lurrus of the Dream-Den"})
+    ch = (r.json() if r.status_code == 200 else {}).get("chosen") or {}
+    check("/deck/companion (Lurrus broken by commander + Sun Titan)",
+          ch.get("ok") is False and set(ch.get("violations", [])) == {"Kaya, Ghost Assassin", "Sun Titan"}, str(ch)[:160])
     check("/cards batch (exact, split card, typo, miss)",
           (got.get("Sol Ring") or {}).get("name") == "Sol Ring"
           and (got.get("Fire // Ice") or {}).get("name") == "Fire // Ice"
