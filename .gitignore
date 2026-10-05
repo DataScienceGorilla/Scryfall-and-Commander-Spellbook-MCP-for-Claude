@@ -29,3 +29,6 @@ deploy.log
 accounts.json
 accounts.tmp
 benchmarks/
+
+# saved chat transcripts for the admin page (players notified in-app)
+chat_store/

@@ -466,6 +466,7 @@
   body.nosidebar #sidebar { display: none; }
   #newChat { margin: 12px; padding: 9px 12px; background: var(--accent); color: var(--on-accent); border: none;
     border-radius: var(--radius); font-weight: 650; cursor: pointer; font-size: 13px; }
+  .privacy-note { font-size: 11.5px; color: var(--muted); padding: 8px 14px 12px; border-top: 1px solid var(--border); }
   #chatlist { flex: 1; overflow-y: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 2px; }
   .chat-row { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: var(--radius);
     cursor: pointer; color: var(--muted); font-size: 13px; }
@@ -565,12 +566,14 @@
     <h1>Brew Bot</h1>
     <span class="spacer"></span>
     <button id="settingsBtn" title="Layout and text settings" aria-label="Settings">⚙</button>
+    <button id="adminBtn" hidden onclick="location.href='/admin'" title="Logs, users and saved chats">Admin</button>
     <button id="logoutBtn" hidden onclick="location.href='/logout'">Sign out</button>
   </header>
   <main>
     <aside id="sidebar">
       <button id="newChat">+ New chat</button>
       <div id="chatlist"></div>
+      <div class="privacy-note">Chats are saved on the server and can be read by the site admin.</div>
     </aside>
     <section id="chat">
       <div id="messages">
@@ -627,6 +630,7 @@ _fetch('/me').then(r => r.ok ? r.json() : null).then(me => {
   const btn = document.getElementById('logoutBtn');
   btn.textContent = 'Sign out (' + me.user + ')';
   btn.hidden = false;
+  document.getElementById('adminBtn').hidden = !me.admin;
 }).catch(() => {});
 
 let SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) ||

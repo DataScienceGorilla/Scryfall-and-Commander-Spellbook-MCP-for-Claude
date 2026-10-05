@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f1e8cf' stroke='%23d2c39c' stroke-width='2'/%3E%3Cpath d='M25 9h14M28 9v15L15 46a6 6 0 0 0 5 9h24a6 6 0 0 0 5-9L36 24V9' fill='none' stroke='%234a1d87' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M19.5 41h25L49 48.5A4 4 0 0 1 45.5 54h-27A4 4 0 0 1 15 48.5z' fill='%234a1d87'/%3E%3C/svg%3E" />
+<title>Admin · Brew Bot</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=IM+Fell+English&family=Karla:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ead9b2; --panel: #f0e3c0; --panel-2: #e4d1a4; --border: #c4a674;
+    --text: #2b1d10; --muted: #6c5434; --ink-line: #5a4127; --accent: #4a1d87;
+    --accent-tint: rgba(74, 29, 135, .10); --danger: #8f2a21; --ok: #2f6a3c;
+    --radius: 3px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 500 14px/1.5 'Karla', system-ui, sans-serif;
+         display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--panel);
+           border-bottom: 3px double var(--ink-line); }
+  header h1 { font-family: 'IM Fell English', Georgia, serif; font-weight: 400; font-size: 24px; margin: 0; }
+  header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  .tabs { display: flex; gap: 4px; margin-left: 12px; }
+  .tabs button { background: none; border: 1px solid transparent; border-radius: var(--radius); padding: 5px 12px;
+                 font: inherit; color: var(--muted); cursor: pointer; }
+  .tabs button.on { border-color: var(--ink-line); color: var(--text); background: var(--panel-2); }
+  .spacer { flex: 1; }
+  main { flex: 1; min-height: 0; display: flex; }
+  .view { flex: 1; min-height: 0; display: none; }
+  .view.on { display: flex; }
+  /* chats */
+  #chatList { width: 340px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid var(--border); background: var(--panel); }
+  .filters { display: flex; gap: 6px; padding: 10px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  select, input[type=search] { font: inherit; font-size: 13px; padding: 4px 8px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius); }
+  input[type=search] { flex: 1; min-width: 120px; }
+  .crow { padding: 8px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .crow:hover { background: var(--accent-tint); }
+  .crow.on { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+  .crow .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crow .m { font-size: 12px; color: var(--muted); }
+  #chatView { flex: 1; overflow-y: auto; padding: 20px 28px; }
+  .empty { color: var(--muted); font-style: italic; padding: 20px; }
+  .msg { margin: 0 0 14px; max-width: 900px; }
+  .msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 3px; }
+  .msg.user .body { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; white-space: pre-wrap; }
+  .msg.assistant .body { border-left: 2px solid var(--accent); padding: 2px 0 2px 14px; font-family: 'Cormorant Garamond', Georgia, serif; font-size: 17px; }
+  .body h3 { font-family: 'IM Fell English', Georgia, serif; font-weight: 400; color: var(--accent); margin: 10px 0 4px; font-size: 20px; }
+  .card { color: var(--accent); background: var(--accent-tint); border-radius: var(--radius); padding: 0 3px; }
+  .extra { font-size: 13px; margin-top: 6px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: var(--radius); }
+  .extra .acc { color: var(--ok); } .extra .rej { color: var(--danger); } .extra .skip, .extra .pend { color: var(--muted); }
+  .note { font-size: 12px; color: var(--muted); font-style: italic; }
+  .deckbox { margin: 0 0 18px; padding: 10px 14px; background: var(--panel); border: 1.5px solid var(--ink-line); border-radius: var(--radius); }
+  .deckbox summary { cursor: pointer; }
+  .deckbox .list { columns: 3 220px; font-size: 13px; margin-top: 8px; }
+  /* activity */
+  #activity { flex-direction: column; }
+  #actTable { flex: 1; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--ink-line); padding: 6px 8px; font-weight: 600; }
+  td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.ts { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+  td.k { font-weight: 600; white-space: nowrap; }
+  td.k.ERROR, td.k.ABORT { color: var(--danger); }
+  td.k.QUERY { color: var(--accent); }
+  td.txt { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-word; }
+  tr.test { opacity: .45; }
+  td a { color: var(--accent); cursor: pointer; }
+  #users { overflow-y: auto; padding: 16px 20px; display: none; }
+  #users.on { display: block; }
+  label.chk { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+  button.small { font: inherit; font-size: 12.5px; padding: 4px 10px; background: var(--panel-2); color: var(--text);
+    border: 1.5px solid var(--ink-line); border-radius: var(--radius); box-shadow: 2px 2px 0 var(--ink-line); cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Brew Bot · Admin</h1>
+  <div class="tabs"><button data-v="chats" class="on">Chats</button><button data-v="activity">Activity</button><button data-v="users">Users</button></div>
+  <span class="spacer"></span>
+  <a href="/">← Back to the app</a>
+</header>
+<main>
+  <section class="view on" id="chats">
+    <div id="chatList"><div class="filters"><select id="cUser"><option value="">All users</option></select>
+      <input type="search" id="cSearch" placeholder="Search titles…"></div><div id="cRows"></div></div>
+    <div id="chatView"><div class="empty">Pick a chat.</div></div>
+  </section>
+  <section class="view" id="activity">
+    <div class="filters"><select id="aUser"><option value="">All users</option></select>
+      <select id="aKind"><option value="">All events</option></select>
+      <input type="search" id="aSearch" placeholder="Filter text…">
+      <label class="chk"><input type="checkbox" id="aHideTest" checked> Hide test traffic</label>
+      <label class="chk"><input type="checkbox" id="aAuto"> Auto-refresh</label>
+      <button class="small" id="aRefresh">Refresh</button></div>
+    <div id="actTable"></div>
+  </section>
+  <section class="view" id="users"></section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = ts => ts ? ts.replace('T', ' ').slice(0, 16) : '';
+async function api(path) { const r = await fetch(path); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === b.dataset.v));
+  if (b.dataset.v === 'activity') loadActivity();
+  if (b.dataset.v === 'users') loadUsers();
+});
+
+// ---- chats ----
+let chats = [];
+function md(t) {
+  let h = esc(t);
+  h = h.replace(/%%IDENTITY:[A-Z]+%%\s*/gi, '');
+  h = h.replace(/^#{1,3}\s+(.+)$/gm, '<h3>$1</h3>');
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  h = h.replace(/\[\[([^\]]+)\]\]/g, '<span class="card">$1</span>');
+  return h.replace(/\n/g, '<br>').replace(/<\/h3>(<br>)+/g, '</h3>').replace(/(<br>)+<h3>/g, '<h3>');
+}
+function paintChats() {
+  const u = $('#cUser').value, q = $('#cSearch').value.toLowerCase();
+  const rows = chats.filter(c => (!u || c.user === u) && (!q || (c.title || '').toLowerCase().includes(q)));
+  $('#cRows').innerHTML = rows.map(c => `<div class="crow" data-sid="${esc(c.sid)}"><div class="t">${esc(c.title)}</div>
+    <div class="m">${esc(c.user)} · ${fmt(c.updated)} · ${c.n} msgs${c.commander.length ? ' · ' + esc(c.commander.join(' + ')) : ''}${c.cards ? ` (${c.cards})` : ''}</div></div>`).join('')
+    || '<div class="empty">No saved chats yet - they appear after someone sends a message.</div>';
+  document.querySelectorAll('.crow').forEach(r => r.onclick = () => openChat(r.dataset.sid, r));
+}
+async function loadChats() {
+  chats = (await api('/admin/api/chats')).chats;
+  const users = [...new Set(chats.map(c => c.user))].sort();
+  $('#cUser').innerHTML = '<option value="">All users</option>' + users.map(u => `<option>${esc(u)}</option>`).join('');
+  paintChats();
+}
+$('#cUser').onchange = paintChats; $('#cSearch').oninput = paintChats;
+function extras(m) {
+  const out = [];
+  if ((m.proposals || []).length) {
+    const st = { accepted: ['acc', '✓ accepted'], rejected: ['rej', '✗ rejected'], skipped: ['skip', '– skipped'], pending: ['pend', 'undecided'] };
+    out.push('<div class="extra"><b>Proposals</b><br>' + m.proposals.map(p => {
+      const [cls, label] = st[p.status] || st.pending;
+      const what = [p.cut ? `cut ${esc(p.cut)}` : '', p.add ? `add ${p.qty > 1 ? p.qty + '× ' : ''}${esc(p.add)}` : ''].filter(Boolean).join(' → ');
+      return `${what} <span class="${cls}">${label}</span>${p.note ? ` <span class="note">"${esc(p.note)}"</span>` : ''}`;
+    }).join('<br>') + '</div>');
+  }
+  if (m.question) out.push(`<div class="extra"><b>Asked:</b> ${esc(m.question.question)}<br>
+    <span class="note">${esc((m.question.options || []).join(' · '))}</span><br>
+    ${m.question.answer ? `Answer: <b>${esc(m.question.answer)}</b>${m.question.typed ? ' (typed)' : ''}` : m.question.skipped ? 'Skipped' : 'Unanswered'}</div>`);
+  if (m.startDeck) out.push(`<div class="extra"><b>Offered to start a deck:</b> ${esc((m.startDeck.commander || []).map(c => c.name || c).join(' + '))} - ${esc(m.startDeck.status || 'pending')}</div>`);
+  return out.join('');
+}
+async function openChat(sid, row) {
+  document.querySelectorAll('.crow').forEach(r => r.classList.toggle('on', r === row));
+  const d = await api('/admin/api/chats/' + encodeURIComponent(sid));
+  const deck = d.deck;
+  const deckHtml = deck ? `<details class="deckbox"><summary><b>Deck</b> - ${esc((deck.commander || []).join(' + ') || 'no commander')}
+      · ${deck.cards.reduce((s, c) => s + c[1], 0)} cards${deck.bracket ? ' · bracket ' + deck.bracket : ''}${deck.companion ? ' · companion ' + esc(deck.companion) : ''}</summary>
+      <div class="list">${deck.cards.map(([n, q]) => `${q > 1 ? q + ' ' : ''}${esc(n)}`).join('<br>')}</div></details>` : '';
+  $('#chatView').innerHTML = `<div class="note">${esc(d.user)} · started ${fmt(d.created)} · last ${fmt(d.updated)} · session ${esc(d.sid)}</div><br>`
+    + deckHtml
+    + (d.messages || []).map(m => `<div class="msg ${m.role}"><div class="who">${m.role === 'user' ? esc(d.user) : 'Advisor'}</div>
+        <div class="body">${m.role === 'user' ? esc(m.text) : md(m.text || '')}</div>
+        ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}${extras(m)}</div>`).join('');
+  $('#chatView').scrollTop = 0;
+}
+
+// ---- activity ----
+let actRows = [], autoTimer = null;
+function paintActivity() {
+  const u = $('#aUser').value, k = $('#aKind').value, q = $('#aSearch').value.toLowerCase(), hide = $('#aHideTest').checked;
+  const rows = actRows.filter(r => (!hide || !r.test) && (!u || r.user === u) && (!k || r.kind === k) && (!q || r.text.toLowerCase().includes(q)));
+  $('#actTable').innerHTML = `<table><thead><tr><th>Time</th><th>Event</th><th>User</th><th>Detail</th></tr></thead><tbody>`
+    + rows.map(r => `<tr class="${r.test ? 'test' : ''}"><td class="ts">${esc(r.ts)}</td><td class="k ${esc(r.kind)}">${esc(r.kind)}</td>
+      <td>${esc(r.user || '')}</td><td class="txt">${esc(r.text)}${r.sid && chats.some(c => (c.sid || '').startsWith(r.sid)) ? ` <a data-sid="${esc(r.sid)}">open chat</a>` : ''}</td></tr>`).join('')
+    + '</tbody></table>';
+  document.querySelectorAll('#actTable a[data-sid]').forEach(a => a.onclick = () => {
+    const c = chats.find(c => c.sid.startsWith(a.dataset.sid));
+    document.querySelector('.tabs button[data-v=chats]').click();
+    if (c) { $('#cUser').value = ''; $('#cSearch').value = ''; paintChats(); openChat(c.sid, document.querySelector(`.crow[data-sid="${CSS.escape(c.sid)}"]`)); }
+  });
+}
+async function loadActivity() {
+  actRows = (await api('/admin/api/activity?n=1500')).rows;
+  const keep = [$('#aUser').value, $('#aKind').value];
+  const users = [...new Set(actRows.map(r => r.user).filter(u => u && u !== '-'))].sort();
+  const kinds = [...new Set(actRows.map(r => r.kind).filter(Boolean))].sort();
+  $('#aUser').innerHTML = '<option value="">All users</option>' + users.map(u => `<option>${esc(u)}</option>`).join('');
+  $('#aKind').innerHTML = '<option value="">All events</option>' + kinds.map(k => `<option>${esc(k)}</option>`).join('');
+  [$('#aUser').value, $('#aKind').value] = keep;
+  paintActivity();
+}
+['#aUser', '#aKind', '#aHideTest'].forEach(s => $(s).onchange = paintActivity);
+$('#aSearch').oninput = paintActivity;
+$('#aRefresh').onclick = loadActivity;
+$('#aAuto').onchange = () => { clearInterval(autoTimer); if ($('#aAuto').checked) autoTimer = setInterval(loadActivity, 15000); };
+
+// ---- users ----
+async function loadUsers() {
+  const { users } = await api('/admin/api/users');
+  $('#users').innerHTML = `<table><thead><tr><th>User</th><th>Kind</th><th>Created</th><th>Last login</th><th>Last seen</th><th>Messages</th><th>Saved chats</th></tr></thead><tbody>`
+    + users.map(u => `<tr><td><b>${esc(u.user)}</b>${u.admin ? ' <span class="note">admin</span>' : ''}</td><td>${esc(u.kind)}</td>
+      <td class="ts">${fmt(u.created)}</td><td class="ts">${fmt(u.last_login)}</td><td class="ts">${esc(u.last_seen || '')}</td>
+      <td>${u.queries}</td><td>${u.chats}</td></tr>`).join('') + '</tbody></table>';
+}
+
+loadChats().catch(e => { $('#cRows').innerHTML = `<div class="empty">Couldn't load chats (${esc(e.message)}).</div>`; });
+</script>
+</body>
+</html>

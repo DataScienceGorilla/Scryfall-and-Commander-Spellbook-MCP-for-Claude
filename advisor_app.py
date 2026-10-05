@@ -109,6 +109,7 @@ THEORY_COLLECTION = "mtg_deckbuilding_theory"
 UI_FILE = Path(__file__).parent / "advisor_ui.html"
 LOGIN_FILE = Path(__file__).parent / "advisor_login.html"
 SIGNUP_FILE = Path(__file__).parent / "advisor_signup.html"
+ADMIN_FILE = Path(__file__).parent / "advisor_admin.html"
 
 aclient = anthropic.AsyncAnthropic()
 
@@ -1994,7 +1995,7 @@ async def logout(request: Request):
 
 @app.get("/me")
 async def me(request: Request, _: None = Depends(require_auth)):
-    return {"user": request.session.get("user"), "auth": AUTH_ENABLED}
+    return {"user": request.session.get("user"), "auth": AUTH_ENABLED, "admin": _is_admin(request)}
 
 
 def _ui_page() -> tuple[str, str]:
@@ -2138,11 +2139,15 @@ async def chat(request: Request, _: None = Depends(require_auth)):
                  f"Target bracket: {deck.get('bracket') or 'not set'}"] + _brief_lines(deck.get("intake")))
         memory_block = ("# SESSION MEMORY (condensed earlier conversation - see instructions)\n"
                         + memory_text) if memory_text else ""
+        capture = _AnswerCapture()
         async for chunk in agent_stream(session_id, messages, model, extra,
                                         system=_cached_system(memory_block, deck_block),
                                         deck_text=deck_text, deck_identity=deck_identity,
                                         deck=deck if has_deck else None):
+            capture.feed(chunk)
             yield chunk
+        if history is not None:  # keep a copy for the admin page (players are told)
+            _save_chat(session_id, who, history, capture.entry(), deck)
 
     return StreamingResponse(
         _stream(),
@@ -2458,6 +2463,196 @@ async def _batch_resolve(names: list[str]) -> None:
     rest = [n for n in todo if n.lower() not in CARD_IMG_CACHE]
     for n, slim in zip(rest, await asyncio.gather(*(_resolve_card(n) for n in rest))):
         CARD_IMG_CACHE[n.lower()] = slim
+
+
+# =============================================================================
+# ADMIN: saved chats + activity log viewer (/admin)
+# =============================================================================
+# Chats live in each player's browser; the server also keeps a copy of every conversation (the
+# history the page sends with each message + the answer) so the admin can read them. Players see
+# a notice saying so (sidebar + sign-up page). Admins = ADVISOR_ADMINS (comma-separated usernames).
+CHAT_STORE = Path(os.getenv("ADVISOR_CHAT_STORE") or Path(__file__).parent / "chat_store")
+ADMINS = {u.strip().lower() for u in (os.getenv("ADVISOR_ADMINS") or "").split(",") if u.strip()}
+_SID_OK = re.compile(r"^[A-Za-z0-9_-]{6,80}$")
+
+
+def _is_admin(request: Request) -> bool:
+    if not AUTH_ENABLED:
+        return False  # the login-free dev server never exposes other people's chats
+    return (request.session.get("user") or "").lower() in ADMINS
+
+
+async def require_admin(request: Request) -> None:
+    await require_auth(request)
+    if not _is_admin(request):
+        raise HTTPException(status_code=404)  # don't advertise that the page exists
+
+
+def _save_chat(session_id: str, user: str, history: list, answer: dict | None, deck: dict | None) -> None:
+    """Write this chat's transcript (atomic). Never raises - saving must not break a reply."""
+    try:
+        if not _SID_OK.match(session_id or "") or not isinstance(history, list):
+            return
+        CHAT_STORE.mkdir(exist_ok=True)
+        path = CHAT_STORE / f"{session_id}.json"
+        old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        msgs = [m for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+        if answer:
+            msgs = msgs + [answer]
+        first = next((m.get("text") or "" for m in msgs if m.get("role") == "user"), "")
+        slim_deck = None
+        if isinstance(deck, dict) and deck.get("cards"):
+            slim_deck = {"commander": deck.get("commander") or [], "bracket": deck.get("bracket"),
+                         "companion": (deck.get("companion") or {}).get("name") if isinstance(deck.get("companion"), dict) else None,
+                         "cards": [[c.get("name"), int(c.get("qty") or 1)] for c in deck["cards"] if c.get("name")]}
+        rec = {"sid": session_id, "user": user or old.get("user") or "-",
+               "title": " ".join(first.split())[:80] or "(empty)",
+               "created": old.get("created") or datetime.datetime.now().isoformat(timespec="seconds"),
+               "updated": datetime.datetime.now().isoformat(timespec="seconds"),
+               "messages": msgs, "deck": slim_deck or old.get("deck")}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        print(f"chat save failed: {e}", flush=True)
+
+
+class _AnswerCapture:
+    """Rebuilds the finished answer (text + proposals/question/start-deck) from the SSE stream,
+    the same way the page does, so the saved transcript matches what the player saw."""
+    def __init__(self):
+        self.text, self.proposals, self.question, self.start_deck = "", [], None, None
+
+    def feed(self, chunk: str) -> None:
+        if not chunk.startswith("event: "):
+            return
+        head, _, rest = chunk.partition("\n")
+        event = head[7:].strip()
+        if event not in ("text", "replace", "reset", "proposals", "question", "start_deck"):
+            return
+        try:
+            data = json.loads(rest.partition("data: ")[2].strip() or "{}")
+        except ValueError:
+            return
+        if event == "text":
+            self.text += data.get("text", "")
+        elif event == "replace":
+            self.text = data.get("text", "")
+        elif event == "reset":
+            self.text = data.get("keep", "")
+        elif event == "proposals":
+            self.proposals += data.get("items") or []
+        elif event == "question":
+            self.question = data
+        elif event == "start_deck":
+            self.start_deck = data
+
+    def entry(self) -> dict | None:
+        if not (self.text.strip() or self.proposals or self.question or self.start_deck):
+            return None
+        e = {"role": "assistant", "text": self.text}
+        if self.proposals:
+            e["proposals"] = self.proposals
+        if self.question:
+            e["question"] = self.question
+        if self.start_deck:
+            e["startDeck"] = self.start_deck
+        return e
+
+
+_LOG_FIELDS = re.compile(r"\b(sid|user|ip|client)=(\S+)")
+
+
+def _read_activity(limit: int = 600) -> list[dict]:
+    """Newest-first parsed activity lines; answers/proposals inherit the user of their QUERY."""
+    path = Path(__file__).parent / "advisor_activity.log"
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-max(limit * 3, 3000):]
+    rows, sid_user, sid_test = [], {}, {}
+    for ln in lines:
+        ts, _, ev = ln.partition(" | ")
+        kind = ev.split(" ", 1)[0] if ev else ""
+        f = dict(_LOG_FIELDS.findall(ev))
+        sid = f.get("sid")
+        user = f.get("user")
+        test = (user == "-" or f.get("ip") in ("127.0.0.1", "::1") or f.get("client") == "testclient"
+                or (user or "").lower().startswith("friend_"))
+        if sid and kind == "QUERY":
+            sid_user[sid], sid_test[sid] = user, test
+        if sid and not user:
+            user, test = sid_user.get(sid), sid_test.get(sid, False)
+        rows.append({"ts": ts, "kind": kind, "user": user, "sid": sid, "test": test, "text": ev})
+    return rows[::-1][:limit]
+
+
+@app.get("/admin")
+async def admin_page(_: None = Depends(require_admin)):
+    return HTMLResponse(ADMIN_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/admin/api/activity")
+async def admin_activity(n: int = 600, _: None = Depends(require_admin)):
+    return JSONResponse({"rows": _read_activity(min(max(n, 50), 5000))})
+
+
+@app.get("/admin/api/chats")
+async def admin_chats(_: None = Depends(require_admin)):
+    out = []
+    for p in CHAT_STORE.glob("*.json") if CHAT_STORE.exists() else []:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        msgs = d.get("messages") or []
+        out.append({"sid": d.get("sid"), "user": d.get("user"), "title": d.get("title"),
+                    "updated": d.get("updated"), "created": d.get("created"), "n": len(msgs),
+                    "commander": ((d.get("deck") or {}).get("commander") or []),
+                    "cards": sum(q for _, q in ((d.get("deck") or {}).get("cards") or []))})
+    out.sort(key=lambda x: x.get("updated") or "", reverse=True)
+    return JSONResponse({"chats": out})
+
+
+@app.get("/admin/api/chats/{sid}")
+async def admin_chat(sid: str, _: None = Depends(require_admin)):
+    if not _SID_OK.match(sid):
+        raise HTTPException(status_code=404)
+    path = CHAT_STORE / f"{sid}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404)
+    return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+
+
+@app.get("/admin/api/users")
+async def admin_users(_: None = Depends(require_admin)):
+    rows = _read_activity(5000)
+    last, queries = {}, {}
+    for r in rows:
+        u = (r.get("user") or "").lower()
+        if not u or u == "-":
+            continue
+        last.setdefault(u, r["ts"])
+        if r["kind"] == "QUERY":
+            queries[u] = queries.get(u, 0) + 1
+    chats = {}
+    for p in CHAT_STORE.glob("*.json") if CHAT_STORE.exists() else []:
+        try:
+            u = (json.loads(p.read_text(encoding="utf-8")).get("user") or "").lower()
+        except Exception:
+            continue
+        chats[u] = chats.get(u, 0) + 1
+    users = []
+    for key, acct in accounts._load().items():  # never send password hashes
+        users.append({"user": acct.get("username"), "kind": "account", "created": acct.get("created"),
+                      "last_login": acct.get("last_login"), "last_seen": last.get(key),
+                      "queries": queries.get(key, 0), "chats": chats.get(key, 0), "admin": key in ADMINS})
+    for name in ACCOUNTS:  # shared logins from .env
+        key = name.lower()
+        users.append({"user": name, "kind": "shared login", "created": None, "last_login": None,
+                      "last_seen": last.get(key), "queries": queries.get(key, 0), "chats": chats.get(key, 0),
+                      "admin": key in ADMINS})
+    users.sort(key=lambda x: x.get("last_seen") or "", reverse=True)
+    return JSONResponse({"users": users})
 
 
 @app.post("/deck/companion")

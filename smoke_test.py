@@ -93,6 +93,9 @@ def main():
     check("duplicate username (case-insensitive) rejected", r.headers.get("location") == "/signup?e=taken")
     r = s2.post("/login", data={"username": "FRIEND_1", "password": "hunter22"}, follow_redirects=False)
     check("login with new account", r.headers.get("location") == "/" and s2.get("/me").json().get("user") == "Friend_1")
+    check("admin page hidden from non-admins (404)",
+          s2.get("/admin").status_code == 404 and s2.get("/admin/api/chats").status_code == 404
+          and s2.get("/me").json().get("admin") is False)
     a.accounts.remove("Friend_1")
     check("removed account is logged out", s2.get("/me").status_code == 401)
 
