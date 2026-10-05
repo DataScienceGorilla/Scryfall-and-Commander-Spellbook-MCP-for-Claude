@@ -113,6 +113,13 @@ repo. This doc is the single source of truth for how it works and how to keep bu
 - [x] **Rulebreaker commanders** (2026-10-03): `rulebreakers.py` (+ `rbExempt` in the page) - the 8
   Mystery Booster Commander Edition "Rulebreaker" commanders' color-identity exceptions are honored by the
   panel's off-color flags, proposal validation and the reply color check; Whtz lifts the 100 max.
+- [x] **Admin page** (2026-10-05): `/admin` (`advisor_admin.html`) for usernames in `ADVISOR_ADMINS`
+  (.env; currently AtlasAndromeda) - 404 for everyone else. Every `/chat` saves the chat's transcript
+  (the page's history + the captured answer incl. proposals/questions/start-deck, plus a deck summary)
+  to `chat_store/<session>.json` (gitignored). Tabs: Chats (by user, transcript + deck), Activity (log
+  with user/event filters, "hide test traffic" = user `-`, localhost, testclient, Friend_*), Users
+  (accounts + shared logins, last seen, message/chat counts; never password hashes). Players are told:
+  a note under the chat list and on the sign-up page. No retention limit yet.
 - [ ] Nice-to-haves: compact
   `mtg_rules_data/` (7 stale segment dirs from past re-ingests).
 
