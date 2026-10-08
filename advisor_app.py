@@ -2072,6 +2072,104 @@ async def me_onboarded(request: Request, _: None = Depends(require_auth)):
     return {"ok": True, "onboarded": done}
 
 
+# Chats per account: the page's chat objects (conversation, deck, memory, ...) stored server-side
+# under user_chats/<user>/<chat id>.json (gitignored), so a player's chats follow them across
+# browsers and devices. The browser keeps a localStorage cache and syncs. Each chat carries a
+# server `rev`: a save must name the rev it was based on, so a stale device gets a 409 with the
+# current copy instead of silently overwriting newer messages. The login-free dev server has no
+# user, so these all 404 there and the page stays localStorage-only.
+USER_CHATS_DIR = Path(os.getenv("ADVISOR_USER_CHATS_DIR") or Path(__file__).parent / "user_chats")
+USER_CHAT_MAX_BYTES = 4_000_000
+USER_CHAT_MAX_COUNT = 1000
+_user_chats_lock = asyncio.Lock()
+
+
+def _user_chat_dir(request: Request) -> Path:
+    user = (request.session.get("user") or "").lower() if AUTH_ENABLED else ""
+    if not user:
+        raise HTTPException(status_code=404)
+    # usernames are [A-Za-z0-9_.-]; anything else (an .env login) gets a stable hashed folder
+    safe = user if re.fullmatch(r"[a-z0-9_-][a-z0-9_.-]{0,40}", user) else \
+        "u_" + hashlib.sha1(user.encode("utf-8")).hexdigest()[:16]
+    return USER_CHATS_DIR / safe
+
+
+def _user_chat_path(request: Request, chat_id: str) -> Path:
+    if not _SID_OK.match(chat_id or ""):
+        raise HTTPException(status_code=404)
+    return _user_chat_dir(request) / f"{chat_id}.json"
+
+
+def _read_user_chat(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+@app.get("/me/chats")
+async def me_chats(request: Request, _: None = Depends(require_auth)):
+    """Index of the player's chats: id, rev, title, updatedAt (bodies come from /me/chats/{id})."""
+    folder = _user_chat_dir(request)
+    out = []
+    for p in folder.glob("*.json") if folder.exists() else []:
+        ch = _read_user_chat(p)
+        if isinstance(ch, dict):
+            out.append({"id": p.stem, "rev": ch.get("rev") or 1, "title": ch.get("title") or "New chat",
+                        "updatedAt": ch.get("updatedAt") or 0})
+    return {"chats": out}
+
+
+@app.get("/me/chats/{chat_id}")
+async def me_chat(chat_id: str, request: Request, _: None = Depends(require_auth)):
+    ch = _read_user_chat(_user_chat_path(request, chat_id))
+    if not isinstance(ch, dict):
+        raise HTTPException(status_code=404)
+    return JSONResponse(ch)
+
+
+@app.put("/me/chats/{chat_id}")
+async def me_chat_save(chat_id: str, request: Request, _: None = Depends(require_auth)):
+    """Save a chat. Body: {"chat": {...}, "base": <rev it was edited from, 0 if new>}.
+    200 {"rev"} on success; 409 {"chat"} (the current copy) when someone saved since `base`."""
+    path = _user_chat_path(request, chat_id)
+    raw = await request.body()
+    if len(raw) > USER_CHAT_MAX_BYTES:
+        return JSONResponse({"error": "chat too large to sync"}, status_code=413)
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400)
+    chat = body.get("chat") if isinstance(body, dict) else None
+    if not isinstance(chat, dict):
+        raise HTTPException(status_code=400)
+    base = int(body.get("base") or 0)
+    async with _user_chats_lock:
+        cur = _read_user_chat(path)
+        if isinstance(cur, dict) and base != (cur.get("rev") or 1):
+            return JSONResponse({"chat": cur}, status_code=409)
+        if cur is None and path.parent.exists() and \
+                sum(1 for _ in path.parent.glob("*.json")) >= USER_CHAT_MAX_COUNT:
+            return JSONResponse({"error": "too many chats"}, status_code=413)
+        # a chat deleted on another device and still being edited here is simply re-created
+        rev = ((cur or {}).get("rev") or 0) + 1
+        chat = {k: v for k, v in chat.items() if k not in ("dirty",)}
+        chat.update(id=chat_id, rev=rev)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(chat, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    return {"rev": rev}
+
+
+@app.delete("/me/chats/{chat_id}")
+async def me_chat_delete(chat_id: str, request: Request, _: None = Depends(require_auth)):
+    path = _user_chat_path(request, chat_id)
+    async with _user_chats_lock:
+        path.unlink(missing_ok=True)
+    return {"ok": True}
+
+
 def _ui_page() -> tuple[str, str]:
     """(page HTML, version). The version is a fingerprint of the UI file, stamped into the
     page as UI_VERSION so a tab left open across a deploy can tell it's stale."""

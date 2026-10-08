@@ -34,3 +34,6 @@ benchmarks/
 
 # saved chat transcripts for the admin page (players notified in-app)
 chat_store/
+
+# per-account chats (synced from the page)
+user_chats/

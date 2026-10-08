@@ -125,6 +125,22 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   with user/event filters, "hide test traffic" = user `-`, localhost, testclient, Friend_*), Users
   (accounts + shared logins, last seen, message/chat counts; never password hashes). Players are told:
   a note under the chat list and on the sign-up page. No retention limit yet.
+- [x] **Chats per account** (2026-10-08): `/me/chats` GET/PUT/DELETE keep each account's chats in
+  `user_chats/<user>/<id>.json` (gitignored) with a `rev`; a save from a stale `rev` gets 409 + the
+  current copy and the page keeps whichever copy has more messages. The page caches per account in
+  localStorage (`mtg_advisor_chats_v1:<user>`) and syncs on load / tab focus / ~1.5 s after edits.
+  A browser's old browser-wide chats move once into the first account that signs in there (old key
+  kept for rollback, `:migrated` marker). Login-free dev server stays localStorage-only.
+- [x] **Retired the shared `coolpeople` login** (2026-10-08): `ADVISOR_USER`/`ADVISOR_PASSWORD` removed
+  from `.env`; the old password moved to `ADVISOR_SITE_CODE` (the site code used to fall back to it).
+- [ ] **Account-system hardening (LOW PRIORITY - only matters if this scales past friends):**
+  - Rotate `ADVISOR_SITE_CODE` (it's still the old shared password).
+  - Spend guard: an Anthropic Console monthly limit, and/or a per-account daily `/chat` cap (admins exempt).
+  - Revocable sessions: the signed cookie is valid 30 days regardless; add a per-account session
+    version bumped on password reset so other devices get logged out.
+  - Login throttle per username too (today it's per IP, in memory, reset on restart); raise
+    `MIN_PASSWORD` 6 -> 8 for new passwords.
+  - Self-service change-password (today only `python accounts.py reset`).
 - [ ] Nice-to-haves: compact
   `mtg_rules_data/` (7 stale segment dirs from past re-ingests).
 

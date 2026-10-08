@@ -662,7 +662,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // Login gate: if the session cookie expired, any API call comes back 401 -
-// send the user to the sign-in page (chats live in localStorage, so nothing is lost).
+// send the user to the sign-in page (chats are saved, so nothing is lost).
 const _fetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
   const resp = await _fetch(...args);
@@ -682,36 +682,161 @@ let SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) ||
                  (Date.now() + '-' + Math.random().toString(16).slice(2));
 
 // ---- multi-chat persistence + sidebar (survives reloads) ----
-const STORE_KEY = 'mtg_advisor_chats_v1';
+// Signed in, chats belong to the account: the server holds them (/me/chats) and this browser
+// keeps a per-account localStorage cache that syncs. The login-free dev server has no account,
+// so there the cache is the only copy. Each chat carries `rev` (the server version it was last
+// synced at; absent = never uploaded) and `dirty` (a local edit counter not yet uploaded).
+const LEGACY_STORE_KEY = 'mtg_advisor_chats_v1';
+let STORE_KEY = LEGACY_STORE_KEY;
+let SYNC = false;        // true once we know there's a signed-in account
 let conversation = [];   // active chat's messages [{role, text}]
 let deck = null;         // active chat's deck object { commander:[], bracket, cards:[...] }
 let activeId = null;
-let chats = {};          // id -> {id, title, sessionId, conversation, deck, updatedAt}
+let chats = {};          // id -> {id, title, sessionId, conversation, deck, updatedAt, rev, dirty}
+let editSeq = 0;
 
 function newId() {
   return (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + '-' + Math.random().toString(16).slice(2));
 }
 function loadStore() {
   try {
-    const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    let s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    if (!s && STORE_KEY !== LEGACY_STORE_KEY && !localStorage.getItem(LEGACY_STORE_KEY + ':migrated')) {
+      // first sign-in on this browser since chats moved to accounts: this browser's chats join
+      // that account (uploaded on the first sync). Only once per browser, so a second account
+      // signing in here doesn't get them too; the old copy stays put in case of a rollback.
+      s = JSON.parse(localStorage.getItem(LEGACY_STORE_KEY) || 'null');
+      if (s) {
+        for (const ch of Object.values(s.chats || {})) { delete ch.rev; ch.dirty = 1; }
+        localStorage.setItem(STORE_KEY, JSON.stringify(s));
+        localStorage.setItem(LEGACY_STORE_KEY + ':migrated', STORE_KEY);
+      }
+    }
     if (s) { chats = s.chats || {}; activeId = s.activeId || null; }
   } catch (e) {}
+  for (const ch of Object.values(chats)) editSeq = Math.max(editSeq, ch.dirty || 0);
 }
-function saveState() {  // fold the active chat back into the store, persist, redraw sidebar
+function persistLocal() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ activeId, chats })); } catch (e) {}
+}
+// touchId: a chat other than the active one that was just changed (a stream finishing in the
+// background), so it gets uploaded too
+function saveState(touchId) {  // fold the active chat back into the store, persist, redraw sidebar
   if (activeId && chats[activeId]) {
     const ch = chats[activeId];
     ch.conversation = conversation;
     ch.deck = deck;
     ch.sessionId = SESSION_ID;
     ch.updatedAt = Date.now();
+    ch.dirty = ++editSeq;
     if (!ch.title || ch.title === 'New chat') {
       const firstUser = conversation.find(m => m.role === 'user');
       if (firstUser) ch.title = firstUser.text.replace(/\s+/g, ' ').slice(0, 42);
     }
   }
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ activeId, chats })); } catch (e) {}
+  if (touchId && touchId !== activeId && chats[touchId]) {
+    chats[touchId].updatedAt = Date.now();
+    chats[touchId].dirty = ++editSeq;
+  }
+  persistLocal();
+  renderSidebar();
+  schedulePush();
+}
+
+// ---- account sync ----
+const isBlankChat = (ch) => !(ch.conversation || []).length && !ch.deck;
+let pushTimer = null, pushing = false, pushAgain = false;
+function schedulePush(delay = 1500) {
+  if (!SYNC) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(pushDirty, delay);
+}
+async function pushDirty(keepalive) {
+  if (!SYNC) return;
+  if (pushing) { pushAgain = true; return; }
+  pushing = true; pushAgain = false;
+  try {
+    for (const ch of Object.values(chats)) {
+      if (ch.dirty && !(isBlankChat(ch) && !ch.rev)) await pushChat(ch, keepalive);
+    }
+  } finally {
+    pushing = false;
+    if (pushAgain) schedulePush();
+  }
+}
+async function pushChat(ch, keepalive) {
+  const seq = ch.dirty;
+  const { dirty, ...body } = ch;
+  let r;
+  try {
+    r = await _fetch('/me/chats/' + encodeURIComponent(ch.id), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, keepalive: !!keepalive,
+      body: JSON.stringify({ chat: body, base: ch.rev || 0 }) });
+  } catch (e) { return; }  // offline: stays dirty, retried on the next save or sync
+  if (r.ok) {
+    ch.rev = (await r.json()).rev;
+    if (ch.dirty === seq) ch.dirty = 0;  // edits made during the upload go next time
+    persistLocal();
+  } else if (r.status === 409) {
+    // saved from another device since we last synced: the copy with more of the conversation
+    // wins (a device that only viewed a chat must never wipe messages added elsewhere)
+    const theirs = (await r.json()).chat;
+    if ((ch.conversation || []).length > (theirs.conversation || []).length) {
+      ch.rev = theirs.rev;
+      await pushChat(ch, keepalive);
+    } else {
+      adoptServerChat(theirs);
+    }
+  }
+}
+function adoptServerChat(theirs) {
+  const id = theirs.id;
+  if (streaming && id === activeId) return;  // never swap a chat out from under a live answer
+  chats[id] = { ...theirs, dirty: 0 };
+  if (id === activeId) {
+    SESSION_ID = chats[id].sessionId || newId();
+    conversation = chats[id].conversation || [];
+    deck = chats[id].deck || null;
+    loadActiveIntoUI();
+  }
+  persistLocal();
   renderSidebar();
 }
+async function syncChats() {
+  if (!SYNC) return;
+  let index;
+  try {
+    const r = await _fetch('/me/chats');
+    if (!r.ok) return;
+    index = (await r.json()).chats || [];
+  } catch (e) { return; }
+  const onServer = new Set(index.map(s => s.id));
+  for (const s of index) {
+    const mine = chats[s.id];
+    if (mine && (mine.rev === s.rev || mine.dirty)) continue;  // current, or ours to push (409 resolves it)
+    try {
+      const r = await _fetch('/me/chats/' + encodeURIComponent(s.id));
+      if (r.ok) adoptServerChat(await r.json());
+    } catch (e) {}
+  }
+  let lostActive = false;
+  for (const ch of Object.values(chats)) {
+    if (ch.rev && !onServer.has(ch.id) && !(streaming && ch.id === activeId)) {  // deleted on another device
+      delete chats[ch.id];
+      if (ch.id === activeId) lostActive = true;
+    }
+  }
+  if (lostActive) {
+    const rows = Object.values(chats).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    if (rows.length) switchChat(rows[0].id); else newChat();
+  } else { persistLocal(); renderSidebar(); }
+  await pushDirty();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!SYNC) return;
+  if (document.visibilityState === 'visible') syncChats();
+  else { clearTimeout(pushTimer); pushDirty(true); }  // best effort; anything missed stays dirty
+});
 function renderSidebar() {
   const list = document.getElementById('chatlist');
   if (!list) return;
@@ -790,6 +915,7 @@ function newChat() {
 }
 async function deleteChat(id) {
   const ch = chats[id];
+  if (SYNC && ch) _fetch('/me/chats/' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {});
   if (ch && ch.sessionId) {
     try { await fetch('/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: ch.sessionId }) }); } catch (e) {}
   }
@@ -2720,7 +2846,7 @@ function offerBuild(text) {
 
 async function send(force) {
   const text = inputEl.value.trim();
-  if (!text || streaming) return;
+  if (!text || streaming || !activeId) return;
   if (force !== true && !deck && chats[activeId] && !chats[activeId].buildOffered
       && !looksLikeDeck(text) && BUILD_INTENT.test(text)) {
     inputEl.value = ''; inputEl.style.height = 'auto';
@@ -2747,7 +2873,7 @@ async function send(force) {
   streaming = true; sendBtn.disabled = true;
   const userEntry = { role: 'user', text };
   addMessage('user', text);
-  originConv.push(userEntry); saveState();
+  originConv.push(userEntry); saveState(originId);
   // A pasted list becomes the deck BEFORE the advisor sees this turn, so it reasons over
   // the new deck (not the previous one). A link that can't be parsed yet (URL import is
   // a TODO) sends no deck, so the advisor goes by the link instead of a stale deck.
@@ -2765,7 +2891,7 @@ async function send(force) {
   const note = sendDeck ? deckEditNote(originChat.deckSent, snap) : '';
   if (note) { userEntry.note = note; if (onScreen()) annotateLastUser(note); }
   if (sendDeck) originChat.deckSent = snap;
-  saveState();
+  saveState(originId);
 
   let bubble = null;
   const turnProposals = []; let turnQuestion = null, turnStartDeck = null;  // interactive UI the advisor put up this turn
@@ -2834,7 +2960,7 @@ async function send(force) {
           showStaleBanner();
         } else if (ev.event === 'memory') {
           // earlier messages were condensed server-side; keep the memory with this chat
-          originChat.memory = ev.data; saveState();
+          originChat.memory = ev.data; saveState(originId);
         } else if (ev.event === 'warning') {
           if (onScreen()) renderWarning(ev.data.cards);
         } else if (ev.event === 'error') {
@@ -2853,7 +2979,7 @@ async function send(force) {
       if (turnProposals.length) entry.proposals = turnProposals;
       if (turnQuestion) entry.question = turnQuestion;
       originConv.push(entry);
-      saveState();
+      saveState(originId);
       // If that chat is on screen but the live bubble was lost to a tab-switch
       // (or was never drawn), re-render it so the finished answer shows.
       if (onScreen()) {
@@ -3103,6 +3229,30 @@ function startTour() {
   show();
 }
 
+// Load chats + restore the active one: the account's chats when signed in (cached per account
+// in this browser, then synced), else this browser's.
+mePromise.then(me => {
+  if (me && me.auth && me.user) {
+    SYNC = true;
+    STORE_KEY = LEGACY_STORE_KEY + ':' + me.user.toLowerCase();
+  }
+  let fresh = true;
+  try {
+    fresh = !localStorage.getItem(STORE_KEY) && (!localStorage.getItem(LEGACY_STORE_KEY)
+                                                  || !!localStorage.getItem(LEGACY_STORE_KEY + ':migrated'));
+  } catch (e) {}
+  initChats();
+  const bootId = activeId;
+  syncChats().then(() => {
+    // a new device starts on a blank chat until the account's chats arrive - then open the latest
+    const boot = chats[bootId];
+    if (!fresh || activeId !== bootId || !boot || !isBlankChat(boot) || streaming) return;
+    const latest = Object.values(chats).filter(ch => ch.id !== bootId)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+    if (latest) { delete chats[bootId]; switchChat(latest.id); }
+  });
+});
+
 // First visit: the account's flag when signed in, else this browser's.
 mePromise.then(me => {
   onbOnServer = !!(me && me.auth && typeof me.onboarded === 'boolean');
@@ -3110,9 +3260,6 @@ mePromise.then(me => {
   if (!onbOnServer) { try { seen = !!localStorage.getItem(ONB_KEY); } catch (e) { seen = true; } }
   if (!seen && !streaming && !document.querySelector('.intake:not([hidden])')) openWelcome();
 });
-
-// Load chats + restore the active one on startup.
-initChats();
 </script>
 </body>
 </html>

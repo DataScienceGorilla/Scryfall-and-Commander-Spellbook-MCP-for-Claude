@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py", "accounts.py"]
 UI_MARKERS = ["function send(", "function renderDeck(", "function initChats(", "initChats();",
               "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "function openIntake(", "function startDeckCard(", "function startBuild(", "function buildPanel(", "function activeDecisionEntry(",
-              "function renderTurnExtras(", "function acceptProposal(", "function openWelcome(", "function startTour(", "</html>"]
+              "function renderTurnExtras(", "function acceptProposal(", "function openWelcome(", "function startTour(", "function syncChats(", "</html>"]
 
 failures = []
 
@@ -57,6 +57,7 @@ def main():
     tmp_dir = Path(tempfile.mkdtemp())
     os.environ["ADVISOR_ACCOUNTS_FILE"] = str(tmp_dir / "accounts.json")
     os.environ["ADVISOR_USER_PREFS_FILE"] = str(tmp_dir / "user_prefs.json")
+    os.environ["ADVISOR_USER_CHATS_DIR"] = str(tmp_dir / "user_chats")
     import advisor_app as a
     from fastapi.testclient import TestClient
 
@@ -84,6 +85,26 @@ def main():
     check("new player not onboarded yet", c.get("/me").json().get("onboarded") is False)
     r = c.post("/me/onboarded", json={"done": True})
     check("mark onboarded", r.status_code == 200 and c.get("/me").json().get("onboarded") is True)
+
+    print("Account chats")
+    cid = "smoke-chat-0001"
+    chat = {"id": cid, "title": "Smoke", "conversation": [{"role": "user", "text": "hi"}], "deck": None}
+    check("no chats yet", c.get("/me/chats").json().get("chats") == [])
+    r = c.put(f"/me/chats/{cid}", json={"chat": chat, "base": 0})
+    check("save new chat", r.status_code == 200 and r.json().get("rev") == 1)
+    check("chat listed", [x["id"] for x in c.get("/me/chats").json()["chats"]] == [cid])
+    check("chat body", c.get(f"/me/chats/{cid}").json().get("conversation") == chat["conversation"])
+    r = c.put(f"/me/chats/{cid}", json={"chat": chat, "base": 1})
+    check("save on current rev", r.status_code == 200 and r.json().get("rev") == 2)
+    r = c.put(f"/me/chats/{cid}", json={"chat": chat, "base": 1})
+    check("stale save -> 409 with current copy", r.status_code == 409 and r.json()["chat"].get("rev") == 2)
+    check("bad chat id -> 404", c.get("/me/chats/..%2Fx").status_code == 404)
+    o = TestClient(a.app, base_url="https://smoke")
+    o.post("/signup", data={"username": "Other_1", "password": "hunter22", "confirm": "hunter22", "code": "smoke-code"})
+    check("other account can't see it", o.get("/me/chats").json().get("chats") == []
+          and o.get(f"/me/chats/{cid}").status_code == 404)
+    a.accounts.remove("Other_1")
+    check("delete chat", c.delete(f"/me/chats/{cid}").status_code == 200 and c.get("/me/chats").json()["chats"] == [])
 
     print("Sign-up")
     s = TestClient(a.app, base_url="https://smoke")
