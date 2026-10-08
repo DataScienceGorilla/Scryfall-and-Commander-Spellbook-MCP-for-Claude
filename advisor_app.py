@@ -279,9 +279,10 @@ THAT is their current deck - use it; do not ask them to paste it again.
   PRECOMPUTED combo check (with combo profiles) and Spellbook power read for this exact deck
   version - use those; don't re-run spellbook_find_combos_in_decklist / spellbook_estimate_bracket
   on the deck unless the player asks.
-- To run spellbook_find_combos_in_decklist, spellbook_estimate_bracket or
+- To run spellbook_find_combos_in_decklist, spellbook_estimate_bracket, recommander_suggest or
   scryfall_get_decklist_details on the whole deck, pass decklist_text="@deck" - the server
-  substitutes the exact list. Never retype the decklist into a tool call.
+  substitutes the exact list (and fills recommander_suggest's commander from the editor). Never
+  retype the decklist into a tool call.
 - The player edits the deck directly. A message may carry a note like "[Deck edits since your last
   reply: ...]" - take those edits into account.
 - The CURRENT DECK may include a PLAYER BRIEF (their questionnaire answers: gameplan, styles, must-keep
@@ -579,6 +580,9 @@ fit the ENGINE MAP but are rarely played, so the player likely hasn't seen them.
 - To find them: run a scoped scryfall_search_cards on a specific engine-map need (e.g. a payoff
   for the exact thing the deck does), pass a LARGER limit (~15-20) so the obscure tail is visible,
   and pick from the "niche"/"deep cut" end - a card that fits, not obscure for its own sake.
+  recommander_suggest is the other good source: a card with a HIGH Recommander score but a
+  "niche"/"deep cut" EDHREC label is one that decks like THIS one run while the format at large
+  doesn't - exactly the kind of gem to surface.
 - Verify its text like any recommendation, and LABEL it as a deep cut ("rarely played, but...")
   with the specific reason it works HERE. One or two real gems beats a pile of staples.
 - This complements the rule above: instead of re-pitching famous cards, dig for the hidden ones.
@@ -623,6 +627,18 @@ zero-sum at 100 cards. Recommend cuts, not just adds.
 - spellbook_find_combos_in_decklist: analyze a pasted/linked decklist for combos.
 - spellbook_estimate_bracket: gauge a deck's power level / bracket.
 - spellbook_search_combos / spellbook_find_combos_for_cards: find combo lines to add.
+- recommander_suggest: what decks built around THIS commander with THIS list actually run - a
+  ranked, deck-aware candidate pool learned from public decklists (Recommander). Call it ONCE per
+  review or "what should I add" question, with decklist_text="@deck", BEFORE you go hunting with
+  scryfall_search_cards: it reads the whole list, so it catches synergy pieces a keyword search
+  can't phrase. Steer it with focus_cards (the engine pieces of the plan you're strengthening),
+  avoid_cards (a sub-theme being cut), candidates (rank a shortlist / the player's collection) or
+  set_code ("what from the new set fits"). Treat the output as CANDIDATES, not answers: it says
+  what's popular with this shell, not what fixes THIS deck's failure modes - pick the ones that
+  serve the engine map and the gaps you found, respect the bracket/budget/brief, verify their text,
+  and still cover needs it misses with scryfall_search_cards. Its picks skew toward staples, so
+  the intentional-omission rule above applies. When a pick came from it, a short "(Recommander)"
+  credit is enough.
 - scryfall_search_cards: find candidate cards by criteria (use id: for color identity!).
   e.g. id:mardu t:creature o:"whenever" cmc<=3
 - scryfall_get_card: verify EXACT oracle text before you rely on how a card works.
@@ -1023,7 +1039,7 @@ def _cached_system(memory_block: str = "", deck_block: str = ""):
 # --- Live deck context (workbench phase 3) -----------------------------------
 DECK_REF = "@deck"  # the model passes this as decklist_text; the server substitutes the list
 DECKLIST_TOOLS = {"scryfall_get_decklist_details", "spellbook_find_combos_in_decklist",
-                  "spellbook_estimate_bracket"}
+                  "spellbook_estimate_bracket", "recommander_suggest"}
 _DECK_DETAILS_CACHE: dict[str, str] = {}  # deck text -> scryfall_get_decklist_details output
 
 # --- Interactive tools (workbench phase 3): proposals + questions the player decides on ---
@@ -1701,6 +1717,12 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                             or not (args.get("decklist_text") or args.get("decklist_url"))):
                         args["decklist_text"] = deck_text
                         args.pop("decklist_url", None)
+                    if block.name == "recommander_suggest" and isinstance(deck, dict):
+                        cmdrs = deck.get("commander") or []
+                        if cmdrs and not args.get("commander"):
+                            args["commander"] = cmdrs[0]
+                            if len(cmdrs) > 1 and not args.get("partner"):
+                                args["partner"] = cmdrs[1]
                     try:
                         return await func(**args)
                     except Exception as e:
@@ -2357,14 +2379,15 @@ def _front(n: str | None) -> str:
 async def _apply_printings(cards: list[dict], printings: dict[str, dict]) -> None:
     """Move deck cards onto the printings a pasted export / deck link named ("(CMR) 472").
     A printing Scryfall can't match (typo'd set, wrong number) keeps the default printing."""
-    want = {}
+    want, ids = {}, []
     for c in cards:
         pr = printings.get(c["name"]) or printings.get(_collection_name(c["name"]))
         if pr:
             want[(pr["set"].lower(), pr["cn"].lower())] = c
-    keys = list(want)
-    for i in range(0, len(keys), 75):
-        chunk = keys[i:i + 75]
+            # Scryfall's collector numbers are case-sensitive (The List: "TMP-315"); send them as given
+            ids.append((pr["set"].lower(), pr["cn"]))
+    for i in range(0, len(ids), 75):
+        chunk = ids[i:i + 75]
         async with _scry_sem:
             async with scryfall_client(timeout=30.0) as client:
                 try:
