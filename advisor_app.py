@@ -2327,7 +2327,109 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         "roles": roles,            # concrete roles (otag index)
         "role": None,              # contextual role - assigned by AI/user later
         "tags": [],                # user tags
+        # the printing shown. "printing" (set only when the player or the import picked one) is
+        # what exports carry - a default printing is left for the importing site to choose.
+        "set": c.get("set"),
+        "set_name": c.get("set_name"),
+        "collector_number": c.get("collector_number"),
     }
+
+
+def _print_fields(p: dict) -> dict:
+    """The printing-specific fields of a Scryfall card object, in deck-card shape."""
+    faces = p.get("card_faces") or []
+    img = ((p.get("image_uris") or {}).get("normal")
+           or (faces[0].get("image_uris", {}).get("normal") if faces else None))
+    return {
+        "image": img,
+        "image_back": (faces[1].get("image_uris") or {}).get("normal") if len(faces) > 1 else None,
+        "scryfall_uri": p.get("scryfall_uri"),
+        "set": p.get("set"),
+        "set_name": p.get("set_name"),
+        "collector_number": p.get("collector_number"),
+    }
+
+
+def _front(n: str | None) -> str:
+    return _collection_name(n or "").lower()
+
+
+async def _apply_printings(cards: list[dict], printings: dict[str, dict]) -> None:
+    """Move deck cards onto the printings a pasted export / deck link named ("(CMR) 472").
+    A printing Scryfall can't match (typo'd set, wrong number) keeps the default printing."""
+    want = {}
+    for c in cards:
+        pr = printings.get(c["name"]) or printings.get(_collection_name(c["name"]))
+        if pr:
+            want[(pr["set"].lower(), pr["cn"].lower())] = c
+    keys = list(want)
+    for i in range(0, len(keys), 75):
+        chunk = keys[i:i + 75]
+        async with _scry_sem:
+            async with scryfall_client(timeout=30.0) as client:
+                try:
+                    r = await client.post(f"{SCRYFALL_API}/cards/collection", headers=SCRYFALL_HEADERS,
+                                          json={"identifiers": [{"set": st, "collector_number": cn}
+                                                                for st, cn in chunk]})
+                    data = (r.json().get("data") or []) if r.status_code == 200 else []
+                except (httpx.HTTPError, ValueError):
+                    data = []
+        for p in data:
+            c = want.get(((p.get("set") or "").lower(), (p.get("collector_number") or "").lower()))
+            if c and _front(p.get("name")) == _front(c["name"]):  # never swap in a different card
+                c.update(_print_fields(p))
+                c["printing"] = {"id": p.get("id"), "set": p.get("set"), "cn": p.get("collector_number")}
+
+
+PRINTINGS_CACHE: dict[str, dict] = {}  # lower(name) -> {"name", "default_id", "printings": [...]}
+
+
+@app.get("/card/printings")
+async def card_printings(name: str, _: None = Depends(require_auth)):
+    """Every paper printing of a card, newest first, for the deck editor's printing picker."""
+    key = name.strip().lower()
+    if key not in PRINTINGS_CACHE:
+        full = await _resolve_full_card(name)
+        if not full or not full.get("prints_search_uri"):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        found, url = [], full["prints_search_uri"]
+        async with _scry_sem:
+            async with scryfall_client(timeout=20.0) as client:
+                for _page in range(5):  # 175 a page; even basic lands fit
+                    try:
+                        r = await client.get(url, headers=SCRYFALL_HEADERS)
+                    except httpx.HTTPError:
+                        break
+                    if r.status_code != 200:
+                        break
+                    data = r.json()
+                    found += data.get("data") or []
+                    if not data.get("has_more"):
+                        break
+                    url = data["next_page"]
+        if not found:
+            return JSONResponse({"error": "lookup failed"}, status_code=502)  # transient: not cached
+        prints = []
+        for p in found:
+            if "paper" not in (p.get("games") or []):
+                continue  # Arena / MTGO-only versions can't be sleeved up
+            faces = p.get("card_faces") or []
+            prices = p.get("prices") or {}
+            prints.append({
+                **_print_fields(p),
+                "id": p.get("id"),
+                "thumb": ((p.get("image_uris") or {}).get("small")
+                          or (faces[0].get("image_uris", {}).get("small") if faces else None)),
+                "released": p.get("released_at"),
+                "finishes": p.get("finishes") or [],
+                "promo": bool(p.get("promo")),
+                "full_art": bool(p.get("full_art")),
+                "frame_effects": p.get("frame_effects") or [],
+                "border": p.get("border_color"),
+                "usd": prices.get("usd") or prices.get("usd_foil") or prices.get("usd_etched"),
+            })
+        PRINTINGS_CACHE[key] = {"name": full.get("name"), "default_id": full.get("id"), "printings": prints}
+    return JSONResponse(PRINTINGS_CACHE[key])
 
 
 # Who can lead a deck, per Scryfall: is:commander covers legendary creatures and the
@@ -2388,7 +2490,9 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
             return JSONResponse({"cards": [], "not_found": [], "error": str(e)})
         except Exception:
             return JSONResponse({"cards": [], "not_found": [], "error": "Couldn't import that deck link right now."})
-        text = "\n".join(f"{q} {n}" for q, n in imp["cards"])
+        pr = imp.get("printings") or {}  # the deck's chosen printings ride along as "(set) cn"
+        text = "\n".join(f"{q} {n}" + (f" ({pr[n]['set']}) {pr[n]['cn']}" if n in pr else "")
+                         for q, n in imp["cards"])
         meta = {"commander": imp["commanders"], "bracket": imp["bracket"], "source": imp["source"],
                 "name": imp["name"], "skipped": imp["skipped"]}
         companion_name = imp.get("companion")
@@ -2428,6 +2532,8 @@ async def deck_parse(request: Request, _: None = Depends(require_auth)):
                 resolved.append(_slim_deck_card(c, qty))
                 found_names.add(c.get("name"))
     await _apply_commander_eligibility(resolved)
+    if parsed.get("printings"):
+        await _apply_printings(resolved, parsed["printings"])
     lower_found = {n.lower() for n in found_names} | {_collection_name(n).lower() for n in found_names}
     not_found = [n for n in names if n.lower() not in lower_found
                  and n.lower().split(" // ")[0] not in lower_found]

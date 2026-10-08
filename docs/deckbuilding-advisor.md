@@ -113,6 +113,11 @@ repo. This doc is the single source of truth for how it works and how to keep bu
 - [x] **Rulebreaker commanders** (2026-10-03): `rulebreakers.py` (+ `rbExempt` in the page) - the 8
   Mystery Booster Commander Edition "Rulebreaker" commanders' color-identity exceptions are honored by the
   panel's off-color flags, proposal validation and the reply color check; Whtz lifts the 100 max.
+- [x] **Printing selection** (2026-10-08): the card editor's Printing row opens a picker of every paper
+  printing (`GET /card/printings`, newest first, filterable, hover to preview); the choice sets the card's
+  art and `printing` `{id, set, cn}` (undoable). Pasted `(SET) 123` suffixes and Archidekt links keep their
+  printings on import (`_apply_printings`; an unmatched printing falls back to the default). Archidekt and
+  Arena/Moxfield exports carry chosen printings; the plain export stays bare. Picking the default clears it.
 - [x] **Admin page** (2026-10-05): `/admin` (`advisor_admin.html`) for usernames in `ADVISOR_ADMINS`
   (.env; currently AtlasAndromeda) - 404 for everyone else. Every `/chat` saves the chat's transcript
   (the page's history + the captured answer incl. proposals/questions/start-deck, plus a deck summary)
@@ -247,6 +252,7 @@ always sees exactly what the user sees.
 | `GET /card?name=` | **Cached** Scryfall proxy — resolves a card to slim JSON (image, color identity, `game_changer`, concrete `roles`). The canvas uses this so 100-card decks don't trip Scryfall's rate limit. |
 | `POST /deck/parse` | Parses a pasted decklist into **structured deck cards** (see [Deck object](#deck-object-schema)). |
 | `GET /deck/card?name=` | One card in the deck-card shape (fuzzy name, cached) — the editor's add-card. |
+| `GET /card/printings?name=` | Every paper printing of a card (art, set, collector #, year, price, finishes) + `default_id` - the editor's printing picker. Cached. |
 | `GET /card/search?q=` | Card-name autocomplete (Scryfall autocomplete, cached, ≥2 chars). |
 | `GET /login` `POST /login` `GET /logout` `GET /me` | Login page + session (see Auth). |
 | `POST /me/onboarded` | `{"done": true or false}` - marks the welcome card + tour seen for this account (`user_prefs.json`, gitignored); `GET /me` returns `onboarded`. |

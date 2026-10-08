@@ -772,19 +772,23 @@ _SECTION_MAIN = {"deck", "main", "mainboard", "main deck", "the 99"}
 _SECTION_SKIP = {"sideboard", "maybeboard", "maybe", "considering", "tokens", "token", "attractions",
                  "stickers", "contraptions"}
 _LINE_RE = re.compile(r"^\s*(\d+)\s*[xX]?\s+(.+?)\s*$")
+# A printing suffix after the name: "(CMR) 472", "(plst) C21-263", "(SLD) 1234★" - set code + collector #.
+_PRINTING_RE = re.compile(r"\s\(([A-Za-z0-9]{2,6})\)(?:\s+([0-9A-Za-z★†\-]+))?")
 
 
 def parse_decklist(text: str) -> dict:
     """Parse a pasted decklist in any common export format into
     {"main": [{"card", "quantity"}] (the playable deck INCLUDING commanders),
      "commanders": [names], "companions": [names] (outside the 100),
-     "skipped": n (maybe/side-board cards left out)}.
+     "skipped": n (maybe/side-board cards left out),
+     "printings": {name: {"set", "cn"}} for lines that named a printing}.
 
     Understands: plain "1 Sol Ring" / "1x Sol Ring"; set/collector suffixes "(C21) 263";
     section headers ("Commander", "// Sideboard", "MAYBEBOARD:", "Deck (99)"); and
     Archidekt's text export, where each line carries its categories and tags:
     "1x Agent of the Iron Throne (clb) 107 [Commander{top}] ^Sleeved,#fb00e5^"."""
     main, commanders, companions, skipped = [], [], [], 0
+    printings: dict[str, dict] = {}
     section = "main"
     # Bare names (no quantity) only count in a names-only list or under a Commander
     # header - otherwise the chat text around a pasted list would become "cards".
@@ -822,9 +826,12 @@ def parse_decklist(text: str) -> dict:
         name = re.sub(r"\^[^^]*\^", "", rest)          # ^tags^
         name = re.sub(r"\[[^\]]*\]", "", name)          # [categories]
         name = re.sub(r"\*[A-Za-z]+\*", "", name)       # *F* foil / *E* etched markers
+        pm = _PRINTING_RE.search(name)
         name = re.split(r"\s\(", name, 1)[0].strip()    # (set) collector#
         if not name:
             continue
+        if pm and pm.group(2):  # a set alone doesn't pin a printing
+            printings[name] = {"set": pm.group(1).lower(), "cn": pm.group(2)}
         if section == "companion" or "companion" in cats:
             companions.append(name)  # sits outside the 100
             continue
@@ -834,7 +841,8 @@ def parse_decklist(text: str) -> dict:
         if section == "commander" or "commander" in cats:
             commanders.append(name)
         main.append({"card": name, "quantity": qty})
-    return {"main": main, "commanders": commanders, "companions": companions, "skipped": skipped}
+    return {"main": main, "commanders": commanders, "companions": companions, "skipped": skipped,
+            "printings": printings}
 
 
 def _parse_decklist_to_main(text: str) -> list[dict]:
@@ -987,6 +995,7 @@ async def import_deck_url(url: str) -> dict:
             included = {c["name"]: c.get("includedInDeck", True) for c in d.get("categories", [])}
             premier = {c["name"] for c in d.get("categories", []) if c.get("isPremier")}
             cards, commanders, skipped, companion = [], [], 0, None
+            printings: dict[str, dict] = {}  # name -> {"set", "cn"}: the deck's chosen printings
             for c in d.get("cards", []):
                 if c.get("deletedAt"):
                     continue
@@ -1001,9 +1010,12 @@ async def import_deck_url(url: str) -> dict:
                 if premier & set(cats):
                     commanders.append(name)
                 cards.append((c.get("quantity", 1), name))
+                ed, cn = (c["card"].get("edition") or {}).get("editioncode"), c["card"].get("collectorNumber")
+                if ed and cn:
+                    printings[name] = {"set": ed.lower(), "cn": str(cn)}
             return {"source": "Archidekt", "name": d.get("name"), "commanders": commanders,
                     "cards": cards, "skipped": skipped, "bracket": d.get("edhBracket"),
-                    "companion": companion}
+                    "companion": companion, "printings": printings}
 
         if m.group("mox"):
             r = await client.get(f"https://api2.moxfield.com/v3/decks/all/{m.group('mox')}")
