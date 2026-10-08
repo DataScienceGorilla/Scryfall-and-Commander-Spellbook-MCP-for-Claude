@@ -3000,6 +3000,8 @@ function openWelcome() {
     el.remove();
     document.removeEventListener('keydown', onKey);
     markOnboarded();
+    // a starting path never touches the chat on screen: it gets its own (an already-empty one is reused)
+    if (['build', 'tune', 'ask'].includes(path) && (conversation.length || deck)) newChat();
     if (path === 'tour') startTour();
     else if (path === 'build') startBuild();
     else if (path === 'tune') focusComposer('Paste your decklist or an Archidekt link');
