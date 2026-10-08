@@ -72,10 +72,63 @@
   input:focus { border-color: var(--ink-line); }
   button { border: 1.5px solid var(--ink-strong); border-radius: 3px; box-shadow: 2px 2px 0 var(--ink-strong); }
   button:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink-strong); }
+
+  /* What Brew Bot is / isn't / can be, beside the form (stacked above it on narrow screens) */
+  body { align-items: flex-start; }
+  .wrap { display: flex; gap: 28px; align-items: flex-start; width: 100%; max-width: 960px; margin: auto; }
+  .wrap .card { flex: 0 0 360px; }
+  .about { flex: 1; min-width: 0; padding: 4px 4px 0; }
+  .about h2 { font-family: 'IM Fell English', 'Cormorant Garamond', Georgia, serif; font-weight: 400;
+    font-size: 30px; line-height: 1.15; margin: 0 0 6px; }
+  .about .lede { color: var(--muted); margin: 0 0 18px; }
+  .about h3 { font-family: 'IM Fell English', 'Cormorant Garamond', Georgia, serif; font-weight: 400;
+    font-size: 21px; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+  .about ul { margin: 0; padding-left: 20px; }
+  .about li { margin: 5px 0; font-size: 14px; line-height: 1.5; }
+  .about li b { font-weight: 700; }
+  .jump { display: none; color: var(--accent); font-weight: 600; text-decoration: none; font-size: 14px; }
+  @media (max-width: 760px) {
+    .wrap { flex-direction: column; gap: 22px; }
+    .wrap .card { flex: none; max-width: 420px; margin: 0 auto; }
+    .about h2 { font-size: 26px; }
+    .jump { display: inline-block; margin: -8px 0 4px; }
+  }
 </style>
 </head>
 <body>
-  <form class="card" method="post" action="/signup">
+  <div class="wrap">
+  <section class="about" aria-labelledby="aboutTitle">
+    <h2 id="aboutTitle">A deckbuilding partner for Commander</h2>
+    <p class="lede">Brew Bot helps you build and tune EDH decks around the way <em>you</em> want to play, and reads your actual cards before it says anything about them.</p>
+    <a class="jump" href="#signup">Skip to creating your account ↓</a>
+
+    <h3>What it is</h3>
+    <ul>
+      <li><b>A deck advisor that reads the real cards.</b> Paste a decklist or an Archidekt link and it reviews the deck from each card's oracle text, not from memory: gameplan, mana, curve, draw, interaction and where the deck stumbles.</li>
+      <li><b>Grounded in real sources.</b> Card data from Scryfall, combos and bracket estimates from Commander Spellbook, the Comprehensive Rules, and deckbuilding ideas from creators like Rebel Lily, The Command Zone, 3/3 Elk and Salubrious Snail.</li>
+      <li><b>A workbench, not just a chat.</b> Your deck sits beside the conversation, grouped by role and editable by hand. When the advisor suggests a change, you accept or reject it card by card.</li>
+      <li><b>Built around your brief.</b> Tell it your bracket, budget, pet cards and what your table hates. It sticks to your commander's colors and won't suggest cutting the cards you said to keep.</li>
+    </ul>
+
+    <h3>What it isn't</h3>
+    <ul>
+      <li><b>Not a netdecker.</b> It won't hand you the highest win-rate list. It builds toward your plan, and it values consistency over flashy ceilings.</li>
+      <li><b>Not a judge.</b> It can explain the rules behind your cards, but your table (or a real judge) has the final word.</li>
+      <li><b>Not a price checker or collection tracker.</b> It can respect a budget you describe, but it doesn't track prices or what you own. Keep your decks on Archidekt or Moxfield; Brew Bot exports to them.</li>
+      <li><b>Not always right.</b> It's an AI. It's careful, but it can misjudge. Push back when something seems off; it's built to reconsider.</li>
+      <li><b>Not a big public service.</b> It's a small, invite-only site run by a friend, so expect the occasional update or downtime.</li>
+    </ul>
+
+    <h3>What it can be</h3>
+    <ul>
+      <li><b>A brewing buddy</b> for talking through a commander idea before you buy a single card.</li>
+      <li><b>A second opinion</b> on a deck you've played for years, to find why it keeps losing the same way.</li>
+      <li><b>A bracket check before game night</b>: game changers, how fast and fragile its combos are, and whether it really belongs at the table you're bringing it to.</li>
+      <li><b>A teacher</b> that explains <em>why</em> a card fits or doesn't, so you get better at building yourself.</li>
+      <li><b>Whatever your playgroup needs next.</b> It's early and still growing, and feedback shapes what gets built.</li>
+    </ul>
+  </section>
+  <form class="card" id="signup" method="post" action="/signup">
     <div class="brand"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><path d="M25 9h14M28 9v15L15 46a6 6 0 0 0 5 9h24a6 6 0 0 0 5-9L36 24V9" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.5 41h25L49 48.5A4 4 0 0 1 45.5 54h-27A4 4 0 0 1 15 48.5z" fill="currentColor"/><circle cx="29" cy="35" r="2.4" fill="currentColor"/><circle cx="35" cy="30" r="1.8" fill="currentColor"/></svg><h1>Brew Bot</h1></div>
     <p class="sub">Create your account</p>
     <label for="username">Username</label>
@@ -94,6 +147,7 @@
     <div class="alt">Already have an account? <a href="/login">Sign in</a></div>
     <div class="alt" style="font-size:12px">Your chats are saved on the server and can be read by the site admin.</div>
   </form>
+  </div>
 <script>
   const e = new URLSearchParams(location.search).get('e');
   const msg = {

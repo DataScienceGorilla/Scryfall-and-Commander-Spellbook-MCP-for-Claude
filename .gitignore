@@ -28,6 +28,8 @@ advisor_ui.dev.html
 deploy.log
 accounts.json
 accounts.tmp
+user_prefs.json
+user_prefs.tmp
 benchmarks/
 
 # saved chat transcripts for the admin page (players notified in-app)

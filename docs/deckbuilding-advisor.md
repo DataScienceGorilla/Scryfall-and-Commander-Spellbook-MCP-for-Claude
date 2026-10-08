@@ -249,6 +249,7 @@ always sees exactly what the user sees.
 | `GET /deck/card?name=` | One card in the deck-card shape (fuzzy name, cached) — the editor's add-card. |
 | `GET /card/search?q=` | Card-name autocomplete (Scryfall autocomplete, cached, ≥2 chars). |
 | `GET /login` `POST /login` `GET /logout` `GET /me` | Login page + session (see Auth). |
+| `POST /me/onboarded` | `{"done": true or false}` - marks the welcome card + tour seen for this account (`user_prefs.json`, gitignored); `GET /me` returns `onboarded`. |
 | `GET /healthz` | Unauthenticated liveness probe (supervisor / Docker healthcheck). |
 
 ### `agent_stream` (the tool-use loop)

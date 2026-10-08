@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py", "accounts.py"]
 UI_MARKERS = ["function send(", "function renderDeck(", "function initChats(", "initChats();",
               "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "function openIntake(", "function startDeckCard(", "function startBuild(", "function buildPanel(", "function activeDecisionEntry(",
-              "function renderTurnExtras(", "function acceptProposal(", "</html>"]
+              "function renderTurnExtras(", "function acceptProposal(", "function openWelcome(", "function startTour(", "</html>"]
 
 failures = []
 
@@ -54,7 +54,9 @@ def main():
     os.environ["ADVISOR_PASSWORD"] = ""
     os.environ["ADVISOR_SITE_CODE"] = "smoke-code"
     os.environ["ADVISOR_SESSION_SECRET"] = "smoke-test-secret"
-    os.environ["ADVISOR_ACCOUNTS_FILE"] = str(Path(tempfile.mkdtemp()) / "accounts.json")
+    tmp_dir = Path(tempfile.mkdtemp())
+    os.environ["ADVISOR_ACCOUNTS_FILE"] = str(tmp_dir / "accounts.json")
+    os.environ["ADVISOR_USER_PREFS_FILE"] = str(tmp_dir / "user_prefs.json")
     import advisor_app as a
     from fastapi.testclient import TestClient
 
@@ -79,6 +81,9 @@ def main():
     ver = c.get("/version").json().get("ui", "")
     check("UI version stamped", "__UI_VERSION__" not in r.text and f"'{ver}'" in r.text)
     check("/me", c.get("/me").json().get("user") == "smoketest")
+    check("new player not onboarded yet", c.get("/me").json().get("onboarded") is False)
+    r = c.post("/me/onboarded", json={"done": True})
+    check("mark onboarded", r.status_code == 200 and c.get("/me").json().get("onboarded") is True)
 
     print("Sign-up")
     s = TestClient(a.app, base_url="https://smoke")

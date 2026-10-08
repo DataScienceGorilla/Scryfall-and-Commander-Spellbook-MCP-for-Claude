@@ -454,6 +454,31 @@
   .in-actions .primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 650; }
   @media (max-width: 560px) { .in-two { grid-template-columns: 1fr; } }
 
+  /* Onboarding: welcome card (first visit) + spotlight tour */
+  .onb-inner { max-width: 560px; }
+  .onb-paths { display: grid; gap: 10px; margin-top: 16px; }
+  .onb-path { display: flex; flex-direction: column; gap: 3px; text-align: left; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; font: inherit; cursor: pointer; }
+  .onb-path:hover, .onb-path:focus-visible { border-color: var(--accent); background: var(--accent-tint); outline: none; }
+  .onb-path b { font-size: 15px; }
+  .onb-path span { color: var(--muted); font-size: 13px; }
+  .onb-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 16px; }
+  .onb-link { background: none; border: none; color: var(--accent); font: inherit; font-size: 13.5px; font-weight: 650; cursor: pointer; padding: 4px 0; }
+  .onb-link.quiet { color: var(--muted); font-weight: 400; }
+  .tour-block { position: fixed; inset: 0; z-index: 112; }
+  .tour-ring { position: fixed; z-index: 113; border-radius: var(--radius); pointer-events: none;
+    box-shadow: 0 0 0 2px var(--accent), 0 0 0 9999px var(--scrim); transition: all .2s ease; }
+  .tour-tip { position: fixed; z-index: 114; width: min(320px, calc(100vw - 32px)); background: var(--panel);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px 12px; box-shadow: 0 10px 30px var(--shadow); }
+  .tour-tip h4 { margin: 0 0 6px; font-family: var(--font-head); font-size: 20px; font-weight: 600; }
+  .tour-tip p { margin: 0; font-size: 13.5px; line-height: 1.45; }
+  .tour-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .tour-count { color: var(--muted); font-size: 12px; margin-right: auto; }
+  .tour-actions button { border-radius: var(--radius); padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .tour-actions .primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 650; }
+  .tour-actions .tour-skip { background: none; border: none; color: var(--muted); padding: 6px 4px; }
+
   .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 120;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 14px;
     font-size: 13px; box-shadow: 0 10px 30px var(--shadow); display: flex; gap: 12px; align-items: center; }
@@ -546,7 +571,7 @@
   .role-group-title::after { transform: scaleX(-1); }
 
   /* inked buttons: dark outline and a hard offset shadow, like a woodcut label */
-  .tb-btn, header button, .q-opt, .ed-actions button, .ed-actions a, .in-actions button, .prop-btn {
+  .tb-btn, header button, .q-opt, .ed-actions button, .ed-actions a, .in-actions button, .prop-btn, .tour-actions button:not(.tour-skip) {
     border: 1.5px solid var(--ink-line) !important; box-shadow: 2px 2px 0 var(--ink-line); border-radius: var(--radius); }
   .tb-btn:active, header button:active, .q-opt:active, .prop-btn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink-line); }
   #send, #newChat { border: 1.5px solid var(--ink-strong); box-shadow: 2px 2px 0 var(--ink-strong); }
@@ -625,7 +650,8 @@ window.fetch = async (...args) => {
   if (resp.status === 401) location.href = '/login';
   return resp;
 };
-_fetch('/me').then(r => r.ok ? r.json() : null).then(me => {
+const mePromise = _fetch('/me').then(r => r.ok ? r.json() : null).catch(() => null);
+mePromise.then(me => {
   if (!me || !me.auth) return;
   const btn = document.getElementById('logoutBtn');
   btn.textContent = 'Sign out (' + me.user + ')';
@@ -2810,8 +2836,10 @@ applyPrefs();
       <input type="range" id="setCard" min="90" max="340" step="5" aria-label="Card size"></div>
     <div class="row"><h4>Chat text</h4>
       <div class="seg"><button type="button" data-serif="1">Cormorant</button><button type="button" data-serif="0">Karla</button></div></div>
-    <div class="row" style="margin-bottom:0"><div class="hint">Drag the line between the chat and the deck to resize them.</div>
-      <button type="button" class="reset" id="setReset">Reset layout</button></div>`;
+    <div class="row"><div class="hint">Drag the line between the chat and the deck to resize them.</div>
+      <button type="button" class="reset" id="setReset">Reset layout</button></div>
+    <div class="row" style="margin-bottom:0"><h4>New here?</h4>
+      <button type="button" class="reset" id="setTour">Replay the welcome tour</button></div>`;
   document.body.appendChild(pop);
   const card = pop.querySelector('#setCard');
   const paint = () => {
@@ -2829,10 +2857,155 @@ applyPrefs();
     prefs.proseSerif = b.dataset.serif === '1'; applyPrefs(); savePrefs(); paint();
   }));
   pop.querySelector('#setReset').addEventListener('click', () => { prefs = { ...PREF_DEFAULTS }; applyPrefs(); savePrefs(); paint(); });
+  pop.querySelector('#setTour').addEventListener('click', () => { pop.hidden = true; openWelcome(); });
   btn.addEventListener('click', (e) => { e.stopPropagation(); paint(); pop.hidden = !pop.hidden; });
   document.addEventListener('click', (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') pop.hidden = true; });
 })();
+
+// ---- onboarding: a welcome card on a player's first visit (three ways in), plus an optional
+// spotlight tour of the screen. "Seen" is remembered on the account (/me/onboarded) so it
+// follows the player across devices; the login-free dev server falls back to localStorage.
+// Replayable from Settings.
+const ONB_KEY = 'mtg_advisor_onboarded_v1';
+let onbOnServer = false;
+function markOnboarded() {
+  try { localStorage.setItem(ONB_KEY, '1'); } catch (e) {}
+  if (onbOnServer) fetch('/me/onboarded', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ done: true }) }).catch(() => {});
+}
+function focusComposer(hint) {
+  if (hint) inputEl.placeholder = hint;
+  inputEl.focus();
+}
+const ONB_PATHS = [
+  ['tune', 'Tune a deck I have', 'Paste a decklist or an Archidekt link. It loads as an editable deck on the right and the advisor reviews it from the real card text.'],
+  ['build', 'Build one from scratch', 'Pick a commander and build the deck with the advisor, a section at a time. You approve every card.'],
+  ['ask', 'Just ask a question', 'A commander idea, a card choice, a combo or a rules question - anything Commander.'],
+];
+function openWelcome() {
+  if (document.querySelector('.onb')) return;
+  const el = document.createElement('div');
+  el.className = 'intake onb';
+  el.innerHTML = `<div class="in-inner onb-inner" role="dialog" aria-modal="true" aria-labelledby="onbTitle">
+    <h2 class="in-title" id="onbTitle">Welcome to Brew Bot</h2>
+    <p class="in-sub">A Commander deckbuilding advisor that reads your actual cards - oracle text, combos, bracket - before it gives advice. Where do you want to start?</p>
+    <div class="onb-paths">${ONB_PATHS.map(([k, t, d]) => `<button type="button" class="onb-path" data-path="${k}"><b>${t}</b><span>${d}</span></button>`).join('')}</div>
+    <div class="onb-foot"><button type="button" class="onb-link" data-path="tour">Show me around first →</button>
+      <button type="button" class="onb-link quiet" data-path="skip">Skip</button></div></div>`;
+  document.body.appendChild(el);
+  const close = (path) => {
+    el.remove();
+    document.removeEventListener('keydown', onKey);
+    markOnboarded();
+    if (path === 'tour') startTour();
+    else if (path === 'build') startBuild();
+    else if (path === 'tune') focusComposer('Paste your decklist or an Archidekt link');
+    else if (path === 'ask') focusComposer('Ask anything about Commander');
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close('skip'); };
+  document.addEventListener('keydown', onKey);
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-path]');
+    if (b) close(b.dataset.path);
+    else if (e.target === el) close('skip');
+  });
+  el.querySelector('.onb-path').focus();
+}
+
+// [selectors (first visible wins), title, text]; steps whose target isn't on screen are skipped
+const TOUR_STEPS = [
+  [['#composer'], 'Talk to the advisor',
+   'Ask anything, or paste a decklist or an Archidekt link - a pasted list loads as your deck. Card names in answers are clickable.'],
+  [['#canvas'], 'Your deck and cards',
+   'Cards the advisor mentions show up here. Once a deck is loaded this becomes a workbench: cards grouped by role, drag to re-sort, click one to edit, and Brief tells the advisor your gameplan, budget and pet cards.'],
+  [['#buildBtn', '#newDeckBtn'], 'Start a deck',
+   'Build from scratch walks you through a new deck with the advisor, section by section. New deck gives you an empty list to fill by hand.'],
+  [['#sidebar', '#sidebarToggle'], 'Your chats',
+   'Each chat keeps its own deck. Start a new chat for each deck you work on; they are saved for next time.'],
+  [['#settingsBtn'], 'Make it yours',
+   'Card size and chat font live here - and so does this tour, if you want it again.'],
+];
+function visibleEl(sels) {
+  for (const s of sels) {
+    const el = document.querySelector(s);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden') return el;
+  }
+  return null;
+}
+function startTour() {
+  const steps = TOUR_STEPS.filter(s => visibleEl(s[0]));
+  if (!steps.length) return;
+  const block = document.createElement('div'); block.className = 'tour-block';
+  const ring = document.createElement('div'); ring.className = 'tour-ring';
+  const tip = document.createElement('div'); tip.className = 'tour-tip';
+  tip.setAttribute('role', 'dialog'); tip.setAttribute('aria-live', 'polite');
+  document.body.append(block, ring, tip);
+  let i = 0;
+  const place = () => {
+    const el = visibleEl(steps[i][0]);
+    if (!el) return;
+    const r = el.getBoundingClientRect(), pad = 6, gap = 12, m = 16;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const box = { left: Math.max(2, r.left - pad), top: Math.max(2, r.top - pad),
+                  right: Math.min(vw - 2, r.right + pad), bottom: Math.min(vh - 2, r.bottom + pad) };
+    Object.assign(ring.style, { left: box.left + 'px', top: box.top + 'px',
+      width: (box.right - box.left) + 'px', height: (box.bottom - box.top) + 'px' });
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const clampX = x => Math.max(m, Math.min(x, vw - tw - m));
+    const clampY = y => Math.max(m, Math.min(y, vh - th - m));
+    const cx = clampX((box.left + box.right) / 2 - tw / 2), cy = clampY((box.top + box.bottom) / 2 - th / 2);
+    const spots = [  // below, above, left, right; a target too big for any sits the tip inside it
+      [box.bottom + gap + th <= vh - m, cx, box.bottom + gap],
+      [box.top - gap - th >= m, cx, box.top - gap - th],
+      [box.left - gap - tw >= m, box.left - gap - tw, cy],
+      [box.right + gap + tw <= vw - m, box.right + gap, cy],
+    ];
+    const [, x, y] = spots.find(s => s[0]) || [true, cx, clampY(box.top + m)];
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  };
+  const show = () => {
+    const [, title, text] = steps[i], last = i === steps.length - 1;
+    tip.innerHTML = `<h4></h4><p></p><div class="tour-actions"><span class="tour-count">${i + 1} of ${steps.length}</span>
+      ${last ? '' : '<button type="button" class="tour-skip">Skip</button>'}
+      ${i ? '<button type="button" class="tour-back">Back</button>' : ''}
+      <button type="button" class="primary tour-next">${last ? 'Done' : 'Next'}</button></div>`;
+    tip.querySelector('h4').textContent = title;
+    tip.querySelector('p').textContent = text;
+    place();
+    tip.querySelector('.tour-next').focus();
+  };
+  const go = (d) => { const n = i + d; if (n >= 0 && n < steps.length) { i = n; show(); } };
+  const end = () => {
+    block.remove(); ring.remove(); tip.remove();
+    window.removeEventListener('resize', place);
+    document.removeEventListener('keydown', onKey);
+    focusComposer();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') end();
+    else if (e.key === 'ArrowRight') go(1);
+    else if (e.key === 'ArrowLeft') go(-1);
+  };
+  tip.addEventListener('click', (e) => {
+    if (e.target.closest('.tour-skip')) end();
+    else if (e.target.closest('.tour-back')) go(-1);
+    else if (e.target.closest('.tour-next')) { if (i < steps.length - 1) go(1); else end(); }
+  });
+  window.addEventListener('resize', place);
+  document.addEventListener('keydown', onKey);
+  show();
+}
+
+// First visit: the account's flag when signed in, else this browser's.
+mePromise.then(me => {
+  onbOnServer = !!(me && me.auth && typeof me.onboarded === 'boolean');
+  let seen = onbOnServer && me.onboarded;
+  if (!onbOnServer) { try { seen = !!localStorage.getItem(ONB_KEY); } catch (e) { seen = true; } }
+  if (!seen && !streaming && !document.querySelector('.intake:not([hidden])')) openWelcome();
+});
 
 // Load chats + restore the active one on startup.
 initChats();

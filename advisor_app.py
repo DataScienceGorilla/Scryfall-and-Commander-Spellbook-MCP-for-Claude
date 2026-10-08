@@ -2007,9 +2007,47 @@ async def logout(request: Request):
     return RedirectResponse("/login" if AUTH_ENABLED else "/", status_code=303)
 
 
+# Per-player flags that follow the account across devices (user_prefs.json, gitignored), keyed by
+# lowercased username so .env logins and self-service accounts share one store. Today: whether the
+# player has seen the welcome card + tour. On the login-free dev server there's no user, so the
+# page falls back to localStorage.
+USER_PREFS_FILE = Path(os.getenv("ADVISOR_USER_PREFS_FILE") or Path(__file__).parent / "user_prefs.json")
+_user_prefs_lock = asyncio.Lock()
+
+
+def _load_user_prefs() -> dict:
+    try:
+        return json.loads(USER_PREFS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 @app.get("/me")
 async def me(request: Request, _: None = Depends(require_auth)):
-    return {"user": request.session.get("user"), "auth": AUTH_ENABLED, "admin": _is_admin(request)}
+    user = request.session.get("user")
+    onboarded = bool(_load_user_prefs().get(user.lower(), {}).get("onboarded")) if user else None
+    return {"user": user, "auth": AUTH_ENABLED, "admin": _is_admin(request), "onboarded": onboarded}
+
+
+@app.post("/me/onboarded")
+async def me_onboarded(request: Request, _: None = Depends(require_auth)):
+    """Mark the welcome tour seen ({"done": true}) or reset it ({"done": false})."""
+    user = request.session.get("user")
+    if not user:
+        return {"ok": False}
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    done = bool(body.get("done", True)) if isinstance(body, dict) else True
+    async with _user_prefs_lock:
+        data = _load_user_prefs()
+        rec = data.setdefault(user.lower(), {})
+        if done:
+            rec["onboarded"] = datetime.datetime.now().isoformat(timespec="seconds")
+        else:
+            rec.pop("onboarded", None)
+        tmp = USER_PREFS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.replace(USER_PREFS_FILE)
+    return {"ok": True, "onboarded": done}
 
 
 def _ui_page() -> tuple[str, str]:
