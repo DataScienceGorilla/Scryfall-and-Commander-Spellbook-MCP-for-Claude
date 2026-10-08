@@ -361,6 +361,12 @@ Built up from real battle-testing. Major sections:
   embeddings `all-MiniLM-L6-v2`). Sources: YouTube transcripts (`theory_ingestion.py`, via Apify) +
   **Rebel Lily's Commander Template Academy** articles (`ingest_academy.py`). Tool: `deckbuilding_search`.
   `distill_theory.py` map-reduces the corpus into `playbooks/`.
+- **Recommander** — external, free, keyless API (`api.recommander.cards`, docs at
+  recommander.cards/api) that ranks cards by fit with a commander + decklist, learned from public
+  decklists. Tool: `recommander_suggest` (in `mtg_tools.py`): `@deck` substitution, commander filled
+  from the editor, optional focus/avoid weights, shortlist or set-only ranking; results enriched with
+  one Scryfall batch (type, MV, game changer, EDHREC rank), banned cards dropped, cached 1 h per query.
+  Terms: attribution, personal/non-commercial use (ask them before any commercial use), respect rate limits.
 - **Concrete-role index** — `role_index.py` builds `role_index.json` (gitignored) from **Scryfall
   oracle-tags (otags)**: card → concrete roles. Refreshes every 30 days (`--force` to rebuild).
 - **Card-role taxonomy (the user's 15 roles).** This is the backbone of the workbench:

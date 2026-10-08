@@ -319,6 +319,51 @@ TOOLS = [
         }
     },
     {
+        "name": "recommander_suggest",
+        "description": "Data-driven card suggestions from Recommander (recommander.cards), a model trained on public Commander decklists: given the commander and the current list, it ranks the cards that most often go WITH that exact combination (score 0.7-1.0, higher = stronger fit; cards already in the deck are left out). It reads the whole list, so it surfaces synergy pieces a keyword search misses. Results come back with type, mana value, game-changer flag and EDHREC popularity. Use it to build a candidate pool for a deck, then verify text and fit yourself - a high score means 'decks like this play it', not 'it fixes this deck's problem'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "commander": {
+                    "type": "string",
+                    "description": "Commander's exact name. Optional when the decklist marks the commander."
+                },
+                "partner": {
+                    "type": "string",
+                    "description": "Second commander (partner / background / companion-style pair), if any."
+                },
+                "decklist_text": {
+                    "type": "string",
+                    "description": "The current deck, one card per line (quantity optional)."
+                },
+                "focus_cards": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Cards (in or out of the deck) to steer toward - e.g. the engine pieces of the plan you want to strengthen. Weighted 3x."
+                },
+                "avoid_cards": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Cards whose usual companions should rank LOWER - e.g. a sub-theme the player is moving away from."
+                },
+                "candidates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Rank ONLY these cards (e.g. a shortlist from scryfall_search_cards, or the player's collection) instead of the whole card pool."
+                },
+                "set_code": {
+                    "type": "string",
+                    "description": "Rank only cards from this Scryfall set code (e.g. 'fdn') - 'what from the new set fits my deck'."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max suggestions to return (1-60).",
+                    "default": 30
+                }
+            }
+        }
+    },
+    {
         "name": "mtg_rules_search",
         "description": "Search the MTG Comprehensive Rules using semantic search. Ask rules questions in natural language. ALWAYS use this tool first when answering rules questions.",
         "input_schema": {
@@ -1448,6 +1493,141 @@ async def spellbook_estimate_bracket(
             return f"Error: {str(e)}"
 
 
+# Recommander (recommander.cards) public API: card suggestions learned from public Commander
+# decklists. Free, no key; terms ask for attribution, personal non-commercial use, and staying
+# under its (unpublished) rate limits - so identical queries are cached for an hour.
+RECOMMANDER_API = "https://api.recommander.cards/public-release/api/decks/recommend/top"
+_RECOMMANDER_CACHE: dict[str, tuple[float, dict]] = {}
+_RECOMMANDER_TTL = 3600.0
+_RECOMMANDER_ERRORS = {
+    "error_invalid_cards": "Recommander doesn't know that commander/partner name (brand-new cards can lag) - "
+                           "check the exact name with scryfall_get_card.",
+    "error_rate_limited": "Recommander is rate-limiting right now - skip it this turn and use scryfall_search_cards.",
+    "error_booting": "Recommander is starting up - try again in a minute, or use scryfall_search_cards.",
+    "error_model_loading": "Recommander is loading a new model - try again in a minute, or use scryfall_search_cards.",
+}
+
+
+async def _recommander_post(payload: dict) -> dict:
+    key = json.dumps(payload, sort_keys=True)
+    now = asyncio.get_running_loop().time()
+    hit = _RECOMMANDER_CACHE.get(key)
+    if hit and now - hit[0] < _RECOMMANDER_TTL:
+        return hit[1]
+    async with httpx.AsyncClient(timeout=45.0, headers={"User-Agent": IMPORT_HEADERS["User-Agent"]}) as client:
+        r = await client.post(RECOMMANDER_API, json=payload)
+    try:
+        data = r.json()
+    except ValueError:
+        data = {"result_code": "error_unknown", "error": {"messages": [f"HTTP {r.status_code}"]}}
+    if data.get("result_code") == "success":
+        if len(_RECOMMANDER_CACHE) >= 64:
+            _RECOMMANDER_CACHE.pop(next(iter(_RECOMMANDER_CACHE)))
+        _RECOMMANDER_CACHE[key] = (now, data)
+    return data
+
+
+async def recommander_suggest(commander: str = None, partner: str = None, decklist_text: str = None,
+                              focus_cards: list = None, avoid_cards: list = None, candidates: list = None,
+                              set_code: str = None, limit: int = 30) -> str:
+    """Rank cards that fit a commander + decklist (Recommander), enriched with Scryfall facts."""
+    parsed = parse_decklist(decklist_text or "")
+    cmdrs = parsed["commanders"]
+    commander = (commander or (cmdrs[0] if cmdrs else "") or "").strip()
+    partner = (partner or (cmdrs[1] if len(cmdrs) > 1 else "") or "").strip() or None
+    if not commander:
+        return "Recommander needs the commander's name (pass commander=...)."
+    skip = {n.lower() for n in (commander, partner) if n}
+    deck = [e["card"] for e in parsed["main"] if e["card"].lower() not in skip]
+    deck = list(dict.fromkeys(deck))[:500]
+    weighted = {}
+    for n in focus_cards or []:
+        weighted[str(n)[:150]] = 3.0
+    for n in avoid_cards or []:
+        weighted[str(n)[:150]] = -3.0
+    payload = {"card_format": "name", "commander": commander, "partner": partner,
+               "deck": [n[:150] for n in deck], "weighted_deck": weighted or None}
+    if candidates:
+        payload["candidate_step"] = {"source": "explicit", "parameters": [str(n)[:150] for n in candidates][:1000]}
+    elif set_code:
+        payload["candidate_step"] = {"source": "set", "parameters": [set_code.strip().lower()]}
+    try:
+        data = await _recommander_post(payload)
+        if data.get("result_code") == "error_invalid_cards":
+            # Recommander matches names exactly - retry once with Scryfall's canonical spelling.
+            async with scryfall_client() as client:
+                for k in ("commander", "partner"):
+                    if payload[k]:
+                        card, _ = await resolve_card(client, payload[k])
+                        payload[k] = card["name"] if card else payload[k]
+            commander, partner = payload["commander"], payload["partner"]
+            data = await _recommander_post(payload)
+    except Exception as e:
+        return f"Recommander unavailable ({type(e).__name__}) - use scryfall_search_cards instead."
+    code = data.get("result_code")
+    if code != "success":
+        msgs = "; ".join((data.get("error") or {}).get("messages") or [])
+        return _RECOMMANDER_ERRORS.get(code, f"Recommander error ({code}){': ' + msgs if msgs else ''}.")
+
+    have = set()
+    for n in deck + [commander, partner or ""]:
+        have.update({n.lower(), _collection_name(n).lower()})
+    recs = [r for r in (data.get("data") or {}).get("recommendations") or []
+            if r.get("name") and r["name"].lower() not in have and _collection_name(r["name"]).lower() not in have]
+    if not recs:
+        return ("Recommander found nothing scoring above its 0.7 threshold for this query"
+                + (" among those candidates" if candidates else "") + ".")
+    limit = max(1, min(int(limit or 30), 60))
+
+    # One batched Scryfall lookup: type, mana value, game changer, banned, EDHREC popularity.
+    facts: dict[str, dict] = {}
+    try:
+        async with scryfall_client(headers=SCRYFALL_HEADERS, timeout=30.0) as client:
+            r = await client.post(f"{SCRYFALL_API}/cards/collection",
+                                  json={"identifiers": [{"name": _collection_name(x["name"])}
+                                                        for x in recs[:min(75, limit + 15)]]})
+            for c in (r.json().get("data", []) if r.status_code == 200 else []):
+                facts[c["name"].lower()] = c
+                facts[_collection_name(c["name"]).lower()] = c
+    except Exception:
+        pass
+
+    lines, banned = [], []
+    for x in recs:
+        if len(lines) >= limit:
+            break
+        c = facts.get(x["name"].lower()) or facts.get(_collection_name(x["name"]).lower())
+        if not c:
+            lines.append(f"{x['score']:.2f} **{x['name']}**")
+            continue
+        if (c.get("legalities") or {}).get("commander") == "banned":
+            banned.append(x["name"])
+            continue
+        cost = c.get("mana_cost") or ((c.get("card_faces") or [{}])[0].get("mana_cost", ""))
+        gc = " [GAME CHANGER]" if c.get("game_changer") else ""
+        rank = c.get("edhrec_rank")
+        pop = f" · EDHREC ~{rank} ({_pop_label(rank)})" if rank else " · EDHREC unranked"
+        lines.append(f"{x['score']:.2f} **{x['name']}** {cost} - {c.get('type_line', '')} "
+                     f"(MV {c.get('cmc', 0):g}){gc}{pop}")
+
+    scope = ("your candidate list" if candidates else f"set {set_code.upper()}" if set_code
+             else "the commander's color identity")
+    head = (f"Recommander suggestions for {commander}{' + ' + partner if partner else ''} given {len(deck)} deck "
+            f"cards, ranked from {scope} (score = fit with decks like this; {len(recs)} cleared the 0.7 bar, "
+            f"showing {len(lines)}; cards already in the deck excluded):")
+    tail = []
+    if banned:
+        tail.append(f"Dropped (banned in Commander): {', '.join(banned)}.")
+    if candidates:
+        ranked = {x["name"].lower() for x in recs} | {_collection_name(x["name"]).lower() for x in recs}
+        low = [str(n) for n in candidates if str(n).lower() not in ranked and str(n).lower() not in have]
+        if low:
+            tail.append(f"Below the 0.7 bar (rarely played with this shell, or off-color/unknown): {', '.join(low[:40])}.")
+    tail.append("Source: Recommander (recommander.cards) - credit it when you lean on these picks. "
+                "Popularity-driven: verify oracle text and fit before recommending any of them.")
+    return "\n".join([head] + lines + [""] + tail)
+
+
 # Map tool names to functions
 TOOL_FUNCTIONS = {
     "scryfall_search_cards": scryfall_search_cards,
@@ -1459,4 +1639,5 @@ TOOL_FUNCTIONS = {
     "spellbook_estimate_bracket": spellbook_estimate_bracket,
     "scryfall_get_decklist_details": scryfall_get_decklist_details,
     "mtg_rules_search": mtg_rules_search,
+    "recommander_suggest": recommander_suggest,
 }
