@@ -2158,6 +2158,12 @@ function proposalCard(p, entry, bubble) {
     actions.append(ok, mb, no);
   } else {
     actions.innerHTML = `<span class="prop-status">${p.status === 'accepted' ? '✓ Accepted' : p.status === 'rejected' ? '✗ Rejected' : p.status === 'maybe' ? '? Maybe - saved to your Maybe board' : p.status === 'skipped' ? '– Skipped' : 'No deck loaded'}</span>`;
+    if (canUndoDecision(p, entry)) {
+      const u = document.createElement('button'); u.className = 'prop-btn prop-undo'; u.textContent = '↶ Undo';
+      u.title = 'Take this decision back';
+      u.onclick = () => undoDecision(p, entry, bubble);
+      actions.appendChild(u);
+    }
   }
   // Optional reason - before or after deciding. It goes back to the advisor with the
   // decision ("rejected - I don't own it"), so it learns what this player values.
@@ -2187,25 +2193,59 @@ async function acceptProposal(p, quiet) {
   if (!deck || (p.status !== 'pending' && p.status !== 'maybe')) return;
   if (!quiet) pushUndo();  // Accept all takes one snapshot for the whole batch
   setMaybe(p, false);
+  const applied = {};  // exactly what this accept changed, so Undo can reverse just that
   if (p.cut) {
     const c = deckFind(p.cut);
     if (c && (c.qty || 1) > 1) {
       c.qty -= 1;  // "cut Forest" from 9 Forests = one fewer Forest, not all of them
+      applied.cutOne = c.name;
     } else if (c) {
+      applied.cutCard = JSON.parse(JSON.stringify(c));
+      applied.cutCommander = isCommander(c);
       deck.cards = deck.cards.filter(x => x !== c);
       deck.commander = (deck.commander || []).filter(n => lc(n) !== lc(c.name));
     }
   }
   const have = p.add && deckFind(p.add);
-  if (have && anyQty(have)) have.qty = (have.qty || 1) + (p.qty || 1);  // more basics
+  if (have && anyQty(have)) { have.qty = (have.qty || 1) + (p.qty || 1); applied.addQty = [have.name, p.qty || 1]; }  // more basics
   else if (p.add && !have) {
     try {
       const r = await fetch('/deck/card?name=' + encodeURIComponent(p.add));
-      if (r.ok) { const c = await r.json(); if (p.qty > 1 && anyQty(c)) c.qty = p.qty; deck.cards.push(c); }
+      if (r.ok) { const c = await r.json(); if (p.qty > 1 && anyQty(c)) c.qty = p.qty; deck.cards.push(c); applied.addNew = c.name; }
     } catch (e) {}
   }
+  p.applied = applied;
   p.status = 'accepted';
 }
+// Undo a decision on a suggestion - only until the advisor has heard it (no message sent since
+// that reply). Accepting is reversed exactly (the added card out, the cut card back), Maybe comes
+// off the board, and the suggestion goes back to waiting on a decision.
+function canUndoDecision(p, entry) {
+  return !!deck && ['accepted', 'rejected', 'maybe'].includes(p.status)
+    && entry === lastAssistantEntry() && conversation[conversation.length - 1] === entry;
+}
+function undoDecision(p, entry, bubble) {
+  if (streaming || !canUndoDecision(p, entry)) return;
+  pushUndo();
+  const a = p.applied || {};
+  if (p.status === 'accepted') {
+    if (a.addNew) { const c = deckFind(a.addNew); if (c) deck.cards = deck.cards.filter(x => x !== c); }
+    if (a.addQty) { const c = deckFind(a.addQty[0]); if (c) { c.qty = (c.qty || 1) - a.addQty[1]; if (c.qty < 1) deck.cards = deck.cards.filter(x => x !== c); } }
+    if (a.cutOne) { const c = deckFind(a.cutOne); if (c) c.qty = (c.qty || 1) + 1; }
+    if (a.cutCard && !deckFind(a.cutCard.name)) {
+      deck.cards.push(a.cutCard);
+      if (a.cutCommander && (deck.commander || []).length < 2) deck.commander = (deck.commander || []).concat(a.cutCard.name);
+    }
+  } else if (p.status === 'maybe') setMaybe(p, false);
+  delete p.applied;
+  p.status = 'pending';
+  entry.continued = false;  // deciding again hands the turn back as usual
+  clearInterval(autoContinueTimer);
+  deckChanged();
+  renderTurnExtras(entry, bubble);  // back in the decision tray
+  showToast(`Undid your decision on ${p.add || p.cut}`, true);
+}
+
 // ---- Maybe list: proposals the player flagged as possibilities (deck.maybe, shown under the deck) ----
 const maybeKey = p => lc(p.add) + '|' + lc(p.cut);
 function setMaybe(p, on) {
@@ -2252,7 +2292,31 @@ function getDragCard(e) {
   const n = (e.dataTransfer.getData('text/plain') || '').trim();
   return n && n.length < 150 ? { name: n, from: 'text' } : null;
 }
-function endDrag() { document.body.classList.remove('dragging'); }
+function endDrag() { document.body.classList.remove('dragging'); dragEdge = 0; }
+// Scrolling the card canvas mid-drag: the wheel scrolls it (where the browser delivers wheel
+// events during a drag), and holding the card near the canvas's top or bottom edge scrolls it too
+// (Chrome on Windows swallows the wheel while dragging).
+let dragEdge = 0, dragEdgeRaf = 0;
+document.addEventListener('wheel', (e) => {
+  if (!document.body.classList.contains('dragging')) return;
+  e.preventDefault();
+  cardsEl.scrollTop += e.deltaMode === 1 ? e.deltaY * 32 : e.deltaY;
+}, { passive: false });
+cardsEl.addEventListener('dragover', (e) => {
+  if (!document.body.classList.contains('dragging')) return;
+  const r = cardsEl.getBoundingClientRect(), zone = Math.min(80, r.height / 4);
+  dragEdge = e.clientY < r.top + zone ? -(1 - (e.clientY - r.top) / zone)
+           : e.clientY > r.bottom - zone ? 1 - (r.bottom - e.clientY) / zone : 0;
+  if (dragEdge && !dragEdgeRaf) {
+    const step = () => {
+      if (!dragEdge || !document.body.classList.contains('dragging')) { dragEdgeRaf = 0; return; }
+      cardsEl.scrollTop += dragEdge * 18;  // faster the closer to the edge
+      dragEdgeRaf = requestAnimationFrame(step);
+    };
+    dragEdgeRaf = requestAnimationFrame(step);
+  }
+});
+cardsEl.addEventListener('dragleave', (e) => { if (!cardsEl.contains(e.relatedTarget)) dragEdge = 0; });
 function mentionCard(name) {  // the canvas's lookup of a mentioned card, in deck-card shape
   const e = cardCache.get(keyFor(name));
   return e && e.status === 'ok' ? { name: e.canonical || name, image: e.img || null, image_back: e.imgBack || null,
@@ -2342,6 +2406,7 @@ function afterDecision(entry, bubble, toastText) {
 // sits idle until the player thinks to type something. A short countdown leaves time to add a
 // reason (typing in a "Why?" box pauses it) or to hold off.
 const AUTO_CONTINUE_SECS = 4;
+let autoContinueTimer = null;  // the live countdown (Undo on a decision cancels it)
 function maybeAutoContinue(entry, bubble) {
   const props = entry.proposals || [];
   if (!props.length || props.some(p => p.status === 'pending') || entry.continued) return;
@@ -2363,7 +2428,7 @@ function maybeAutoContinue(entry, bubble) {
   };
   const go = () => {
     clearInterval(timer);
-    if (entry.continued) return;
+    if (entry.continued || entryPending(entry)) return;  // a decision was undone meanwhile
     if (streaming) { label.textContent = 'Waiting for the current answer…'; setTimeout(go, 1500); return; }
     entry.continued = true; saveState();
     hideTray();
@@ -2375,7 +2440,7 @@ function maybeAutoContinue(entry, bubble) {
       : `Done deciding - ${tally}. Take my decisions and reasons into account and keep going.`;
     send(true);
   };
-  timer = setInterval(() => { if (!paint() && --left <= 0) go(); else paint(); }, 1000);
+  autoContinueTimer = timer = setInterval(() => { if (!paint() && --left <= 0) go(); else paint(); }, 1000);
   paint();
   bar.querySelector('.ac-go').onclick = go;
   bar.querySelector('.ac-wait').onclick = () => {
