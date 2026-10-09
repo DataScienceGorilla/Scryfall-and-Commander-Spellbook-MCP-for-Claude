@@ -2614,8 +2614,14 @@ function renderEditor(c) {
   const sel = $('.ed-role');
   const auto = document.createElement('option'); auto.value = ''; auto.textContent = `Auto (${autoGroup(c)})`; sel.appendChild(auto);
   for (const r of DECK_ROLES.filter(r => r !== 'Commander')) { const o = document.createElement('option'); o.value = r; o.textContent = r; sel.appendChild(o); }
+  // last entry: take the card out of the deck onto the Maybe board (same as dragging it there)
+  const sep = document.createElement('option'); sep.disabled = true; sep.textContent = '──────────'; sel.appendChild(sep);
+  const mb = document.createElement('option'); mb.value = '__maybe'; mb.textContent = 'Maybe board (out of the deck)'; sel.appendChild(mb);
   sel.value = c.role || '';
-  sel.addEventListener('change', () => setCardRole(c.name, sel.value));
+  sel.addEventListener('change', () => {
+    if (sel.value === '__maybe') { closeEditor(); dropOnMaybe({ name: c.name, from: 'deck' }); }
+    else setCardRole(c.name, sel.value);
+  });
   const tags = $('.ed-tags'); tags.value = (c.tags || []).join(', ');
   tags.addEventListener('change', () => setCardTags(c.name, tags.value));
   tags.addEventListener('keydown', (e) => { if (e.key === 'Enter') tags.blur(); });
