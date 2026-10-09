@@ -329,6 +329,10 @@ THAT is their current deck - use it; do not ask them to paste it again.
   companion's condition. Companions are set in the deck brief - you can't set one with proposals.
 
 # PROPOSING CHANGES & ASKING THE PLAYER (the player stays in control of their deck)
+- WHERE THINGS SHOW UP: answer buttons (ask_player), accept/reject cards (propose_changes) and the
+  "start this deck" card (start_deck) appear in a decision panel BELOW your message, just above the
+  player's message box - never above it. If you point at them, say "below" ("pick one below", "decide
+  on the cards below"), never "above" / "up there" / "↑". Often you needn't point at all.
 - When a deck is loaded and you recommend concrete cuts, adds or swaps, put them through
   propose_changes - they appear as accept/reject cards beside the player's deck and accepting applies
   them. Pair a cut with its replacement as one swap when that's the intent. In your prose, explain the
@@ -1118,7 +1122,8 @@ UI_TOOLS = [
             "whenever you recommend specific cuts, adds or swaps for the deck in the editor (instead of only "
             "listing them in prose). Each change is an add, a cut, or a swap (both). Give a short reason per "
             "change. The server rejects illegal/off-color adds, cuts of cards not in the deck, and cuts of the "
-            "player's must-keep cards - you'll be told which. Accepting applies the change to their deck."),
+            "player's must-keep cards - you'll be told which. Accepting applies the change to their deck. The cards "
+            "appear BELOW your message, so say 'below' if you point at them, never 'above'."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1145,7 +1150,8 @@ UI_TOOLS = [
         "description": (
             "Ask the player a question with 2-6 short answer buttons when you need their decision to go on "
             "(direction, trade-offs, which of two packages, whether to keep a pet card). After calling this, "
-            "end your turn with at most a sentence or two - their tap on an answer arrives as their next message."),
+            "end your turn with at most a sentence or two - their tap on an answer arrives as their next message. "
+            "The buttons appear BELOW your message (in the panel above the player's input), so say 'below', never 'above'."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1292,7 +1298,8 @@ async def _start_deck_offer(inp: dict, deck: dict | None) -> tuple[str, dict | N
     offer = {"id": uuid.uuid4().hex[:8], "commander": cards,
              "bracket": bracket if bracket in (1, 2, 3, 4, 5) else None,
              "plan": " ".join(str(inp.get("plan") or "").split())[:400], "status": "pending"}
-    return ("The 'Start this deck' card is on screen. End your turn now (a sentence or two at most); "
+    return ("The 'Start this deck' card is on screen BELOW your message (say 'below', never 'above'). End your "
+            "turn now (a sentence or two at most); "
             "once they create the deck it arrives as CURRENT DECK and you fill it with propose_changes.", offer)
 
 
@@ -1779,7 +1786,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                                                                  f"add {it['add']}" if it.get("add") else "") if x)
                         ui_results[block.id] = (
                             (f"Shown to the player as accept/reject cards: {'; '.join(desc(i) for i in shown)}. "
-                             "Don't repeat them as a list - refer to them briefly; the player decides in the panel."
+                             "Don't repeat them as a list - refer to them briefly; the player decides in the panel "
+                             "BELOW your message (say 'below', never 'above')."
                              if shown else "Nothing was shown.")
                             + (f" REFUSED (not shown): {'; '.join(refused)}. Fix or drop these." if refused else ""))
                         log_activity(f"PROPOSE sid={session_id[:8]} shown={len(shown)} refused={len(refused)}"
@@ -1790,8 +1798,9 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                         opts = [" ".join(str(o).split())[:120] for o in (inp.get("options") or [])][:6]
                         yield _sse("question", {"id": uuid.uuid4().hex[:8], "question": str(inp.get("question") or "")[:500],
                                                 "options": opts, "multi": bool(inp.get("allow_multiple"))})
-                        ui_results[block.id] = ("The question is on screen with answer buttons. End your turn now "
-                                                "(a sentence or two at most) and wait for their answer.")
+                        ui_results[block.id] = ("The question is on screen with answer buttons BELOW your message. End "
+                                                "your turn now (a sentence or two at most; if you point at the buttons, "
+                                                "say 'below', never 'above') and wait for their answer.")
                     elif block.name == "start_deck":
                         ui_results[block.id], offer = await _start_deck_offer(block.input or {}, deck)
                         if offer:

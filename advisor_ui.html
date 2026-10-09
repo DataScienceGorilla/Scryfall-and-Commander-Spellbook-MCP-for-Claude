@@ -922,7 +922,7 @@ function loadActiveIntoUI() {
     addMessage('assistant', "Tell me your commander and what you're working on — a decklist to tune, a brand-new build, or a specific problem (curve, mana, a matchup). Cards I mention appear on the right.");
   } else {
     for (const m of conversation) {
-      const b = addMessage(m.role, m.text, m.note);
+      const b = addMessage(m.role, m.role === 'assistant' ? pointBelow(m.text, hasPanel(m)) : m.text, m.note);
       if (m.role === 'assistant') renderTurnExtras(m, b);
       if (m.interrupted) markInterrupted(b, !(m.text || '').trim());
       if (m.role === 'assistant' && deckIdentity === null) {
@@ -3164,6 +3164,17 @@ function setStreamingUI(on) {
   if (on) inputEl.placeholder = SEND_HINT_BUSY;
   else if (inputEl.placeholder === SEND_HINT_BUSY) inputEl.placeholder = INPUT_HINT;
 }
+// The decision panel (answer buttons, suggestion cards, start-deck card) sits BELOW the reply.
+// The advisor is told so; this catches the slips ("tap one above") in replies that put one up.
+const POINT_ABOVE = [
+  /\b((?:tap|pick|choose|click|select|hit|press|answer|decide|use|grab|check|see)\b[^.!?\n]{0,40}?)\babove\b/gi,
+  /\b((?:options?|buttons?|cards?|choices|questions?|proposals?|suggestions?|swaps?|panel)\s+(?:are\s+|is\s+)?(?:right\s+|just\s+)?)above\b/gi,
+  /\b(up )?there\s*↑/g];
+function pointBelow(text, hasPanel) {
+  if (!hasPanel || !text) return text;
+  return text.replace(POINT_ABOVE[0], '$1below').replace(POINT_ABOVE[1], '$1below').replace(POINT_ABOVE[2], 'below ↓');
+}
+const hasPanel = m => !!(m && ((m.proposals || []).length || m.question || m.startDeck));
 function markInterrupted(bubble, empty) {
   const msg = bubble && bubble.closest('.msg');
   if (!msg || msg.querySelector('.interrupted-note')) return;
@@ -3302,7 +3313,7 @@ async function send(force) {
               const m = acc.match(/%%IDENTITY:([WUBRGC]+)%%/i);
               if (m) setDeckIdentity(m[1].toUpperCase());
             }
-            bubble.innerHTML = renderMarkdown(acc);
+            bubble.innerHTML = renderMarkdown(pointBelow(acc, turnProposals.length || turnQuestion || turnStartDeck));
             bindChips(bubble);
             if (atBottom) scrollToBottom();
           }
@@ -3352,6 +3363,8 @@ async function send(force) {
       if (turnStartDeck) entry.startDeck = turnStartDeck;
       if (turnProposals.length) entry.proposals = turnProposals;
       if (turnQuestion) entry.question = turnQuestion;
+      const fixed = pointBelow(acc, hasPanel(entry));
+      if (fixed !== acc) { entry.text = fixed; if (bubble && onScreen()) { bubble.innerHTML = renderMarkdown(fixed); bindChips(bubble); } }
       originConv.push(entry);
       saveState(originId);
       // If that chat is on screen but the live bubble was lost to a tab-switch
