@@ -242,6 +242,7 @@
   #send:disabled { opacity: .5; cursor: default; }
   #send.stop { background: var(--panel-2); color: var(--danger-text); border-color: var(--danger); }
   .interrupted-note { font-size: 12px; color: var(--muted); font-style: italic; margin: 4px 0 0 2px; }
+  .interrupted-note .rewind-btn { font-style: normal; padding: 2px 10px; font-size: 12px; }
 
   /* Canvas pane */
   #canvas { flex: var(--canvas-flex, 1 1 0); min-width: 300px; display: flex; flex-direction: column; background: var(--panel); }
@@ -2252,8 +2253,18 @@ function canUndoDecision(p, entry) {
 function undoDecision(p, entry, bubble) {
   if (streaming || !canUndoDecision(p, entry)) return;
   pushUndo();
+  revertDecision(p);
+  entry.continued = false;  // deciding again hands the turn back as usual
+  clearInterval(autoContinueTimer);
+  deckChanged();
+  renderTurnExtras(entry, bubble);  // back in the decision tray
+  showToast(`Undid your decision on ${p.add || p.cut}`, true);
+}
+
+// reverse what a decision did to the deck and put the proposal back to waiting (no undo snapshot)
+function revertDecision(p) {
   const a = p.applied || {};
-  if (p.status === 'accepted') {
+  if (p.status === 'accepted' && deck) {
     if (a.addNew) { const c = deckFind(a.addNew); if (c) deck.cards = deck.cards.filter(x => x !== c); }
     if (a.addQty) { const c = deckFind(a.addQty[0]); if (c) { c.qty = (c.qty || 1) - a.addQty[1]; if (c.qty < 1) deck.cards = deck.cards.filter(x => x !== c); } }
     if (a.cutOne) { const c = deckFind(a.cutOne); if (c) c.qty = (c.qty || 1) + 1; }
@@ -2264,11 +2275,42 @@ function undoDecision(p, entry, bubble) {
   } else if (p.status === 'maybe') setMaybe(p, false);
   delete p.applied;
   p.status = 'pending';
-  entry.continued = false;  // deciding again hands the turn back as usual
+}
+
+// Go back after a Stop: the stopped answer and the message that started it come off the chat,
+// and the reply before it is live again - its question reopens (with the earlier pick still
+// selected), suggestions that message skipped wait for a decision again, and the ones already
+// decided can be undone. A typed message returns to the box for editing.
+function canRewind() {
+  const n = conversation.length;
+  return !streaming && n >= 3 && conversation[n - 1].role === 'assistant' && conversation[n - 1].interrupted
+    && conversation[n - 2].role === 'user' && conversation[n - 3].role === 'assistant';
+}
+function rewindStopped() {
+  if (!canRewind()) return;
+  const n = conversation.length;
+  const stopped = conversation[n - 1], user = conversation[n - 2], prev = conversation[n - 3];
+  pushUndo();
+  // anything decided on the stopped answer's own suggestions comes back out of the deck
+  (stopped.proposals || []).forEach(p => { if (p.status !== 'pending') revertDecision(p); });
+  conversation.splice(n - 2, 2);
+  const q = prev.question;
+  if (q && (q.answer || q.skipped)) {
+    const opts = q.options || [];
+    q.pick = q.answer ? String(q.answer).split(' · ').filter(o => opts.includes(o)) : [];
+    delete q.answer; delete q.typed; delete q.comment; delete q.skipped;
+  }
+  (prev.proposals || []).forEach(p => { if (p.status === 'skipped') p.status = 'pending'; });
+  if (prev.startDeck && prev.startDeck.status === 'skipped') prev.startDeck.status = 'pending';
+  prev.continued = false;
   clearInterval(autoContinueTimer);
-  deckChanged();
-  renderTurnExtras(entry, bubble);  // back in the decision tray
-  showToast(`Undid your decision on ${p.add || p.cut}`, true);
+  if (!user.auto && !inputEl.value.trim()) inputEl.value = user.text;
+  const keep = undoStack;
+  saveState();
+  loadActiveIntoUI();  // redraws the chat with the earlier reply live (its tray reopens)
+  undoStack = keep;
+  showToast('Back to the previous step', true);
+  inputEl.focus();
 }
 
 // ---- Maybe list: proposals the player flagged as possibilities (deck.maybe, shown under the deck) ----
@@ -3128,6 +3170,13 @@ function markInterrupted(bubble, empty) {
   const n = document.createElement('div'); n.className = 'interrupted-note';
   n.textContent = empty ? '⏹ Stopped before answering' : '⏹ Stopped here';
   msg.appendChild(n);
+  if (msg === [...messagesEl.querySelectorAll('.msg')].pop() && canRewind()) {
+    const back = document.createElement('button'); back.className = 'prop-btn rewind-btn'; back.textContent = '↶ Go back a step';
+    back.title = 'Drop this answer and your last message, and reopen the previous questions and suggestions';
+    back.onclick = rewindStopped;
+    const wrap = document.createElement('span'); wrap.className = 'rewind'; wrap.append(' · ', back);
+    n.append(wrap);
+  }
 }
 
 // "I want to build a ... deck" with no deck loaded -> offer the guided build first (once per chat).
@@ -3189,6 +3238,8 @@ async function send(force) {
   const abort = streamAbort = new AbortController(); streamChat = originId;
   let finishStream; streamDone = new Promise(r => { finishStream = r; });
   const userEntry = { role: 'user', text };
+  if (force === true) userEntry.auto = true;  // sent by the app (a button / auto-continue), not typed
+  messagesEl.querySelectorAll('.interrupted-note .rewind').forEach(x => x.remove());  // moved on - no going back
   addMessage('user', text);
   originConv.push(userEntry); saveState(originId);
   // A pasted list becomes the deck BEFORE the advisor sees this turn, so it reasons over
@@ -3308,12 +3359,14 @@ async function send(force) {
       if (onScreen()) {
         if (interrupted && !bubble) bubble = addMessage('assistant', '');
         if (!bubble || !bubble.isConnected) loadActiveIntoUI();
-        else { renderTurnExtras(entry, bubble); if (interrupted) markInterrupted(bubble, !acc.trim()); }
+        else renderTurnExtras(entry, bubble);
         scrollToBottom();  // the tray just took space from the chat - keep the reply in view
       }
     }
     if (streamAbort === abort) streamAbort = null;
     setStreamingUI(false);
+    // marked after streaming ends, so the Go back button is offered when it applies
+    if (interrupted && onScreen() && bubble && bubble.isConnected) markInterrupted(bubble, !acc.trim());
     finishStream();
     inputEl.focus();
   }
