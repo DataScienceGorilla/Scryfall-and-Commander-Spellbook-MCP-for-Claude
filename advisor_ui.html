@@ -112,6 +112,10 @@
     border-radius: var(--radius); padding: 10px; align-items: flex-start; }
   .prop-card.accepted { border-color: var(--success); }
   .prop-card.rejected { opacity: .55; }
+  .prop-card.maybe { border-style: dashed; border-color: var(--accent); }
+  .prop-btn.maybe { border-style: dashed; }
+  .maybe-group .card-tile { outline: 2px dashed var(--accent); outline-offset: -2px; }
+  .maybe-group .card-tile img { opacity: .85; }
   .prop-thumbs { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
   .prop-thumb { width: 64px; aspect-ratio: 63/88; object-fit: cover; border-radius: var(--radius-card); cursor: zoom-in; }
   .prop-thumb.out { filter: grayscale(.7) brightness(.8); }
@@ -297,7 +301,12 @@
     box-shadow: 0 10px 28px var(--shadow); max-height: 280px; overflow-y: auto; }
   .ac-list[hidden] { display: none; }
   .ac-list li { padding: 6px 9px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
-  .ac-list li.sel, .ac-list li:hover { background: var(--user); color: var(--ink-strong); }
+  .ac-list li.sel { background: var(--user); color: var(--ink-strong); }
+  .ac-list li b { font-weight: 700; }
+  .ac-list li.ac-note { color: var(--muted); cursor: default; font-style: italic; background: none; }
+  .ac-wrap { position: relative; flex: 1; min-width: 0; }
+  .intake .ac-list { max-height: 320px; }
+  .intake .ac-list li { padding: 8px 10px; font-size: 14px; }
   .build-panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2);
     padding: var(--s2) var(--s3) var(--s3); margin: calc(-1 * var(--s2)) 0 var(--s4); }
   .bp-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
@@ -467,6 +476,11 @@
   .in-pill.sel, .in-chip.sel { background: var(--chip); color: var(--accent); border-color: var(--accent); }
   .in-avoid-note { margin-top: 8px; }
   .in-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  /* the × stays in view while the brief scrolls - it's the only way out besides Skip / submit */
+  .intake .in-x { position: sticky; top: 0; float: right; margin: -8px -6px 0 8px; z-index: 2;
+    width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--text); font-size: 22px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+  .intake .in-x:hover { border-color: var(--accent); color: var(--accent); }
   .in-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
   .in-actions button { border-radius: var(--radius); padding: 8px 16px; font: inherit; font-size: 13.5px; cursor: pointer;
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
@@ -1072,6 +1086,7 @@ function deckForChat() {
   if (!deck.cards.length && !building()) return null;
   return { commander: deck.commander || [], bracket: deck.bracket || null, intake: deck.intake || null,
            build: deck.build || null, companion: deck.companion ? { name: deck.companion.name } : null,
+           maybe: (deck.maybe || []).map(m => ({ add: m.add, cut: m.cut })),
            cards: deck.cards.map(c => ({ name: c.name, qty: c.qty || 1, role: c.role || null,
                                          tags: c.tags || [], color_identity: c.color_identity || [],
                                          roles: c.roles || [], cmc: c.cmc || 0, is_land: !!c.is_land,
@@ -1302,8 +1317,8 @@ function startBuild(opts = {}) {
     deck.cards = deck.cards.filter(c => (deck.commander || []).some(n => lc(n) === lc(c.name)));
     deckChanged();
     inputEl.value = ((deck.commander || []).length
-      ? `Let's build this deck from scratch with ${deck.commander.join(' + ')} as commander. Start with the gameplan.`
-      : "Let's build a new deck from scratch. I haven't picked a commander yet - help me choose one.")
+      ? `Let's build this deck from scratch with ${deck.commander.join(' + ')} as commander. Before you propose any cards, ask me what you need to know about how I want it to play.`
+      : "Let's build a new deck from scratch. I haven't picked a commander yet - ask me some questions to figure out what I'd enjoy, then help me choose one.")
       + (opts.ask ? `\n\nWhat I originally asked: ${opts.ask}` : '');
     send(true);
   });
@@ -1453,6 +1468,55 @@ function startNewDeck() {
   setTimeout(() => { const i = document.getElementById('addCardInput'); if (i) i.focus(); }, 0);
 }
 
+// Card-name dropdown under a text box (the browser's own <datalist> popup is tiny and unstyled).
+// source(q) -> names; onPick(name) on click / Enter. Arrow keys move, Escape closes the list only.
+function attachAutocomplete(input, list, { source, onPick, minChars = 2, empty = '' }) {
+  let timer = null, items = [], sel = -1, seq = 0;
+  const close = () => { list.hidden = true; items = []; sel = -1; };
+  const note = (text) => { list.innerHTML = ''; const li = document.createElement('li'); li.className = 'ac-note'; li.textContent = text; list.appendChild(li); list.hidden = false; };
+  const paint = (q) => {
+    list.innerHTML = '';
+    const k = lc(q || input.value.trim());
+    items.forEach((n, i) => {
+      const li = document.createElement('li');
+      const at = k ? lc(n).indexOf(k) : -1;  // bold the typed part
+      if (at >= 0) li.append(n.slice(0, at), Object.assign(document.createElement('b'), { textContent: n.slice(at, at + k.length) }), n.slice(at + k.length));
+      else li.textContent = n;
+      if (i === sel) li.className = 'sel';
+      li.addEventListener('mousedown', (e) => { e.preventDefault(); pick(n); });
+      li.addEventListener('mousemove', () => { if (sel !== i) { sel = i; list.querySelectorAll('li').forEach((x, j) => x.classList.toggle('sel', j === i)); } });
+      list.appendChild(li);
+    });
+    list.hidden = !items.length;
+    const cur = list.querySelector('li.sel'); if (cur) cur.scrollIntoView({ block: 'nearest' });
+  };
+  const pick = (n) => { close(); onPick(n); };
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < minChars) { close(); return; }
+    timer = setTimeout(async () => {
+      const s = ++seq;
+      try {
+        const names = await source(q);
+        if (s !== seq) return;  // a newer keystroke already answered
+        items = (names || []).slice(0, 25); sel = items.length ? 0 : -1;
+        if (!items.length && empty) note(empty); else paint(q);
+      } catch (e) {}
+    }, 180);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); sel = (sel + 1) % items.length; paint(); }
+    else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; paint(); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (sel >= 0 && items[sel]) pick(items[sel]);
+      else if (input.value.trim()) pick(input.value.trim());
+    } else if (e.key === 'Escape' && !list.hidden) { e.stopPropagation(); close(); }
+  });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+}
+
 function buildToolbar() {
   const tb = document.createElement('div');
   tb.className = 'deck-toolbar';
@@ -1463,44 +1527,9 @@ function buildToolbar() {
     + '<button class="tb-btn" id="copyDeckBtn" title="Copy the decklist in a format your deckbuilder imports">Export ▾</button>'
     + '<button class="tb-btn tb-icon" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>';
   const input = tb.querySelector('#addCardInput');
-  const list = tb.querySelector('.ac-list');
-  let acTimer = null, acItems = [], acSel = -1, acSeq = 0;
-  const closeAc = () => { list.hidden = true; acItems = []; acSel = -1; };
-  const paintAc = () => {
-    list.innerHTML = '';
-    acItems.forEach((n, i) => {
-      const li = document.createElement('li');
-      li.textContent = n; if (i === acSel) li.className = 'sel';
-      li.addEventListener('mousedown', (e) => { e.preventDefault(); pick(n); });
-      list.appendChild(li);
-    });
-    list.hidden = !acItems.length;
-  };
-  const pick = (n) => { input.value = ''; closeAc(); addCardByName(n); };
-  input.addEventListener('input', () => {
-    clearTimeout(acTimer);
-    const q = input.value.trim();
-    if (q.length < 2) { closeAc(); return; }
-    acTimer = setTimeout(async () => {
-      const seq = ++acSeq;
-      try {
-        const r = await fetch('/card/search?q=' + encodeURIComponent(q));
-        const d = await r.json();
-        if (seq !== acSeq) return;  // a newer keystroke already answered
-        acItems = d.names || []; acSel = acItems.length ? 0 : -1; paintAc();
-      } catch (e) {}
-    }, 180);
-  });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown' && acItems.length) { e.preventDefault(); acSel = (acSel + 1) % acItems.length; paintAc(); }
-    else if (e.key === 'ArrowUp' && acItems.length) { e.preventDefault(); acSel = (acSel - 1 + acItems.length) % acItems.length; paintAc(); }
-    else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (acSel >= 0 && acItems[acSel]) pick(acItems[acSel]);
-      else if (input.value.trim()) pick(input.value.trim());
-    } else if (e.key === 'Escape') { closeAc(); }
-  });
-  input.addEventListener('blur', () => setTimeout(closeAc, 120));
+  attachAutocomplete(input, tb.querySelector('.ac-list'), {
+    source: async q => ((await (await fetch('/card/search?q=' + encodeURIComponent(q))).json()).names || []),
+    onPick: n => { input.value = ''; addCardByName(n); } });
 
   tb.querySelector('#undoBtn').addEventListener('click', undo);
   tb.querySelector('#copyDeckBtn').addEventListener('click', (e) => toggleExportMenu(e.currentTarget));
@@ -1602,6 +1631,7 @@ function renderDeck() {
     deckView.appendChild(section);
     if (g === 'Commander' && deck.companion) deckView.appendChild(companionSection());
   }
+  if ((deck.maybe || []).length) deckView.appendChild(maybeSection());
   cardsEl.scrollTop = scroll;
 }
 
@@ -1808,8 +1838,7 @@ function renderIntake(opts) {
       ${opts.build ? "Everything is optional - no commander yet? Leave it blank and the advisor will help you pick one." : 'Everything but the commander is optional.'}</p>
     <section><h3>Commander <span class="in-hint">pick up to 2 (partners / Background)</span></h3>
       <div class="in-cmdrs"></div>
-      <div class="in-row"><input type="search" class="in-cmdr-search" list="inCmdrList" ${NO_AUTOFILL} placeholder="${opts.build ? 'Search for your commander…' : 'Not listed? Add your commander by name…'}"><button type="button" class="in-small in-cmdr-add">Add</button></div>
-      <datalist id="inCmdrList"></datalist></section>
+      <div class="in-row"><div class="ac-wrap"><input type="search" class="in-cmdr-search" ${NO_AUTOFILL} placeholder="${opts.build ? 'Search for your commander…' : 'Not listed? Add your commander by name…'}"><ul class="ac-list in-cmdr-list" hidden></ul></div><button type="button" class="in-small in-cmdr-add">Add</button></div></section>
     <section><h3>Target bracket</h3><div class="in-pills in-bracket"></div></section>
     <section><h3>Gameplan <span class="in-hint">how do you want to win?</span></h3>
       <textarea class="in-plan" rows="3" ${NO_AUTOFILL} placeholder="e.g. Drain everyone out with sacrifice triggers; Gut is a payoff, the treasure engine is the deck.">${esc(brief.plan)}</textarea>
@@ -1817,8 +1846,7 @@ function renderIntake(opts) {
     <section><h3>Companion <span class="in-hint">optional - an Ikoria companion outside the 100, in your commander's colors</span></h3>
       <div class="in-comps"><div class="in-hint">Pick a commander to see which companions fit.</div></div></section>
     <section><h3>Must keep <span class="in-hint">pet cards the advisor should never suggest cutting</span></h3>
-      <div class="in-row"><input type="search" class="in-keep-input" list="inKeepList" ${NO_AUTOFILL} placeholder="Type a card from your deck…"><button type="button" class="in-small in-keep-add">Add</button></div>
-      <datalist id="inKeepList">${deck.cards.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
+      <div class="in-row"><div class="ac-wrap"><input type="search" class="in-keep-input" ${NO_AUTOFILL} placeholder="Type a card from your deck…"><ul class="ac-list in-keep-list" hidden></ul></div><button type="button" class="in-small in-keep-add">Add</button></div>
       <div class="in-chips in-keep"></div></section>
     <section><h3>Avoid <span class="in-hint">things you don't want recommended</span></h3>
       <div class="in-chips in-avoid"></div>
@@ -1847,8 +1875,8 @@ function renderIntake(opts) {
       box.appendChild(t);
     }
   };
-  const addCmdr = async () => {
-    const name = $('.in-cmdr-search').value.trim(); if (!name) return;
+  const addCmdr = async (picked) => {
+    const name = (typeof picked === 'string' ? picked : $('.in-cmdr-search').value).trim(); if (!name) return;
     const before = deck.cards.length;
     await addCardByName(name);
     // a new card was appended (canonical name may differ from what was typed), or it was already there
@@ -1856,21 +1884,11 @@ function renderIntake(opts) {
     if (c && !cmdrs.some(n => lc(n) === lc(c.name))) cmdrs = (cmdrs.length >= 2 ? cmdrs.slice(1) : cmdrs).concat(c.name);
     $('.in-cmdr-search').value = ''; paintCmdrs();
   };
-  $('.in-cmdr-add').onclick = addCmdr;
-  $('.in-cmdr-search').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCmdr(); } });
+  $('.in-cmdr-add').onclick = () => addCmdr();
   // commander-only suggestions (Scryfall is:commander, most-played first)
-  let cmdrTimer = null;
-  $('.in-cmdr-search').addEventListener('input', e => {
-    clearTimeout(cmdrTimer);
-    const q = e.target.value.trim(); if (q.length < 2) return;
-    cmdrTimer = setTimeout(async () => {
-      try {
-        const r = await fetch('/card/search?commander=1&q=' + encodeURIComponent(q));
-        const { names } = await r.json();
-        $('#inCmdrList').innerHTML = (names || []).map(n => `<option value="${esc(n)}">`).join('');
-      } catch (err) {}
-    }, 200);
-  });
+  attachAutocomplete($('.in-cmdr-search'), $('.in-cmdr-list'), {
+    source: async q => ((await (await fetch('/card/search?commander=1&q=' + encodeURIComponent(q))).json()).names || []),
+    onPick: addCmdr, empty: 'No commanders match' });
 
   const paintPills = () => {
     const box = $('.in-bracket'); box.innerHTML = '';
@@ -1893,15 +1911,18 @@ function renderIntake(opts) {
     }
   };
   const styles = [...brief.styles], avoid = [...brief.avoid], keep = [...brief.keep];
-  const addKeep = () => {
-    const v = $('.in-keep-input').value.trim(); if (!v) return;
+  const addKeep = (picked) => {
+    const v = (typeof picked === 'string' ? picked : $('.in-keep-input').value).trim(); if (!v) return;
     const c = deckFind(v);
     if (!c) { showToast(`"${v}" isn't in the deck`); return; }
     if (!keep.includes(c.name)) keep.push(c.name);
     $('.in-keep-input').value = ''; chipGroup('.in-keep', [], keep);
   };
-  $('.in-keep-add').onclick = addKeep;
-  $('.in-keep-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addKeep(); } });
+  $('.in-keep-add').onclick = () => addKeep();
+  attachAutocomplete($('.in-keep-input'), $('.in-keep-list'), {
+    minChars: 1, empty: 'No card by that name in the deck', onPick: addKeep,
+    source: async q => deck.cards.map(c => c.name).filter(n => lc(n).includes(lc(q)))
+      .sort((a, b) => lc(a).indexOf(lc(q)) - lc(b).indexOf(lc(q)) || a.localeCompare(b)) });
 
   // companion picker: the Ikoria companions in the chosen commander's colors, with how far the
   // deck is from each one's condition (checked by the server against every card)
@@ -1948,7 +1969,11 @@ function renderIntake(opts) {
   chipGroup('.in-avoid', INTAKE_AVOID, avoid);
   chipGroup('.in-keep', [], keep);
 
-  $('.in-x').onclick = () => closeIntake(false);
+  $('.in-x').onclick = () => {
+    const filled = cmdrs.length || bracket || styles.length || avoid.length || $('.in-plan').value.trim();
+    if (opts.build && filled && !confirm('Close and discard this new build?')) return;
+    closeIntake(false);
+  };
   $('.in-skip').onclick = () => { deck.intakeSkipped = true; saveState(); closeIntake(false); };
   intakeEl.querySelector('form').onsubmit = (e) => {
     e.preventDefault();
@@ -1965,8 +1990,9 @@ function renderIntake(opts) {
       .then(c => { if (c) deck.companion = c; finish(); }).catch(finish);
   };
 }
-intakeEl.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeIntake(false); } });
-intakeEl.addEventListener('click', e => { if (e.target === intakeEl) closeIntake(false); });
+// Only the × (or Skip / the submit button) closes the brief - a stray click on the backdrop or an
+// Escape meant for a dropdown used to throw away everything typed so far.
+intakeEl.addEventListener('keydown', e => { if (e.key === 'Escape') e.stopPropagation(); });
 
 // ---- advisor proposals (accept/reject) + questions (answer buttons) - workbench phase 3 ----
 // What the advisor is waiting on (the LATEST reply's undecided proposals / question / start-deck
@@ -2092,7 +2118,7 @@ function startDeckCard(sd, entry, bubble) {
       sd.status = 'created';
       deckChanged();
       renderTurnExtras(entry, bubble);
-      inputEl.value = `Deck created with ${names.join(' + ')} as commander. Start filling it in.`;
+      inputEl.value = `Deck created with ${names.join(' + ')} as commander. Before you propose cards, ask me what you need to know about how I want it to play.`;
       send(true);
     };
     const no = document.createElement('button'); no.className = 'prop-btn'; no.textContent = 'Not yet';
@@ -2116,12 +2142,22 @@ function proposalCard(p, entry, bubble) {
       <div class="prop-reason"></div><div class="prop-actions"></div></div>`;
   card.querySelector('.prop-reason').textContent = p.reason || '';
   const actions = card.querySelector('.prop-actions');
-  if (p.status === 'pending' && deck) {
+  if ((p.status === 'pending' || p.status === 'maybe') && deck) {
+    if (p.status === 'maybe') actions.innerHTML = '<span class="prop-status">? Maybe - on your Maybe list</span>';
     const ok = document.createElement('button'); ok.className = 'prop-btn ok'; ok.textContent = 'Accept';
     ok.onclick = async () => { ok.disabled = true; await acceptProposal(p); afterDecision(entry, bubble, verb === 'Swap' ? `Swapped ${p.cut} → ${p.add}` : `${verb === 'Add' ? 'Added' : 'Cut'} ${p.add || p.cut}`); };
     const no = document.createElement('button'); no.className = 'prop-btn'; no.textContent = 'Reject';
-    no.onclick = () => { p.status = 'rejected'; afterDecision(entry, bubble); };
-    actions.append(ok, no);
+    no.onclick = () => { setMaybe(p, false); p.status = 'rejected'; afterDecision(entry, bubble); };
+    actions.append(ok);
+    // Maybe: flag it as a possibility without committing - it counts as decided, waits on the
+    // deck's Maybe list, and can still be accepted or rejected later
+    if (p.status === 'pending') {
+      const mb = document.createElement('button'); mb.className = 'prop-btn maybe'; mb.textContent = 'Maybe';
+      mb.title = "Keep it on your Maybe list without adding it yet";
+      mb.onclick = () => { setMaybe(p, true); p.status = 'maybe'; afterDecision(entry, bubble, `Saved ${p.add || p.cut} to Maybe`); };
+      actions.append(mb);
+    }
+    actions.append(no);
   } else {
     actions.innerHTML = `<span class="prop-status">${p.status === 'accepted' ? '✓ Accepted' : p.status === 'rejected' ? '✗ Rejected' : p.status === 'skipped' ? '– Skipped' : 'No deck loaded'}</span>`;
   }
@@ -2150,8 +2186,9 @@ function proposalCard(p, entry, bubble) {
 }
 // Apply one proposal to the deck. `quiet` = the caller already took the undo snapshot (Accept all).
 async function acceptProposal(p, quiet) {
-  if (!deck || p.status !== 'pending') return;
+  if (!deck || (p.status !== 'pending' && p.status !== 'maybe')) return;
   if (!quiet) pushUndo();  // Accept all takes one snapshot for the whole batch
+  setMaybe(p, false);
   if (p.cut) {
     const c = deckFind(p.cut);
     if (c && (c.qty || 1) > 1) {
@@ -2171,6 +2208,60 @@ async function acceptProposal(p, quiet) {
   }
   p.status = 'accepted';
 }
+// ---- Maybe list: proposals the player flagged as possibilities (deck.maybe, shown under the deck) ----
+const maybeKey = p => lc(p.add) + '|' + lc(p.cut);
+function setMaybe(p, on) {
+  if (!deck) return;
+  const k = maybeKey(p);
+  deck.maybe = (deck.maybe || []).filter(m => maybeKey(m) !== k);
+  if (on) {
+    const c = p.addCard || {};
+    deck.maybe.push({ add: p.add || null, cut: p.cut || null, qty: p.qty || 1, reason: p.reason || '',
+                      addCard: c.name ? { name: c.name, image: c.image || null, image_back: c.image_back || null,
+                                          scryfall_uri: c.scryfall_uri || null } : null,
+                      cutImage: p.cutImage || null });
+  }
+}
+// decide a Maybe from the deck panel - the matching chat proposals follow along
+async function decideMaybe(m, accept) {
+  const k = maybeKey(m);
+  const props = conversation.flatMap(e => e.proposals || []).filter(p => p.status === 'maybe' && maybeKey(p) === k);
+  if (accept) await acceptProposal(Object.assign({}, m, { status: 'maybe' }), true);  // caller took the undo snapshot
+  else setMaybe(m, false);
+  props.forEach(p => { p.status = accept ? 'accepted' : 'rejected'; });
+  deckChanged();
+  showToast(accept ? `${m.add ? 'Added ' + m.add : 'Cut ' + m.cut}` : `Dropped ${m.add || m.cut} from Maybe`, accept);
+}
+function maybeSection() {
+  const section = document.createElement('div'); section.className = 'role-group maybe-group';
+  const title = document.createElement('div'); title.className = 'role-group-title';
+  title.textContent = `Maybe · ${deck.maybe.length}`;
+  title.title = "Suggestions you flagged as possibilities - not in the deck or the 100";
+  const grid = document.createElement('div'); grid.className = 'role-grid';
+  for (const m of deck.maybe) {
+    const tile = document.createElement('div'); tile.className = 'card-tile maybe';
+    const c = m.addCard || {};
+    tile.title = (m.cut && m.add ? `Swap ${m.cut} → ${m.add}` : m.add ? m.add : `Cut ${m.cut}`) + (m.reason ? '\n' + m.reason : '');
+    const src = c.image || m.cutImage;
+    if (src) tile.innerHTML = `<img loading="lazy" src="${escapeHtml(src)}" alt="">`;
+    else { tile.classList.add('missing'); tile.textContent = m.add || m.cut; }
+    if (m.cut && m.add) { const s = document.createElement('span'); s.className = 'tag-dot'; s.textContent = 'for ' + m.cut; tile.appendChild(s); }
+    else if (!m.add) { const s = document.createElement('span'); s.className = 'tag-dot'; s.textContent = 'cut'; tile.appendChild(s); }
+    const acts = document.createElement('div'); acts.className = 'tile-actions';
+    acts.innerHTML = `<button data-a="ok" title="${m.add ? 'Add to the deck' : 'Cut it'}">✓</button><button data-a="rm" class="rm" title="Drop from Maybe">×</button>`;
+    acts.addEventListener('click', e => {
+      e.stopPropagation();
+      if (e.target.dataset.a === 'ok') { pushUndo(); decideMaybe(m, true); }
+      else if (e.target.dataset.a === 'rm') { pushUndo(); decideMaybe(m, false); }
+    });
+    tile.appendChild(acts);
+    if (src) tile.onclick = () => openLightbox({ img: src, imgBack: c.image_back || null, canonical: c.name || m.add || m.cut, scryfall: c.scryfall_uri || null });
+    grid.appendChild(tile);
+  }
+  section.append(title, grid);
+  return section;
+}
+
 function afterDecision(entry, bubble, toastText) {
   deckChanged();  // persists (incl. the entry's statuses) + re-renders the deck panel
   renderTurnExtras(entry, bubble);
@@ -2207,10 +2298,12 @@ function maybeAutoContinue(entry, bubble) {
     if (streaming) { label.textContent = 'Waiting for the current answer…'; setTimeout(go, 1500); return; }
     entry.continued = true; saveState();
     hideTray();
-    const acc = props.filter(p => p.status === 'accepted').length, rej = props.length - acc;
+    const acc = props.filter(p => p.status === 'accepted').length;
+    const may = props.filter(p => p.status === 'maybe').length, rej = props.length - acc - may;
+    const tally = `accepted ${acc}, ${may ? `maybe ${may}, ` : ''}rejected ${rej}`;
     inputEl.value = building()
-      ? `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and move on to the next section.`
-      : `Done deciding - accepted ${acc}, rejected ${rej}. Take my decisions and reasons into account and keep going.`;
+      ? `Done deciding - ${tally}. Take my decisions and reasons into account. Before proposing the next section, ask me anything you need to know about how I want it to go.`
+      : `Done deciding - ${tally}. Take my decisions and reasons into account and keep going.`;
     send(true);
   };
   timer = setInterval(() => { if (!paint() && --left <= 0) go(); else paint(); }, 1000);

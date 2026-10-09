@@ -330,11 +330,21 @@ THAT is their current deck - use it; do not ask them to paste it again.
   first (ask_player if it's open), then call start_deck so the deck exists in their editor - don't
   just list a 99 in chat.
 - BUILD MODE (the CURRENT DECK block says "BUILD MODE"): you're building the deck WITH the player,
-  section by section, toward the targets it lists. Each turn:
+  section by section, toward the targets it lists. It's a conversation, not an autopilot - the
+  player wants to be asked, so lean toward asking:
+  0. ASK BEFORE EACH SECTION. Before the first batch of a section, call ask_player with ONE focused
+     question about that section's direction, unless the brief or their earlier answers already
+     settle it - then end your turn and wait. At the start of the build (before the gameplan
+     section) ask about the core of the deck first: which engine / angle of the commander excites
+     them, how they want to win, and anything the brief leaves open (bracket, budget, what they want
+     to avoid) - one question per turn, a few turns is fine. Good per-section questions: ramp - rocks,
+     land ramp or dorks?; draw - burst or steady engines?; interaction - spot removal, wipes or
+     counters?; lands - how greedy on fixing, budget for duals? Make the options concrete (name a
+     card or two per option), never generic. Skip the question only when it would truly be redundant.
   1. Fill the NEXT SECTION: one propose_changes batch of up to 10 adds for that section (fewer if
-     it needs fewer), best first, each with a one-line reason tied to the gameplan. Lead with the
-     GAMEPLAN section (it defines the deck: the engine, its enablers and payoffs, a few threats and
-     finishers), then ramp, draw, interaction, protection, and lands last.
+     it needs fewer), best first, each with a one-line reason tied to the gameplan and their answers.
+     Lead with the GAMEPLAN section (it defines the deck: the engine, its enablers and payoffs, a few
+     threats and finishers), then ramp, draw, interaction, protection, and lands last.
   2. Keep your prose short: a sentence or two on what this batch does for the deck and what's next.
      No full deck review while building.
   3. Respect the brief (bracket, Game Changer cap, budget, avoid list) and the curve - track the
@@ -344,10 +354,11 @@ THAT is their current deck - use it; do not ask them to paste it again.
      Forest, qty 9). The player can also fill basics with one click from the panel.
   5. If a section's direction is genuinely the player's call (which engine, which wincon), ask_player
      first. When every target is met, give a short summary of the finished build and offer a review.
-  NO COMMANDER YET: start there. From what they've told you (colors, mechanics, a card they love,
-  bracket, budget), put 3-5 fitting commanders in front of them with ask_player - each option the
-  commander's name plus a few words on why - or ask one quick question first if you know nothing about
-  what they want. Once they pick, call start_deck with that commander (and their bracket/plan).
+  NO COMMANDER YET: start there, and get to know what they want first. Unless they've already told
+  you plenty, ask_player a couple of quick questions (one per turn) - e.g. colors they like, how they
+  like to win or what kind of turns they enjoy, bracket - before suggesting commanders. Then put 3-5
+  fitting commanders in front of them with ask_player - each option the commander's name plus a few
+  words on why. Once they pick, call start_deck with that commander (and their bracket/plan).
   Sections are counted by each card's concrete role; it's fine if they don't match your contextual
   read exactly - aim for the totals, and the total of 100.
 
@@ -1314,7 +1325,8 @@ def _build_lines(deck: dict) -> list[str]:
             f"{total}/100 cards so far). Section targets (have/target):", *rows,
             f"NEXT SECTION TO FILL: {dict(BUILD_SECTIONS)[nxt] if nxt else 'none - all targets met; '}"
             + ("" if nxt else "review the whole list, then suggest the player finish the build."),
-            "Work one section per batch (see BUILD MODE in your instructions)."]
+            "Work one section per batch, and ask the player about a section's direction before its first "
+            "batch (see BUILD MODE in your instructions)."]
 
 
 # --- Ikoria companions + curve/type stats ------------------------------------------------------
@@ -1446,6 +1458,12 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
     if tagged:
         lines.append("Player tags: " + "; ".join(sorted(tagged)))
     lines += _brief_lines(deck.get("intake"))
+    maybe = [m for m in (deck.get("maybe") or []) if isinstance(m, dict) and (m.get("add") or m.get("cut"))][:30]
+    if maybe:
+        lines.append("Player's MAYBE list (suggestions they're considering - NOT in the deck; don't re-propose "
+                     "them as new, but you can recommend committing to or dropping one when it's relevant): "
+                     + "; ".join(f"cut {m['cut']} for {m['add']}" if m.get("cut") and m.get("add")
+                                 else f"add {m['add']}" if m.get("add") else f"cut {m['cut']}" for m in maybe))
     lines += rulebreakers.context_lines(cmdrs, deck.get("cards"), set(_deck_identity(deck) or "") - {"C"})
     lines += await _companion_and_stats_lines(deck)
     lines += _build_lines(deck)
@@ -1460,6 +1478,8 @@ def _decisions_summary(m: dict) -> str:
     props = [p for p in (m.get("proposals") or []) if isinstance(p, dict)][:12]
     if props:
         mark = {"accepted": "ACCEPTED", "rejected": "REJECTED",
+                "maybe": "MAYBE (they like it as a possibility but haven't committed - it's on their maybe "
+                         "list, not in the deck)",
                 "skipped": "SKIPPED (they moved on without deciding - it's not in the deck)"}
         rows = []
         for p in props:
