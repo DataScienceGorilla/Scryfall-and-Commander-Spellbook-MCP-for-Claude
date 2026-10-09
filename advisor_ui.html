@@ -2949,8 +2949,10 @@ function addActivity() {
         : 'Done';
     },
     finish() {
+      // the trace is only live feedback - once the answer is in, clear it so the reply
+      // (and any question/proposal tray under it) has the room
       this.stopSpinner();
-      if (toolCount === 0) el.remove();  // nothing worth keeping for simple answers
+      el.remove();
     },
     get tools() { return toolCount; },
   };
@@ -3281,6 +3283,7 @@ async function send(force) {
         if (interrupted && !bubble) bubble = addMessage('assistant', '');
         if (!bubble || !bubble.isConnected) loadActiveIntoUI();
         else { renderTurnExtras(entry, bubble); if (interrupted) markInterrupted(bubble, !acc.trim()); }
+        scrollToBottom();  // the tray just took space from the chat - keep the reply in view
       }
     }
     if (streamAbort === abort) streamAbort = null;
