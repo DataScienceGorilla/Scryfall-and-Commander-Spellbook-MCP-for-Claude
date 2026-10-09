@@ -375,6 +375,10 @@
   @media (hover: hover) { .card-tile:hover .tile-actions { display: flex; } }
   .tile-add { position: absolute; top: 5px; right: 5px; width: auto; padding: 0 8px; font-size: 12px; font-weight: 600; display: none; }
   body.has-deck .card-tile .tile-add { display: block; }
+  .tile-add.tile-maybe { top: 33px; border-style: dashed; }
+  body.has-deck #cards .card-tile[draggable=true] { cursor: grab; }
+  .maybe-hint { font-size: 12.5px; color: var(--muted); font-style: italic; padding: 6px 2px; }
+  .maybe-group .role-grid:empty { min-height: 56px; border: 1px dashed var(--border); border-radius: var(--radius); }
   #newDeckBtn, #buildBtn { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 4px 10px; cursor: pointer; font-size: 12px; }
   #newDeckBtn:hover, #buildBtn:hover { color: var(--text); border-color: var(--accent); }
@@ -1631,7 +1635,8 @@ function renderDeck() {
     deckView.appendChild(section);
     if (g === 'Commander' && deck.companion) deckView.appendChild(companionSection());
   }
-  if ((deck.maybe || []).length) deckView.appendChild(maybeSection());
+  if (!deck.maybe) deck.maybe = [];
+  deckView.appendChild(maybeSection());
   cardsEl.scrollTop = scroll;
 }
 
@@ -1659,12 +1664,8 @@ function deckCardTile(c, ident) {
   tile.style.cursor = 'pointer';
   tile.addEventListener('click', () => openEditor(c.name));
   tile.draggable = true;
-  tile.addEventListener('dragstart', (e) => {
-    e.dataTransfer.setData('text/plain', c.name); e.dataTransfer.effectAllowed = 'move';
-    tile.classList.add('dragging-src'); hideTooltip();
-    setTimeout(() => document.body.classList.add('dragging'), 0);  // after the drag image is captured
-  });
-  tile.addEventListener('dragend', () => { tile.classList.remove('dragging-src'); document.body.classList.remove('dragging'); });
+  tile.addEventListener('dragstart', (e) => { tile.classList.add('dragging-src'); setDragCard(e, c.name, 'deck'); });
+  tile.addEventListener('dragend', () => { tile.classList.remove('dragging-src'); endDrag(); });
   deckTiles.set(lc(c.name), tile);
   return tile;
 }
@@ -1672,33 +1673,35 @@ function bindDropZone(section) {
   section.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; section.classList.add('drop-over'); });
   section.addEventListener('dragleave', (e) => { if (!section.contains(e.relatedTarget)) section.classList.remove('drop-over'); });
   section.addEventListener('drop', (e) => {
-    e.preventDefault(); section.classList.remove('drop-over'); document.body.classList.remove('dragging');
-    const name = e.dataTransfer.getData('text/plain');
-    if (name) setCardGroup(name, section.dataset.group);
+    e.preventDefault(); section.classList.remove('drop-over'); endDrag();
+    const d = getDragCard(e);
+    if (d) dropOnDeckGroup(d, section.dataset.group);
   });
 }
 
 // ---- mutations ----
+// -> the deck card (new or already there), or null when it couldn't be found
 async function addCardByName(name) {
   if (!deck) { deck = { commander: [], bracket: null, cards: [], not_found: [] }; }
   const existing = deckFind(name);
   if (existing) {
     if (anyQty(existing)) changeQty(existing.name, +1);
     else { showToast(`${existing.name} is already in the deck`); flashCard(existing.name); }
-    return;
+    return existing;
   }
   try {
     const r = await fetch('/deck/card?name=' + encodeURIComponent(name));
-    if (!r.ok) { showToast(`Couldn't find "${name}"`); return; }
+    if (!r.ok) { showToast(`Couldn't find "${name}"`); return null; }
     const c = await r.json();
     const again = deckFind(c.name);  // the canonical name may already be there
-    if (again) { if (anyQty(again)) changeQty(again.name, +1); else { showToast(`${again.name} is already in the deck`); flashCard(again.name); } return; }
+    if (again) { if (anyQty(again)) changeQty(again.name, +1); else { showToast(`${again.name} is already in the deck`); flashCard(again.name); } return again; }
     pushUndo();
     deck.cards.push(c);
     deckChanged();
     showToast(`Added ${c.name}`, true);
     flashCard(c.name);
-  } catch (e) { showToast(`Couldn't add "${name}"`); }
+    return c;
+  } catch (e) { showToast(`Couldn't add "${name}"`); return null; }
 }
 function changeQty(name, delta) {
   const c = deckFind(name); if (!c) return;
@@ -2142,24 +2145,19 @@ function proposalCard(p, entry, bubble) {
       <div class="prop-reason"></div><div class="prop-actions"></div></div>`;
   card.querySelector('.prop-reason').textContent = p.reason || '';
   const actions = card.querySelector('.prop-actions');
-  if ((p.status === 'pending' || p.status === 'maybe') && deck) {
-    if (p.status === 'maybe') actions.innerHTML = '<span class="prop-status">? Maybe - on your Maybe list</span>';
+  if (p.status === 'pending' && deck) {
     const ok = document.createElement('button'); ok.className = 'prop-btn ok'; ok.textContent = 'Accept';
     ok.onclick = async () => { ok.disabled = true; await acceptProposal(p); afterDecision(entry, bubble, verb === 'Swap' ? `Swapped ${p.cut} → ${p.add}` : `${verb === 'Add' ? 'Added' : 'Cut'} ${p.add || p.cut}`); };
+    // Maybe is a final answer like the other two ("I like it, but show me more / tell me why"):
+    // the card goes on the deck's Maybe board, where the player can still add or drop it
+    const mb = document.createElement('button'); mb.className = 'prop-btn maybe'; mb.textContent = 'Maybe';
+    mb.title = "Interested, but not sure yet - saves it to your Maybe board";
+    mb.onclick = () => { setMaybe(p, true); p.status = 'maybe'; afterDecision(entry, bubble, `Saved ${p.add || p.cut} to Maybe`); };
     const no = document.createElement('button'); no.className = 'prop-btn'; no.textContent = 'Reject';
-    no.onclick = () => { setMaybe(p, false); p.status = 'rejected'; afterDecision(entry, bubble); };
-    actions.append(ok);
-    // Maybe: flag it as a possibility without committing - it counts as decided, waits on the
-    // deck's Maybe list, and can still be accepted or rejected later
-    if (p.status === 'pending') {
-      const mb = document.createElement('button'); mb.className = 'prop-btn maybe'; mb.textContent = 'Maybe';
-      mb.title = "Keep it on your Maybe list without adding it yet";
-      mb.onclick = () => { setMaybe(p, true); p.status = 'maybe'; afterDecision(entry, bubble, `Saved ${p.add || p.cut} to Maybe`); };
-      actions.append(mb);
-    }
-    actions.append(no);
+    no.onclick = () => { p.status = 'rejected'; afterDecision(entry, bubble); };
+    actions.append(ok, mb, no);
   } else {
-    actions.innerHTML = `<span class="prop-status">${p.status === 'accepted' ? '✓ Accepted' : p.status === 'rejected' ? '✗ Rejected' : p.status === 'skipped' ? '– Skipped' : 'No deck loaded'}</span>`;
+    actions.innerHTML = `<span class="prop-status">${p.status === 'accepted' ? '✓ Accepted' : p.status === 'rejected' ? '✗ Rejected' : p.status === 'maybe' ? '? Maybe - saved to your Maybe board' : p.status === 'skipped' ? '– Skipped' : 'No deck loaded'}</span>`;
   }
   // Optional reason - before or after deciding. It goes back to the advisor with the
   // decision ("rejected - I don't own it"), so it learns what this player values.
@@ -2222,28 +2220,99 @@ function setMaybe(p, on) {
                       cutImage: p.cutImage || null });
   }
 }
-// decide a Maybe from the deck panel - the matching chat proposals follow along
+// a card the player put on the board themselves (+ Maybe, or dragged in) - not an advisor proposal
+function addMaybeCard(card, quiet) {
+  if (!deck || !card || !card.name) return;
+  if ((deck.maybe || []).some(m => !m.cut && lc(m.add) === lc(card.name))) { showToast(`${card.name} is already on your Maybe board`); return; }
+  if (!quiet) pushUndo();
+  setMaybe({ add: card.name, addCard: card }, true);
+  deckChanged();
+  showToast(`Saved ${card.name} to Maybe`, true);
+}
+// The Maybe board's own buttons edit the deck; the advisor's feedback on the original proposal
+// stays "maybe" - that was the player's answer to it.
 async function decideMaybe(m, accept) {
-  const k = maybeKey(m);
-  const props = conversation.flatMap(e => e.proposals || []).filter(p => p.status === 'maybe' && maybeKey(p) === k);
   if (accept) await acceptProposal(Object.assign({}, m, { status: 'maybe' }), true);  // caller took the undo snapshot
   else setMaybe(m, false);
-  props.forEach(p => { p.status = accept ? 'accepted' : 'rejected'; });
   deckChanged();
   showToast(accept ? `${m.add ? 'Added ' + m.add : 'Cut ' + m.cut}` : `Dropped ${m.add || m.cut} from Maybe`, accept);
+}
+// Drag and drop between chat mentions, deck groups and the Maybe board. The payload says where
+// the card came from: 'deck' (regroup / move), 'mention' or 'maybe' (add), 'text' (dragged text).
+const DRAG_TYPE = 'application/x-brew-card';
+function setDragCard(e, name, from, key) {
+  e.dataTransfer.setData('text/plain', name);
+  e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ name, from, key: key || null }));
+  e.dataTransfer.effectAllowed = 'copyMove';
+  hideTooltip();
+  setTimeout(() => document.body.classList.add('dragging'), 0);  // after the drag image is captured
+}
+function getDragCard(e) {
+  try { const d = JSON.parse(e.dataTransfer.getData(DRAG_TYPE)); if (d && d.name) return d; } catch (err) {}
+  const n = (e.dataTransfer.getData('text/plain') || '').trim();
+  return n && n.length < 150 ? { name: n, from: 'text' } : null;
+}
+function endDrag() { document.body.classList.remove('dragging'); }
+function mentionCard(name) {  // the canvas's lookup of a mentioned card, in deck-card shape
+  const e = cardCache.get(keyFor(name));
+  return e && e.status === 'ok' ? { name: e.canonical || name, image: e.img || null, image_back: e.imgBack || null,
+                                    scryfall_uri: e.scryfall || null } : null;
+}
+async function dropOnDeckGroup(d, group) {
+  if (d.from === 'deck' || (d.from === 'text' && deckFind(d.name))) { setCardGroup(d.name, group); return; }
+  let c;
+  if (d.from === 'maybe') {
+    const m = (deck.maybe || []).find(x => maybeKey(x) === d.key);
+    if (!m) return;
+    pushUndo();
+    await decideMaybe(m, true);
+    c = deckFind(m.add || '');
+  } else c = await addCardByName(d.name);
+  if (c && group && cardGroup(c) !== group) setCardGroup(c.name, group);
+}
+async function dropOnMaybe(d) {
+  if (d.from === 'maybe') return;
+  const c = deckFind(d.name);
+  if (d.from === 'deck' && c) {  // move it out of the deck onto the board
+    pushUndo();
+    deck.cards = deck.cards.filter(x => x !== c);
+    deck.commander = (deck.commander || []).filter(n => lc(n) !== lc(c.name));
+    addMaybeCard(c, true);
+    return;
+  }
+  let card = mentionCard(d.name);
+  if (!card) {
+    try { const r = await fetch('/deck/card?name=' + encodeURIComponent(d.name)); if (r.ok) card = await r.json(); } catch (err) {}
+  }
+  if (card) addMaybeCard(card); else showToast(`Couldn't find "${d.name}"`);
 }
 function maybeSection() {
   const section = document.createElement('div'); section.className = 'role-group maybe-group';
   const title = document.createElement('div'); title.className = 'role-group-title';
-  title.textContent = `Maybe · ${deck.maybe.length}`;
-  title.title = "Suggestions you flagged as possibilities - not in the deck or the 100";
+  title.textContent = `Maybe board · ${deck.maybe.length}`;
+  title.title = "Cards you're considering - not in the deck or the 100";
   const grid = document.createElement('div'); grid.className = 'role-grid';
+  section.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; section.classList.add('drop-over'); });
+  section.addEventListener('dragleave', (e) => { if (!section.contains(e.relatedTarget)) section.classList.remove('drop-over'); });
+  section.addEventListener('drop', (e) => {
+    e.preventDefault(); section.classList.remove('drop-over'); endDrag();
+    const d = getDragCard(e); if (d) dropOnMaybe(d);
+  });
+  if (!deck.maybe.length) {
+    const hint = document.createElement('div'); hint.className = 'maybe-hint';
+    hint.textContent = 'Drag cards here, or press Maybe on a suggestion, to keep them in mind without adding them.';
+    section.append(title, hint, grid);
+    return section;
+  }
   for (const m of deck.maybe) {
     const tile = document.createElement('div'); tile.className = 'card-tile maybe';
+    tile.draggable = true;
+    tile.addEventListener('dragstart', (e) => { tile.classList.add('dragging-src'); setDragCard(e, m.add || m.cut, 'maybe', maybeKey(m)); });
+    tile.addEventListener('dragend', () => { tile.classList.remove('dragging-src'); endDrag(); });
     const c = m.addCard || {};
     tile.title = (m.cut && m.add ? `Swap ${m.cut} → ${m.add}` : m.add ? m.add : `Cut ${m.cut}`) + (m.reason ? '\n' + m.reason : '');
     const src = c.image || m.cutImage;
-    if (src) tile.innerHTML = `<img loading="lazy" src="${escapeHtml(src)}" alt="">`;
+    if (src) tile.innerHTML = `<img loading="lazy" src="${escapeHtml(src)}" alt="" draggable="false">`;
     else { tile.classList.add('missing'); tile.textContent = m.add || m.cut; }
     if (m.cut && m.add) { const s = document.createElement('span'); s.className = 'tag-dot'; s.textContent = 'for ' + m.cut; tile.appendChild(s); }
     else if (!m.add) { const s = document.createElement('span'); s.className = 'tag-dot'; s.textContent = 'cut'; tile.appendChild(s); }
@@ -2880,7 +2949,11 @@ function applyCard(name, entry, data) {
     entry.status = 'ok';
     entry.tile.className = 'card-tile';
     entry.tile.title = data.name;
-    entry.tile.innerHTML = `<img loading="lazy" src="${img}" alt="${data.name}">`;
+    entry.tile.innerHTML = `<img loading="lazy" src="${img}" alt="${data.name}" draggable="false">`;
+    // drag it onto a deck group (adds it there) or the Maybe board
+    entry.tile.draggable = true;
+    entry.tile.ondragstart = (e) => { entry.tile.classList.add('dragging-src'); setDragCard(e, data.name, 'mention'); };
+    entry.tile.ondragend = () => { entry.tile.classList.remove('dragging-src'); endDrag(); };
     // Click opens an in-app lightbox (NOT a navigation) so the chat is never lost.
     entry.tile.style.cursor = 'zoom-in';
     entry.tile.onclick = () => openLightbox(entry);
@@ -2893,7 +2966,10 @@ function applyCard(name, entry, data) {
     const add = document.createElement('button');
     add.className = 'tile-add'; add.textContent = '+ Add'; add.title = 'Add to deck';
     add.addEventListener('click', (e) => { e.stopPropagation(); addCardByName(data.name); });
-    entry.tile.appendChild(add);
+    const maybe = document.createElement('button');
+    maybe.className = 'tile-add tile-maybe'; maybe.textContent = '+ Maybe'; maybe.title = 'Save to your Maybe board';
+    maybe.addEventListener('click', (e) => { e.stopPropagation(); addMaybeCard(mentionCard(data.name)); });
+    entry.tile.append(add, maybe);
     if (deckFind(data.name)) dropMentionTile(entry);  // resolved to a card the deck already has
     else setTileGroup(entry, mentionRole(entry));
     evaluateTile(entry);  // flag if outside the commander's color identity

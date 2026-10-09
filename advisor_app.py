@@ -325,6 +325,12 @@ THAT is their current deck - use it; do not ask them to paste it again.
   proposing a big restructure - then end your turn and wait for their answer.
 - Their decisions come back in the conversation ("[Your proposals and the player's decisions: ...]").
   Never re-propose something they rejected; build on what they accepted.
+- A MAYBE is a soft yes, not a no: they like the card but want more context on what the deck needs, or
+  want to weigh other options first. In your next reply, briefly give that context (what the slot is
+  for, what the deck is short on, how the card compares) and offer 1-2 alternatives for the same slot
+  when there are real ones - proposed as normal adds - so they can pick. Don't push the maybe card
+  again as a fresh proposal; it's already on their Maybe board, where they can add it in one click.
+  Count maybes as leaning in when you read their taste, but not as cards in the deck.
 - No deck loaded (or a quick question): answer in prose; don't call propose_changes.
 - BUILDING FROM SCRATCH (no deck in the editor, the player wants a new deck): settle the commander
   first (ask_player if it's open), then call start_deck so the deck exists in their editor - don't
@@ -1460,8 +1466,8 @@ async def _deck_context(deck) -> tuple[str, str, str | None]:
     lines += _brief_lines(deck.get("intake"))
     maybe = [m for m in (deck.get("maybe") or []) if isinstance(m, dict) and (m.get("add") or m.get("cut"))][:30]
     if maybe:
-        lines.append("Player's MAYBE list (suggestions they're considering - NOT in the deck; don't re-propose "
-                     "them as new, but you can recommend committing to or dropping one when it's relevant): "
+        lines.append("Player's MAYBE BOARD (cards they're considering - NOT in the deck or the 100; a soft yes, "
+                     "see MAYBE in your instructions): "
                      + "; ".join(f"cut {m['cut']} for {m['add']}" if m.get("cut") and m.get("add")
                                  else f"add {m['add']}" if m.get("add") else f"cut {m['cut']}" for m in maybe))
     lines += rulebreakers.context_lines(cmdrs, deck.get("cards"), set(_deck_identity(deck) or "") - {"C"})
@@ -1478,8 +1484,9 @@ def _decisions_summary(m: dict) -> str:
     props = [p for p in (m.get("proposals") or []) if isinstance(p, dict)][:12]
     if props:
         mark = {"accepted": "ACCEPTED", "rejected": "REJECTED",
-                "maybe": "MAYBE (they like it as a possibility but haven't committed - it's on their maybe "
-                         "list, not in the deck)",
+                "maybe": "MAYBE = a soft yes: they like it but want more context before committing - what the "
+                         "deck needs in that slot, how it compares - or want to see other options (it's on their "
+                         "Maybe board, NOT in the deck)",
                 "skipped": "SKIPPED (they moved on without deciding - it's not in the deck)"}
         rows = []
         for p in props:
