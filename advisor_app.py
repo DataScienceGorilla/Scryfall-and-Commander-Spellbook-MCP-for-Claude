@@ -293,8 +293,21 @@ THAT is their current deck - use it; do not ask them to paste it again.
 - A SESSION MEMORY block condenses the earlier part of a long conversation (those verbatim messages
   were dropped to keep your context sharp). Treat its goals, constraints and decisions as settled,
   and do NOT re-suggest anything it lists as rejected.
-- These blocks are plumbing: never mention "the session memory", "the deck block" or "@deck" to the
-  player - just talk about their deck and what they told you.
+- A PLAYER PROFILE block is what you know about this player from their OTHER chats: their tastes,
+  building habits, dislikes, constraints and how they like to be advised ("TOLD YOU DIRECTLY" items
+  are their own words; the rest was learned from their chats). Use it as your defaults - lean toward
+  their habits, don't recommend what they've said they dislike or can't use, pitch advice the way
+  they like it, and skip questions it already answers. It's background, not law: the PLAYER BRIEF,
+  the CURRENT DECK and what they say in this chat override it (someone who usually avoids stax can
+  still build a stax deck - follow this deck's brief). When it shapes a recommendation, a short nod
+  is enough ("you usually run 38 lands, so..."); don't recite the profile back to them.
+- When the player tells you something lasting about themselves - it applies beyond this deck - or asks
+  you to remember something, call remember_about_player with one short sentence. Not for decisions
+  about this deck, and not for what the PLAYER PROFILE already says.
+- These blocks are plumbing: never mention "the session memory", "the deck block", "the profile
+  block" or "@deck" to the player - just talk about their deck and what they told you. (If they ask
+  what you remember about them, tell them, and that they can see and edit it under Settings >
+  What Brew Bot remembers.)
 
 # RULEBREAKER COMMANDERS (Mystery Booster Commander Edition)
 - Eight commanders bend deckbuilding rules (not legal in sanctioned Commander - played by agreement).
@@ -1045,12 +1058,16 @@ async def _load_format_lists() -> None:
     print(f"Format lists loaded: {len(banned)} banned, {len(gcs)} game changers.", flush=True)
 
 
-def _cached_system(memory_block: str = "", deck_block: str = ""):
-    """System prompt + optional SESSION MEMORY + CURRENT DECK, each its own cache breakpoint,
-    ordered most- to least-stable (static prompt -> memory, which changes every ~N turns ->
-    deck, which changes on edits). An edit re-caches only what follows it."""
+def _cached_system(memory_block: str = "", deck_block: str = "", profile_block: str = ""):
+    """System prompt + optional PLAYER PROFILE + SESSION MEMORY + CURRENT DECK, ordered most- to
+    least-stable (static prompt -> profile, fixed per chat -> memory, which changes every ~N
+    turns -> deck, which changes on edits). An edit re-caches only what follows it. The profile
+    gets no breakpoint of its own (the API allows 4: prompt, memory, deck, last message); the
+    next breakpoint caches it as part of the prefix."""
     blocks = [{"type": "text", "text": SYSTEM_PROMPT + FORMAT_LISTS_TEXT,
                "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    if profile_block:
+        blocks.append({"type": "text", "text": profile_block})
     for text in (memory_block, deck_block):
         if text:
             blocks.append({"type": "text", "text": text, "cache_control": {"type": "ephemeral"}})
@@ -1155,6 +1172,24 @@ UI_TOOLS.append({
             "plan": {"type": "string", "description": "One or two sentences: the gameplan they've described."},
         },
         "required": ["commander"],
+    },
+})
+UI_TOOLS.append({
+    "name": "remember_about_player",
+    "description": (
+        "Save something lasting about the player to their profile, which you'll see at the start of every "
+        "future chat with them. Use it when they tell you something that applies beyond this deck - budget "
+        "rules, cards they don't own or won't play, mechanics they love or hate, how they like advice, their "
+        "playgroup - or ask you to remember something. Don't save decisions about this one deck (this chat "
+        "keeps those), your own opinions, or anything already in the PLAYER PROFILE."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "note": {"type": "string", "description": (
+                "One short sentence about the player, in third person, in their terms - e.g. \"Doesn't own "
+                "fetch lands and won't buy them.\" or \"Wants proposals in batches of 5, not 10.\"")},
+        },
+        "required": ["note"],
     },
 })
 UI_TOOL_NAMES = {t["name"] for t in UI_TOOLS}
@@ -1612,7 +1647,7 @@ def _cache_last(messages: list) -> list:
 
 async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODEL, extra: dict = None,
                        system: list | None = None, deck_text: str = "", deck_identity: str | None = None,
-                       deck: dict | None = None):
+                       deck: dict | None = None, user: str = ""):
     if extra is None:
         extra = REVIEW_EXTRA
     if system is None:
@@ -1761,6 +1796,11 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                             yield _sse("start_deck", offer)
                         log_activity(f"STARTDECK sid={session_id[:8]} "
                                      + (", ".join(c["name"] for c in offer["commander"]) if offer else "refused"))
+                    elif block.name == "remember_about_player":
+                        note = (block.input or {}).get("note")
+                        ui_results[block.id] = _remember_note(user, note)
+                        if user and ui_results[block.id].startswith("Saved"):
+                            yield _sse("remembered", {"note": _clean_note(note)})
 
                 async def _run(block):
                     if block.id in ui_results:
@@ -2146,14 +2186,24 @@ USER_CHAT_MAX_COUNT = 1000
 _user_chats_lock = asyncio.Lock()
 
 
+def _user_slug(user: str) -> str:
+    """Filesystem-safe, case-insensitive key for an account. Usernames are [A-Za-z0-9_.-];
+    anything else (an .env login) gets a stable hash."""
+    user = user.lower()
+    return user if re.fullmatch(r"[a-z0-9_-][a-z0-9_.-]{0,40}", user) else \
+        "u_" + hashlib.sha1(user.encode("utf-8")).hexdigest()[:16]
+
+
+def _session_user(request: Request) -> str:
+    """The signed-in account, or "" (login-free dev server / no session)."""
+    return (request.session.get("user") or "") if AUTH_ENABLED else ""
+
+
 def _user_chat_dir(request: Request) -> Path:
-    user = (request.session.get("user") or "").lower() if AUTH_ENABLED else ""
+    user = _session_user(request)
     if not user:
         raise HTTPException(status_code=404)
-    # usernames are [A-Za-z0-9_.-]; anything else (an .env login) gets a stable hashed folder
-    safe = user if re.fullmatch(r"[a-z0-9_-][a-z0-9_.-]{0,40}", user) else \
-        "u_" + hashlib.sha1(user.encode("utf-8")).hexdigest()[:16]
-    return USER_CHATS_DIR / safe
+    return USER_CHATS_DIR / _user_slug(user)
 
 
 def _user_chat_path(request: Request, chat_id: str) -> Path:
@@ -2230,6 +2280,318 @@ async def me_chat_delete(chat_id: str, request: Request, _: None = Depends(requi
     async with _user_chats_lock:
         path.unlink(missing_ok=True)
     return {"ok": True}
+
+
+# --- Player profile: what the advisor learns about a player across chats -------
+# user_profiles/<user>.json (gitignored): {text, notes, learn, learned, updatedAt}.
+#  - text: the LEARNED profile (markdown sections), rewritten by _learn_profile from the player's
+#    chats - their messages, the reasons on accepted/rejected proposals, their deck briefs.
+#  - notes: things the player TOLD the advisor to remember (the remember_about_player tool, or
+#    typed into the profile panel), kept verbatim.
+#  - learned: {chat session id: number of history messages already folded in}, so each message
+#    is learned from once. Kept on "forget" so old chats don't creep back in.
+# Every chat gets the profile as a PLAYER PROFILE system block, snapshotted per chat so a
+# background learn doesn't invalidate that chat's prompt cache; the player's own edits drop the
+# snapshots so they apply on the next message. The player sees and edits it all in the page.
+USER_PROFILES_DIR = Path(os.getenv("ADVISOR_USER_PROFILES_DIR") or Path(__file__).parent / "user_profiles")
+PROFILE_LEARN_MIN_NEW = 6        # unlearned messages in a chat before a background learn runs
+PROFILE_MAX_CHARS = 5000         # learned profile size cap (the learner compresses to fit)
+PROFILE_NOTES_MAX = 40
+PROFILE_NOTE_MAX_CHARS = 300
+PROFILE_EXCERPT_MAX_CHARS = 60_000
+PROFILE_BACKFILL_MAX_CHATS = 15
+_profile_locks: dict[str, asyncio.Lock] = {}
+_profile_snapshots: dict[tuple[str, str], str] = {}  # (user slug, session id) -> PLAYER PROFILE block
+_profile_learning: dict[str, int] = {}               # user slug -> learns queued/running
+_profile_tasks: set = set()                          # strong refs so background learns aren't GC'd
+
+PROFILE_PROMPT = f"""You maintain the PLAYER PROFILE for a Commander (EDH) deckbuilding advisor. The advisor sees this profile at the start of EVERY future chat with this player, so it captures how they build and what they like - not the details of any one deck. Merge the existing profile with what the new conversation excerpt reveals into ONE updated profile.
+
+Sections (omit any with nothing real in it):
+## Play style & power - themes, archetypes and colors they gravitate to, the brackets they usually build for, how they like to win
+## Deckbuilding habits - their structural defaults (land count, ramp/draw/interaction numbers, curve, frameworks they follow) and patterns in what they accept
+## Likes - cards, effects and mechanics they're happy to see, pet cards
+## Dislikes & hard no's - cards, mechanics and styles they reject, WITH their reason when they gave one
+## Constraints - budget, what they own or don't, proxies, their playgroup and meta
+## How they like to be advised - detail level, batch sizes, questions vs straight proposals, tone
+## Decks - one line per deck they've worked on: commander, the idea, bracket, where it stands
+
+Evidence rules:
+- Strongest signals: what they say about themselves, the reasons they give when accepting or rejecting proposals, their deck brief, and patterns across several decisions. One rejected card is a deck-specific call, not a dislike - generalize only when they give a general reason ("I hate stax") or the pattern repeats.
+- Be conservative: a short chat usually teaches you little, and that's fine. Never turn a single ordinary request into a habit or preference (asking "what's a good commander?" says nothing about how they like advice), and never read tastes into what they asked for beyond what they actually said.
+- Hedge when it matters ("usually", "said once"). When new evidence conflicts with the profile, prefer the newer and note the shift if it's real.
+- Record only what the PLAYER said or did - never the advisor's own opinions, suggestions or card analysis (cards the advisor merely offered don't belong in the profile), and never invent.
+- The TOLD DIRECTLY notes are stored separately and shown alongside this profile. Do NOT restate them in any section, even reworded - only add what goes beyond them.
+- Keep card names exact. Short bullets, no padding. Stay under {PROFILE_MAX_CHARS} characters - when it's full, compress or drop the oldest, weakest items first.
+- If the excerpt reveals nothing about the player, return the existing profile unchanged.
+Output only the profile."""
+
+
+def _profile_path(user: str) -> Path:
+    return USER_PROFILES_DIR / f"{_user_slug(user)}.json"
+
+
+def _profile_lock(user: str) -> asyncio.Lock:
+    return _profile_locks.setdefault(_user_slug(user), asyncio.Lock())
+
+
+def _load_profile(user: str) -> dict:
+    try:
+        prof = json.loads(_profile_path(user).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prof = {}
+    if not isinstance(prof, dict):
+        prof = {}
+    prof.setdefault("text", "")
+    prof.setdefault("notes", [])
+    prof.setdefault("learn", True)
+    prof.setdefault("learned", {})
+    return prof
+
+
+def _save_profile(user: str, prof: dict) -> None:
+    prof["updatedAt"] = datetime.datetime.now().isoformat(timespec="seconds")
+    path = _profile_path(user)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(prof, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _forget_snapshots(user: str) -> None:
+    slug = _user_slug(user)
+    for k in [k for k in _profile_snapshots if k[0] == slug]:
+        _profile_snapshots.pop(k, None)
+
+
+def _clean_note(text) -> str:
+    return " ".join(str(text or "").split())[:PROFILE_NOTE_MAX_CHARS]
+
+
+def _profile_block(prof: dict) -> str:
+    notes = [n.get("text") for n in prof.get("notes") or [] if isinstance(n, dict) and n.get("text")]
+    text = (prof.get("text") or "").strip()
+    if not notes and not text:
+        return ""
+    out = ["# PLAYER PROFILE (what you know about this player from their other chats - see instructions)"]
+    if notes:
+        out += ["TOLD YOU DIRECTLY (their own words - weigh these most):"] + [f"- {n}" for n in notes]
+    if text:
+        out += (["", "LEARNED FROM THEIR CHATS:"] if notes else []) + [text]
+    return "\n".join(out)
+
+
+def _profile_for_chat(user: str, session_id: str) -> str:
+    """The PLAYER PROFILE block for this chat - the same bytes for the whole chat (until the
+    player edits their profile), so background learning never busts the chat's cache."""
+    key = (_user_slug(user), session_id)
+    if key not in _profile_snapshots:
+        _profile_snapshots[key] = _profile_block(_load_profile(user))
+    return _profile_snapshots[key]
+
+
+def _learn_excerpt(history: list, start: int, deck: dict | None, title: str = "") -> str:
+    """The unlearned part of a chat, as the learner sees it: the player's messages in full
+    (minus pasted lists), the advisor's replies clipped (their analysis isn't the signal), and
+    every proposal/question with the player's decision and reason."""
+    head = []
+    if title:
+        head.append(f"Chat title: {title}")
+    if isinstance(deck, dict):
+        cmdrs = [str(c) for c in deck.get("commander") or []]
+        if cmdrs:
+            head.append(f"Deck: {' + '.join(cmdrs)}" + (f", target bracket {deck['bracket']}" if deck.get("bracket") else ""))
+        head += _brief_lines(deck.get("intake"))
+    rows = []
+    for m in history[start:]:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            continue
+        text = (m.get("text") or "").strip()
+        if m["role"] == "user":
+            text = _collapse_pasted_decklist(text)[:3000]
+            if m.get("note"):
+                text += "\n" + str(m["note"])[:600]
+        else:
+            if len(text) > 1200:
+                text = text[:1200] + " [...]"
+            text += _decisions_summary(m)
+        if text:
+            rows.append(f"[{'PLAYER' if m['role'] == 'user' else 'ADVISOR'}]\n{text}")
+    body = "\n\n".join(rows)
+    if len(body) > PROFILE_EXCERPT_MAX_CHARS:  # keep the newest part of a huge chat
+        body = "[...earlier part of this chat omitted...]\n\n" + body[-PROFILE_EXCERPT_MAX_CHARS:]
+    return ("\n".join(head) + "\n\n" if head else "") + body
+
+
+async def _learn_profile(user: str, session_id: str, history: list, deck: dict | None,
+                         title: str = "") -> bool:
+    """Fold a chat's unlearned messages into the player's profile. Returns True if it ran."""
+    async with _profile_lock(user):
+        prof = _load_profile(user)
+        start = int(prof["learned"].get(session_id) or 0)
+        if not prof.get("learn") or len(history) - start < 2:
+            return False
+        start = min(start, len(history))
+        before = prof["text"]
+        excerpt = _learn_excerpt(history, start, deck, title)
+        notes = [n.get("text") for n in prof["notes"] if isinstance(n, dict) and n.get("text")]
+        msg = (f"EXISTING PROFILE:\n{prof['text'] or '(none yet)'}\n\n"
+               f"TOLD DIRECTLY (stored separately):\n" + ("\n".join(f"- {n}" for n in notes) or "(none)")
+               + f"\n\nNEW CONVERSATION EXCERPT:\n{excerpt}")
+        resp = await aclient.messages.create(
+            model=REVIEW_MODEL, max_tokens=4000, system=PROFILE_PROMPT,
+            messages=[{"role": "user", "content": msg}],
+            extra_body={"output_config": {"effort": "medium"}},
+        )
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        if resp.stop_reason == "max_tokens" or not text:
+            raise RuntimeError(f"learner returned no usable profile ({resp.stop_reason})")
+        # The player may have edited the profile meanwhile (those paths don't wait on this lock):
+        # keep their notes, and if they rewrote the text, keep that too and learn this part next time.
+        prof = _load_profile(user)
+        if prof["text"] != before or not prof.get("learn"):
+            return False
+        prof["text"] = text[:PROFILE_MAX_CHARS + 1000]
+        prof["learned"][session_id] = len(history)
+        _save_profile(user, prof)
+    u = resp.usage
+    pin, pout = PRICES[REVIEW_MODEL]
+    log_activity(f"PROFILE user={user} learned sid={session_id[:8]} msgs {start}->{len(history)} "
+                 f"in={u.input_tokens} out={u.output_tokens} ~${u.input_tokens * pin + u.output_tokens * pout:.4f}")
+    return True
+
+
+def _spawn_learn(user: str, jobs: list[tuple]) -> None:
+    """Run learns (session_id, history, deck, title) one after another in the background;
+    never raises into the caller."""
+    slug = _user_slug(user)
+    _profile_learning[slug] = _profile_learning.get(slug, 0) + 1
+
+    async def _run():
+        try:
+            for sid, history, deck, title in jobs:
+                try:
+                    await _learn_profile(user, sid, history, deck, title)
+                except Exception as e:
+                    log_activity(f"PROFILE failed user={user} sid={sid[:8]}: {type(e).__name__}: {e}")
+        finally:
+            _profile_learning[slug] -= 1
+
+    task = asyncio.ensure_future(_run())
+    _profile_tasks.add(task)
+    task.add_done_callback(_profile_tasks.discard)
+
+
+def _maybe_learn(user: str, session_id: str, history: list, deck: dict | None) -> None:
+    """After an answer: learn from this chat once enough new messages have piled up."""
+    if not user or not isinstance(history, list):
+        return
+    prof = _load_profile(user)
+    if prof.get("learn") and len(history) - int(prof["learned"].get(session_id) or 0) >= PROFILE_LEARN_MIN_NEW:
+        _spawn_learn(user, [(session_id, history, deck, "")])
+
+
+def _remember_note(user: str, note: str) -> str:
+    """remember_about_player: append a TOLD DIRECTLY note. Returns the tool result text."""
+    note = _clean_note(note)
+    if not note:
+        return "Nothing to save - pass the preference as one short sentence."
+    if not user:
+        return ("This player isn't signed in to an account, so nothing can be remembered across chats. "
+                "Don't mention it unless they ask.")
+    prof = _load_profile(user)
+    if any(_clean_note(n.get("text")).lower() == note.lower() for n in prof["notes"] if isinstance(n, dict)):
+        return "Already in their profile."
+    prof["notes"].append({"text": note, "at": datetime.date.today().isoformat()})
+    prof["notes"] = prof["notes"][-PROFILE_NOTES_MAX:]
+    _save_profile(user, prof)
+    log_activity(f"PROFILE user={user} remembered: {note[:120]}")
+    return ("Saved to their profile - you'll see it in every future chat (they can edit it under Settings > "
+            "What Brew Bot remembers). Mention it in a few words at most and carry on.")
+
+
+def _profile_view(user: str) -> dict:
+    prof = _load_profile(user)
+    pending = 0
+    folder = USER_CHATS_DIR / _user_slug(user)
+    for p in folder.glob("*.json") if folder.exists() else []:
+        ch = _read_user_chat(p)
+        if isinstance(ch, dict) and ch.get("sessionId") and \
+                len(ch.get("conversation") or []) - int(prof["learned"].get(ch["sessionId"]) or 0) >= 2:
+            pending += 1
+    return {"text": prof["text"], "notes": prof["notes"], "learn": bool(prof["learn"]),
+            "updatedAt": prof.get("updatedAt"), "learning": _profile_learning.get(_user_slug(user), 0) > 0,
+            "chats_learned": len(prof["learned"]), "chats_pending": pending}
+
+
+def _profile_user(request: Request) -> str:
+    user = _session_user(request)
+    if not user:
+        raise HTTPException(status_code=404)
+    return user
+
+
+@app.get("/me/profile")
+async def me_profile(request: Request, _: None = Depends(require_auth)):
+    return _profile_view(_profile_user(request))
+
+
+@app.put("/me/profile")
+async def me_profile_save(request: Request, _: None = Depends(require_auth)):
+    """Player edits. Body: any of {"text": str, "notes": [str | {text, at}], "learn": bool}."""
+    user = _profile_user(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400)
+    prof = _load_profile(user)
+    if "text" in body:
+        prof["text"] = str(body["text"] or "").strip()[:PROFILE_MAX_CHARS * 2]
+    if isinstance(body.get("notes"), list):
+        today, notes = datetime.date.today().isoformat(), []
+        for n in body["notes"][:PROFILE_NOTES_MAX]:
+            text = _clean_note(n.get("text") if isinstance(n, dict) else n)
+            if text:
+                notes.append({"text": text, "at": (n.get("at") if isinstance(n, dict) else None) or today})
+        prof["notes"] = notes
+    if "learn" in body:
+        prof["learn"] = bool(body["learn"])
+    _save_profile(user, prof)
+    _forget_snapshots(user)
+    log_activity(f"PROFILE user={user} edited by player")
+    return _profile_view(user)
+
+
+@app.delete("/me/profile")
+async def me_profile_forget(request: Request, _: None = Depends(require_auth)):
+    """Forget everything learned and told. The 'already learned' markers stay, so the old chats
+    aren't learned again; only new messages are."""
+    user = _profile_user(request)
+    prof = _load_profile(user)
+    prof.update(text="", notes=[])
+    _save_profile(user, prof)
+    _forget_snapshots(user)
+    log_activity(f"PROFILE user={user} forgotten by player")
+    return _profile_view(user)
+
+
+@app.post("/me/profile/learn")
+async def me_profile_learn(request: Request, _: None = Depends(require_auth)):
+    """Learn from the player's saved chats that haven't been read yet (oldest first, so newer
+    habits win), in the background. Poll GET /me/profile for `learning`."""
+    user = _profile_user(request)
+    prof = _load_profile(user)
+    if not prof.get("learn"):
+        return JSONResponse({"error": "learning is turned off"}, status_code=409)
+    folder = USER_CHATS_DIR / _user_slug(user)
+    chats = [ch for ch in (_read_user_chat(p) for p in (folder.glob("*.json") if folder.exists() else []))
+             if isinstance(ch, dict) and ch.get("sessionId")
+             and len(ch.get("conversation") or []) - int(prof["learned"].get(ch["sessionId"]) or 0) >= 2]
+    chats = sorted(chats, key=lambda ch: ch.get("updatedAt") or 0)[-PROFILE_BACKFILL_MAX_CHATS:]
+    if chats:
+        _spawn_learn(user, [(ch["sessionId"], ch["conversation"], ch.get("deck"), str(ch.get("title") or ""))
+                            for ch in chats])
+        log_activity(f"PROFILE user={user} backfill queued {len(chats)} chats")
+    return {**_profile_view(user), "queued": len(chats)}
 
 
 def _ui_page() -> tuple[str, str]:
@@ -2333,6 +2695,7 @@ async def chat(request: Request, _: None = Depends(require_auth)):
     if memory_text:
         ctx.append(f"mem@{mem_upto}")
     who = request.session.get("user") or "-"
+    account = _session_user(request)  # "" on the login-free dev server: no profile there
     log_activity(f"QUERY  sid={session_id[:8]} user={who} ip={client_ip} [{model.replace('claude-','')}]"
                  f"{' {' + ', '.join(ctx) + '}' if ctx else ''} | {preview}")
 
@@ -2380,15 +2743,17 @@ async def chat(request: Request, _: None = Depends(require_auth)):
                  f"Target bracket: {deck.get('bracket') or 'not set'}"] + _brief_lines(deck.get("intake")))
         memory_block = ("# SESSION MEMORY (condensed earlier conversation - see instructions)\n"
                         + memory_text) if memory_text else ""
+        profile_block = _profile_for_chat(account, session_id) if account else ""
         capture = _AnswerCapture()
         async for chunk in agent_stream(session_id, messages, model, extra,
-                                        system=_cached_system(memory_block, deck_block),
+                                        system=_cached_system(memory_block, deck_block, profile_block),
                                         deck_text=deck_text, deck_identity=deck_identity,
-                                        deck=deck if has_deck else None):
+                                        deck=deck if has_deck else None, user=account):
             capture.feed(chunk)
             yield chunk
         if history is not None:  # keep a copy for the admin page (players are told)
             _save_chat(session_id, who, history, capture.entry(), deck)
+            _maybe_learn(account, session_id, history, deck)  # background; never delays the answer
 
     return StreamingResponse(
         _stream(),

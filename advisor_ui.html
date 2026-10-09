@@ -494,6 +494,23 @@
   .in-actions .primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 650; }
   @media (max-width: 560px) { .in-two { grid-template-columns: 1fr; } }
 
+  /* Player profile ("What Brew Bot remembers") - reuses the brief's modal */
+  .pf-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .pf-notes li { display: flex; align-items: baseline; gap: 8px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 6px 6px 6px 10px; font-size: 13.5px; }
+  .pf-notes li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .pf-notes li small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .pf-notes li button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 0 4px; }
+  .pf-notes li button:hover { color: var(--danger-text); }
+  .pf-empty { color: var(--muted); font-size: 13px; }
+  .intake .pf-text { font-size: 13px; line-height: 1.45; min-height: 220px; }
+  .pf-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 8px; font-size: 13px; }
+  .intake .pf-learn input { width: auto; margin: 0 6px 0 0; accent-color: var(--accent); }
+  .pf-tools .in-small { padding: 5px 12px; }
+  .in-actions .pf-forget { margin-right: auto; color: var(--danger-text); }
+  .in-actions .pf-forget:hover { border-color: var(--danger); }
+  .in-actions button:disabled { opacity: .5; cursor: default; }
+
   /* Onboarding: welcome card (first visit) + spotlight tour */
   .onb-inner { max-width: 560px; }
   .onb-paths { display: grid; gap: 10px; margin-top: 16px; }
@@ -3255,6 +3272,9 @@ async function send(force) {
         } else if (ev.event === 'memory') {
           // earlier messages were condensed server-side; keep the memory with this chat
           originChat.memory = ev.data; saveState(originId);
+        } else if (ev.event === 'remembered') {
+          // the advisor saved something to the player's profile (remember_about_player)
+          if (ev.data && ev.data.note) showToast('Remembered: ' + ev.data.note);
         } else if (ev.event === 'warning') {
           if (onScreen()) renderWarning(ev.data.cards);
         } else if (ev.event === 'error') {
@@ -3367,6 +3387,8 @@ applyPrefs();
       <div class="seg"><button type="button" data-serif="1">Cormorant</button><button type="button" data-serif="0">Karla</button></div></div>
     <div class="row"><div class="hint">Drag the line between the chat and the deck to resize them.</div>
       <button type="button" class="reset" id="setReset">Reset layout</button></div>
+    <div class="row" id="setProfileRow" hidden><h4>Memory</h4>
+      <button type="button" class="reset" id="setProfile">What Brew Bot remembers about you</button></div>
     <div class="row" style="margin-bottom:0"><h4>New here?</h4>
       <button type="button" class="reset" id="setTour">Replay the welcome tour</button></div>`;
   document.body.appendChild(pop);
@@ -3387,10 +3409,114 @@ applyPrefs();
   }));
   pop.querySelector('#setReset').addEventListener('click', () => { prefs = { ...PREF_DEFAULTS }; applyPrefs(); savePrefs(); paint(); });
   pop.querySelector('#setTour').addEventListener('click', () => { pop.hidden = true; openWelcome(); });
+  pop.querySelector('#setProfile').addEventListener('click', () => { pop.hidden = true; openProfile(); });
   btn.addEventListener('click', (e) => { e.stopPropagation(); paint(); pop.hidden = !pop.hidden; });
   document.addEventListener('click', (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') pop.hidden = true; });
 })();
+
+// ---- Player profile ("What Brew Bot remembers"): what the advisor learned about this player from
+// their chats, plus things they told it to remember. Lives on the account (/me/profile) and the
+// advisor reads it at the start of every chat. Notes and the learn switch save as you change them;
+// the learned text saves with Save. Signed-in only - the login-free dev server has no accounts.
+mePromise.then(me => {
+  if (!me || !me.auth) return;
+  _fetch('/me/profile').then(r => {
+    if (!r.ok) return;
+    document.getElementById('setProfileRow').hidden = false;
+    const pn = document.querySelector('.privacy-note');
+    if (pn) pn.textContent += ' Brew Bot also learns your deckbuilding habits from them - see ⚙ > Memory.';
+  }).catch(() => {});
+});
+function openProfile() {
+  if (document.querySelector('.pf-modal')) return;
+  const el = document.createElement('div');
+  el.className = 'intake pf-modal';
+  el.innerHTML = `<form class="in-inner" role="dialog" aria-modal="true" aria-labelledby="pfTitle" autocomplete="off">
+    <button type="button" class="ed-close in-x" title="Close">×</button>
+    <h2 class="in-title" id="pfTitle">What Brew Bot remembers</h2>
+    <p class="in-sub">Brew Bot learns how you build from your chats - what you go for, the cards you accept and turn down, and why -
+      and brings it into every new chat so you don't have to repeat yourself. A deck's brief and what you say in a chat
+      always come first. Edit or delete anything here. It's stored on the server with your chats, and the site admin can read it.</p>
+    <section><h3>You told it <span class="in-hint">things to always keep in mind - it weighs these most</span></h3>
+      <ul class="pf-notes"></ul>
+      <div class="in-row"><input type="search" class="pf-note-input" maxlength="300" ${NO_AUTOFILL} placeholder="e.g. I don't own fetch lands and won't buy them">
+        <button type="button" class="in-small pf-note-add">Add</button></div></section>
+    <section><h3>Learned from your chats <span class="in-hint pf-status"></span></h3>
+      <textarea class="pf-text" rows="12" ${NO_AUTOFILL} placeholder="Nothing yet - this fills in as you chat."></textarea>
+      <div class="pf-tools"><label class="pf-learn"><input type="checkbox">Learn from my chats</label>
+        <button type="button" class="in-small pf-backfill" hidden></button></div></section>
+    <div class="in-actions"><button type="button" class="pf-forget">Forget everything</button>
+      <button type="button" class="pf-close">Close</button><button type="submit" class="primary pf-save" disabled>Save</button></div>
+  </form>`;
+  document.body.appendChild(el);
+  const $ = s => el.querySelector(s);
+  const ta = $('.pf-text'), save = $('.pf-save'), learn = $('.pf-learn input');
+  let prof = null, textDirty = false, poll = null;
+
+  const paint = () => {
+    const list = $('.pf-notes');
+    list.innerHTML = prof.notes.length ? '' : '<li class="pf-empty" style="background:none;border:none;padding:0">Nothing yet. Tell it in chat ("remember that I…") or add it here.</li>';
+    prof.notes.forEach((n, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = '<span></span><small></small><button type="button" title="Forget this">×</button>';
+      li.querySelector('span').textContent = n.text;
+      li.querySelector('small').textContent = n.at || '';
+      li.querySelector('button').onclick = () => put({ notes: prof.notes.filter((_, j) => j !== i) });
+      list.appendChild(li);
+    });
+    if (!textDirty) ta.value = prof.text || '';
+    learn.checked = !!prof.learn;
+    const when = prof.updatedAt ? new Date(prof.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+    $('.pf-status').textContent = prof.learning ? '· learning from your chats…'
+      : prof.chats_learned ? `· from ${prof.chats_learned} chat${prof.chats_learned === 1 ? '' : 's'}${when ? ', updated ' + when : ''}` : '';
+    const bf = $('.pf-backfill');
+    bf.hidden = !prof.learn || prof.learning || !prof.chats_pending;
+    bf.textContent = `Learn from ${prof.chats_pending} past chat${prof.chats_pending === 1 ? '' : 's'}`;
+    save.disabled = !textDirty;
+    clearTimeout(poll);
+    if (prof.learning) poll = setTimeout(load, 4000);
+  };
+  const take = async r => {
+    if (!r.ok) { showToast("Couldn't reach your profile - try again"); return; }
+    prof = await r.json(); if (el.isConnected) paint();
+  };
+  const pfFail = e => { console.error('profile panel:', e); showToast("Couldn't reach your profile - try again"); };
+  const load = () => fetch('/me/profile').then(take).catch(pfFail);
+  const put = body => fetch('/me/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                                             body: JSON.stringify(body) }).then(take).catch(pfFail);
+  const close = () => {
+    if (textDirty && !confirm('Discard your changes to what Brew Bot learned?')) return;
+    clearTimeout(poll); el.remove(); document.removeEventListener('keydown', onKey);
+  };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+
+  const addNote = () => {
+    const inp = $('.pf-note-input'), text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+    put({ notes: [...prof.notes, { text }] });
+  };
+  $('.pf-note-add').onclick = addNote;
+  $('.pf-note-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addNote(); } });
+  ta.addEventListener('input', () => { textDirty = true; save.disabled = false; });
+  learn.addEventListener('change', () => put({ learn: learn.checked }));
+  $('.pf-backfill').onclick = () => fetch('/me/profile/learn', { method: 'POST' }).then(take).catch(pfFail);
+  $('.pf-forget').onclick = () => {
+    if (!confirm('Forget everything Brew Bot has learned about you and everything you told it to remember? Your chats stay; it starts fresh from your next messages.')) return;
+    textDirty = false;
+    fetch('/me/profile', { method: 'DELETE' }).then(take).catch(pfFail);
+  };
+  el.querySelector('form').addEventListener('submit', e => {
+    e.preventDefault();
+    textDirty = false;
+    put({ text: ta.value }).then(() => showToast('Saved - Brew Bot uses it from your next message'));
+  });
+  $('.in-x').onclick = close; $('.pf-close').onclick = close;
+  el.addEventListener('mousedown', e => { if (e.target === el) close(); });
+  load();
+}
 
 // ---- onboarding: a welcome card on a player's first visit (three ways in), plus an optional
 // spotlight tour of the screen. "Seen" is remembered on the account (/me/onboarded) so it

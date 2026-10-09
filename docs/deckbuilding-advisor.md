@@ -133,6 +133,47 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   kept for rollback, `:migrated` marker). Login-free dev server stays localStorage-only.
 - [x] **Retired the shared `coolpeople` login** (2026-10-08): `ADVISOR_USER`/`ADVISOR_PASSWORD` removed
   from `.env`; the old password moved to `ADVISOR_SITE_CODE` (the site code used to fall back to it).
+- [x] **Player profile - cross-chat memory** (2026-10-09): the advisor learns each account's deckbuilding
+  habits and brings them into every chat. `user_profiles/<user>.json` (gitignored): learned `text`
+  (sections: play style & power, habits, likes, dislikes, constraints, how they like advice, decks),
+  `notes` the player told it (verbatim), a `learn` switch, and `learned` = {chat session id: messages
+  folded in}. **Learning:** after an answer, once a chat has `PROFILE_LEARN_MIN_NEW` (6) unread messages,
+  a background Sonnet call (`_learn_profile`, effort medium, ~$0.01-0.05) merges them in - the player's
+  messages, the advisor's replies clipped, and every proposal/question with the decision + the player's
+  reason (`_decisions_summary`), plus the deck brief. The prompt is deliberately conservative (one
+  rejected card isn't a dislike; one request isn't a habit; never restate the notes). A player edit made
+  mid-learn wins. **Told directly:** the `remember_about_player` UI tool saves a note when the player
+  states a lasting preference -> SSE `remembered` -> toast. **Use:** a PLAYER PROFILE system block
+  between the prompt and SESSION MEMORY, with no cache breakpoint of its own (the API allows 4, all used),
+  snapshotted per chat (`_profile_snapshots`) so background learns don't bust that chat's cache; player
+  edits drop the snapshots. The prompt treats it as defaults that the brief / deck / current chat override.
+  **Page:** Settings > Memory > "What Brew Bot remembers" (`openProfile`): notes (add / x), the learned
+  text (editable, Save), the learn switch, "Learn from N past chats" (`POST /me/profile/learn`: up to 15
+  unlearned saved chats, oldest first, background; the panel polls), Forget everything (keeps the
+  `learned` markers so old chats don't creep back). Signed-in only; the sidebar privacy note mentions it.
+  Verified live on a throwaway instance: Haiku called the tool on "for all my decks: no infinite combos,
+  no fetch lands", and the learner pulled 38 lands / no rituals (with reason) / $10 budget / batches of 5
+  from a Meren excerpt without generalizing an off-color rejection. Ideas next: show profiles on the
+  admin Users tab; a per-chat "don't learn from this chat" toggle.
+- [ ] **BUG: a typed message during the auto-continue countdown skips the NEXT batch** (friend's
+  Stone Soup session, 2026-10-08 14:50-14:52). `maybeAutoContinue`'s `go()` keeps its timer when the
+  player types and sends during the 4 s countdown; it just waits out the stream (`setTimeout(go, 1500)`)
+  and then fires anyway - after the new reply has arrived. So it sends the OLD batch's "Done deciding -
+  accepted N" (wrong count), `send()` marks the NEW reply's proposals skipped, and `hideTray()` hides
+  them. Seen twice: "I unset veyran" -> batch 4 vanished, "accepted 10" was batch 3's count; "sorry im
+  fighting UI" -> the re-proposal vanished the same way. The advisor then misdiagnosed it ("ten-card
+  batches aren't landing"). Fix: a typed `send()` cancels any countdown (clear the interval, mark that
+  entry `continued`), and `go()` bails if its entry is no longer `lastAssistantEntry()`.
+- [ ] **Non-Commander lists (cube / Stone Soup 45-card packages):** the same friend builds 45-card
+  draft packages. With no commander the builder can't take adds, so the advisor told them to make a
+  placeholder deck (Veyran), which turned on BUILD MODE ("move on to the next section", Commander
+  section targets) and the color-identity strip (18 card names cut from one answer: `OFFCOLOR ...
+  stripped`). Idea: a deck `format` (Commander / Cube package / Freeform) - non-Commander skips the
+  identity checks, the 100-card count, build sections and bracket; target size editable (45).
+- [ ] **Never silently empty a non-empty deck.** Same session: "Build from scratch" from the welcome
+  card wiped the 45 in place ("where are my 45") - the advisor rebuilt it from the chat history.
+  d618a7c fixed the welcome paths (they now open a new chat); audit any other path that replaces the
+  deck (toolbar Build from scratch, brief, paste) so it opens a new chat or is one Undo away.
 - [ ] **Account-system hardening (LOW PRIORITY - only matters if this scales past friends):**
   - Rotate `ADVISOR_SITE_CODE` (it's still the old shared password).
   - Spend guard: an Anthropic Console monthly limit, and/or a per-account daily `/chat` cap (admins exempt).
@@ -272,6 +313,7 @@ always sees exactly what the user sees.
 | `GET /card/search?q=` | Card-name autocomplete (Scryfall autocomplete, cached, ≥2 chars). |
 | `GET /login` `POST /login` `GET /logout` `GET /me` | Login page + session (see Auth). |
 | `POST /me/onboarded` | `{"done": true or false}` - marks the welcome card + tour seen for this account (`user_prefs.json`, gitignored); `GET /me` returns `onboarded`. |
+| `GET/PUT/DELETE /me/profile` | The player profile (cross-chat memory): view, edit `{text, notes, learn}`, forget. `POST /me/profile/learn` learns from unread saved chats in the background. |
 | `GET /healthz` | Unauthenticated liveness probe (supervisor / Docker healthcheck). |
 
 ### `agent_stream` (the tool-use loop)

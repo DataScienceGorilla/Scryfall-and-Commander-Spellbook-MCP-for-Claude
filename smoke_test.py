@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 PY_FILES = ["advisor_app.py", "mtg_tools.py", "role_index.py", "mtg_mcp.py", "accounts.py"]
 UI_MARKERS = ["function send(", "function renderDeck(", "function initChats(", "initChats();",
               "function deckForChat(", "const UI_VERSION = '__UI_VERSION__'", "function openIntake(", "function startDeckCard(", "function startBuild(", "function buildPanel(", "function activeDecisionEntry(",
-              "function renderTurnExtras(", "function acceptProposal(", "function openWelcome(", "function startTour(", "function syncChats(", "</html>"]
+              "function renderTurnExtras(", "function acceptProposal(", "function openWelcome(", "function startTour(", "function syncChats(", "function openProfile(", "</html>"]
 
 failures = []
 
@@ -58,6 +58,7 @@ def main():
     os.environ["ADVISOR_ACCOUNTS_FILE"] = str(tmp_dir / "accounts.json")
     os.environ["ADVISOR_USER_PREFS_FILE"] = str(tmp_dir / "user_prefs.json")
     os.environ["ADVISOR_USER_CHATS_DIR"] = str(tmp_dir / "user_chats")
+    os.environ["ADVISOR_USER_PROFILES_DIR"] = str(tmp_dir / "user_profiles")
     import advisor_app as a
     from fastapi.testclient import TestClient
 
@@ -105,6 +106,22 @@ def main():
           and o.get(f"/me/chats/{cid}").status_code == 404)
     a.accounts.remove("Other_1")
     check("delete chat", c.delete(f"/me/chats/{cid}").status_code == 200 and c.get("/me/chats").json()["chats"] == [])
+
+    print("Player profile")
+    pr = c.get("/me/profile").json()
+    check("empty profile, learning on", pr.get("text") == "" and pr.get("notes") == [] and pr.get("learn") is True)
+    pr = c.put("/me/profile", json={"notes": ["Doesn't own fetch lands.", "  "], "text": "## Likes - tokens"}).json()
+    check("edit profile", [n["text"] for n in pr["notes"]] == ["Doesn't own fetch lands."] and "tokens" in pr["text"])
+    block = a._profile_for_chat("smoketest", "smoke-sid-1")
+    check("profile block in chat", "PLAYER PROFILE" in block and "fetch lands" in block and "tokens" in block)
+    check("remember tool saves", a._remember_note("smoketest", "Plays bracket 3 at most.").startswith("Saved")
+          and len(c.get("/me/profile").json()["notes"]) == 2)
+    check("remember dedupes", a._remember_note("smoketest", "plays bracket 3 at most.") == "Already in their profile.")
+    check("no account -> nothing saved", not a._remember_note("", "x").startswith("Saved"))
+    check("learn off", c.put("/me/profile", json={"learn": False}).json().get("learn") is False
+          and c.post("/me/profile/learn").status_code == 409)
+    pr = c.delete("/me/profile").json()
+    check("forget", pr["text"] == "" and pr["notes"] == [] and "PLAYER PROFILE" not in a._profile_for_chat("smoketest", "smoke-sid-1"))
 
     print("Sign-up")
     s = TestClient(a.app, base_url="https://smoke")

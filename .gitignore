@@ -37,3 +37,6 @@ chat_store/
 
 # per-account chats (synced from the page)
 user_chats/
+
+# per-account player profiles (cross-chat memory)
+user_profiles/
