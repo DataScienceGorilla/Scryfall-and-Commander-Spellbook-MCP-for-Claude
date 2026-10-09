@@ -141,7 +141,12 @@ repo. This doc is the single source of truth for how it works and how to keep bu
   a background Sonnet call (`_learn_profile`, effort medium, ~$0.01-0.05) merges them in - the player's
   messages, the advisor's replies clipped, and every proposal/question with the decision + the player's
   reason (`_decisions_summary`), plus the deck brief. The prompt is deliberately conservative (one
-  rejected card isn't a dislike; one request isn't a habit; never restate the notes). A player edit made
+  rejected card isn't a dislike; one request isn't a habit; never restate the notes). **Player vs deck
+  (2026-10-09, user feedback):** the learner applies a transfer test - would it hold for a completely
+  different deck? "Pushes for more ramp" is the player; "likes sacrifice payoffs" in an aristocrats deck
+  is that deck, filed as sub-bullets under it in `## Decks` (when unsure -> the deck). The advisor prompt
+  says Decks entries apply only to those decks. The first live profile (one Dina chat had put "builds
+  lifegain/sacrifice decks" and ~18 Dina cards in the player sections) was re-filed. A player edit made
   mid-learn wins. **Told directly:** the `remember_about_player` UI tool saves a note when the player
   states a lasting preference -> SSE `remembered` -> toast. **Use:** a PLAYER PROFILE system block
   between the prompt and SESSION MEMORY, with no cache breakpoint of its own (the API allows 4, all used),

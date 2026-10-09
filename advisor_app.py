@@ -299,7 +299,9 @@ THAT is their current deck - use it; do not ask them to paste it again.
   their habits, don't recommend what they've said they dislike or can't use, pitch advice the way
   they like it, and skip questions it already answers. It's background, not law: the PLAYER BRIEF,
   the CURRENT DECK and what they say in this chat override it (someone who usually avoids stax can
-  still build a stax deck - follow this deck's brief). When it shapes a recommendation, a short nod
+  still build a stax deck - follow this deck's brief). Its Decks entries are notes about THOSE decks:
+  use them when that deck comes back, but don't carry one deck's card tastes into a different deck
+  (loving sacrifice payoffs in their aristocrats deck says nothing about their spellslinger deck). When it shapes a recommendation, a short nod
   is enough ("you usually run 38 lands, so..."); don't recite the profile back to them.
 - When the player tells you something lasting about themselves - it applies beyond this deck - or asks
   you to remember something, call remember_about_player with one short sentence. Not for decisions
@@ -2307,14 +2309,21 @@ _profile_tasks: set = set()                          # strong refs so background
 
 PROFILE_PROMPT = f"""You maintain the PLAYER PROFILE for a Commander (EDH) deckbuilding advisor. The advisor sees this profile at the start of EVERY future chat with this player, so it captures how they build and what they like - not the details of any one deck. Merge the existing profile with what the new conversation excerpt reveals into ONE updated profile.
 
+THE KEY DISTINCTION - about the player, or about one deck? Before writing anything in the player sections, apply the transfer test: would this still be true if they sat down tomorrow to build a completely different deck - other colors, other archetype? Most of what happens in a deck chat serves THAT deck's plan and fails the test:
+- "Accepted lots of sacrifice payoffs" in an aristocrats deck = what that deck needs, NOT a player taste. It goes under that deck in ## Decks.
+- "Pushed for more ramp than suggested", "cut the advisor's 10-card batches to 5", "runs 38 lands in every deck", "rejects rituals because burning a card for one turn feels bad" = how they build anywhere. Player sections.
+- An archetype or theme is a player taste only when they say so in general terms ("I love aristocrats decks") or it shows up across decks with DIFFERENT commanders. Building one sacrifice deck doesn't make them a sacrifice player.
+- A card they accept or love because it fits this commander's engine is a deck note. A card they'd play in anything (a pet card, "I put Sol Ring in everything") is a player note.
+When unsure, file it under the deck - a deck note wrongly kept to its deck costs little; a deck taste wrongly made general skews advice for every other deck.
+
 Sections (omit any with nothing real in it):
-## Play style & power - themes, archetypes and colors they gravitate to, the brackets they usually build for, how they like to win
-## Deckbuilding habits - their structural defaults (land count, ramp/draw/interaction numbers, curve, frameworks they follow) and patterns in what they accept
-## Likes - cards, effects and mechanics they're happy to see, pet cards
-## Dislikes & hard no's - cards, mechanics and styles they reject, WITH their reason when they gave one
+## Play style & power - archetypes, themes and colors they gravitate to ACROSS decks or say they love, the brackets they usually build for, how they like to win
+## Deckbuilding habits - structural defaults that hold across decks (land count, ramp/draw/interaction amounts, curve, frameworks they follow, e.g. "pushes for more ramp than suggested")
+## Likes - cards, effects and mechanics they want regardless of deck, pet cards they play everywhere
+## Dislikes & hard no's - cards, mechanics and styles they reject in general, WITH their reason when they gave one
 ## Constraints - budget, what they own or don't, proxies, their playgroup and meta
 ## How they like to be advised - detail level, batch sizes, questions vs straight proposals, tone
-## Decks - one line per deck they've worked on: commander, the idea, bracket, where it stands
+## Decks - per deck they've worked on: "- <Commander>: the idea, bracket, where it stands", then indented sub-bullets for that deck's own tastes and decisions (what they accepted or rejected and why, packages they chose) - these apply to that deck only
 
 Evidence rules:
 - Strongest signals: what they say about themselves, the reasons they give when accepting or rejecting proposals, their deck brief, and patterns across several decisions. One rejected card is a deck-specific call, not a dislike - generalize only when they give a general reason ("I hate stax") or the pattern repeats.
