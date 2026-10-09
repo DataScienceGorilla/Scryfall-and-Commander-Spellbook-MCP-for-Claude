@@ -2861,6 +2861,14 @@ async def _resolve_card(name: str) -> dict | None:
     return _slim_card(data) if data else None
 
 
+def _produced_mana(c: dict) -> list[str]:
+    """Scryfall's produced_mana (W/U/B/R/G/C); a double-faced card lists it per face."""
+    out = list(c.get("produced_mana") or [])
+    for f in c.get("card_faces") or []:
+        out += [x for x in f.get("produced_mana") or [] if x not in out]
+    return out
+
+
 def _slim_deck_card(c: dict, qty: int) -> dict:
     """Structured card for the deck object: identity, cost, image, flags, concrete roles."""
     tl = c.get("type_line", "")
@@ -2883,6 +2891,8 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         "cmc": c.get("cmc"),
         "mana_cost": c.get("mana_cost", "") or (faces[0].get("mana_cost", "") if faces else ""),
         "color_identity": c.get("color_identity", []),
+        # colors of mana it can make (lands, rocks, dorks) - the deck stats' production side
+        "produced_mana": _produced_mana(c),
         "image": img,
         # back face of a transform / modal double-faced card (adventures and splits have one image)
         "image_back": (faces[1].get("image_uris") or {}).get("normal") if len(faces) > 1 else None,
@@ -3120,11 +3130,21 @@ async def deck_roles(request: Request, _: None = Depends(require_auth)):
     otherwise never reach decks people already have."""
     body = await request.json()
     names = [n for n in (body.get("names") or []) if isinstance(n, str)][:300]
+    # cards saved before deck cards carried produced_mana: look it up for the deck stats
+    mana = [n for n in (body.get("mana") or []) if isinstance(n, str)][:300]
+    produced = {}
+    if mana:
+        await _batch_resolve(mana)
+        for n in mana:
+            full = FULL_CARD_CACHE.get(n.lower()) or await _resolve_full_card(n)
+            if full:
+                produced[n] = _produced_mana(full)
     try:
         import role_index
-        return JSONResponse({"roles": {n: role_index.roles_for(n) for n in names}})
+        roles = {n: role_index.roles_for(n) for n in names}
     except Exception:
-        return JSONResponse({"roles": {}})
+        roles = {}
+    return JSONResponse({"roles": roles, "produced": produced})
 
 
 AUTOCOMPLETE_CACHE: dict[str, list] = {}

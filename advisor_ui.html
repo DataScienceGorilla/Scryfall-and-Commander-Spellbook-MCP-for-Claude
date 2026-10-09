@@ -347,6 +347,48 @@
   .ty-bar { height: 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
   .ty-bar i { display: block; height: 100%; background: var(--accent-2); }
   .ty-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  /* advanced stats + draw odds */
+  .m-W { background: #c9a94a; } .m-U { background: #2f67a8; } .m-B { background: #3b302a; }
+  .m-R { background: #b0402c; } .m-G { background: #3f7a4c; } .m-C { background: #8b8578; }
+  .deck-statspanel.adv, .deck-statspanel.odds { margin-top: 0; }
+  .adv-h { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; display: flex; gap: var(--s2); flex-wrap: wrap; }
+  .adv-h span { text-transform: none; letter-spacing: 0; }
+  .adv-note { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .ax-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px var(--s3); margin: var(--s2) 0 var(--s3); }
+  .ax { display: flex; flex-direction: column; }
+  .ax b { font-size: 17px; font-weight: 600; color: var(--ink-strong); font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .ax span { font-size: 11.5px; color: var(--muted); }
+  .cb { flex: 1 1 240px; min-width: 220px; display: flex; flex-direction: column; gap: 5px; }
+  .cb-row { display: grid; grid-template-columns: 22px 1fr 44px 58px; gap: var(--s2); align-items: center; font-size: 12.5px; }
+  .cb-sym { width: 20px; height: 20px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .cb-bars { display: flex; flex-direction: column; gap: 2px; }
+  .cb-bar { height: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; display: block; }
+  .cb-bar i { display: block; height: 100%; }
+  .cb-bar.src i { opacity: .5; }
+  .cb-k { display: inline-block; width: 14px; height: 6px; border-radius: 2px; background: var(--muted); vertical-align: 1px; }
+  .cb-k.src { opacity: .45; }
+  .cb-n { text-align: right; font-variant-numeric: tabular-nums; }
+  .cb-n small { color: var(--muted); font-size: 10.5px; margin-left: 2px; }
+  .cb-row.short .cb-n:last-child { color: var(--danger-text); font-weight: 600; }
+  .hg { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: var(--s2); margin-top: var(--s2); }
+  .hg-f { display: flex; flex-direction: column; font-size: 11.5px; color: var(--muted); gap: 2px; min-width: 0; }
+  .hg-wide { grid-column: 1 / -1; }
+  .hg-f input, .hg-f select { font: inherit; font-size: 13px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 4px 6px; min-width: 0; width: 100%; }
+  .hg-f input:focus, .hg-f select:focus { outline: none; border-color: var(--accent); }
+  .hg-out { margin-top: var(--s3); }
+  .hg-main { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
+  .hg-main b { font-size: 26px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .hg-main span { font-size: 13px; }
+  .hg-sub { font-size: 12.5px; color: var(--muted); }
+  .hg-turns { display: grid; grid-template-columns: repeat(11, 1fr); gap: 4px; margin-top: var(--s2); height: 96px; }
+  .hg-tc { display: flex; flex-direction: column; align-items: center; height: 100%; min-width: 0; }
+  .hg-tb { flex: 1; width: 100%; display: flex; align-items: flex-end; background: var(--bg); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
+  .hg-tb i { display: block; width: 100%; background: var(--accent-2); }
+  .hg-tc.on .hg-tb i { background: var(--accent); }
+  .hg-tp { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hg-tx { font-size: 11px; margin-top: 2px; }
+  .hg-tc.on .hg-tx { font-weight: 700; color: var(--accent); }
   .in-comps { display: flex; flex-direction: column; gap: 6px; }
   .in-comp { text-align: left; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
@@ -900,13 +942,15 @@ async function refreshDeckRoles() {
   rolesRefreshed.add(d);
   try {
     const r = await fetch('/deck/roles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                           body: JSON.stringify({ names: d.cards.map(c => c.name) }) });
+                                           body: JSON.stringify({ names: d.cards.map(c => c.name),
+                                                                  mana: d.cards.filter(c => !Array.isArray(c.produced_mana)).map(c => c.name) }) });
     if (!r.ok) return;
-    const { roles } = await r.json();
+    const { roles, produced = {} } = await r.json();
     let changed = false;
     for (const c of d.cards) {
       const next = roles[c.name];
       if (next && JSON.stringify(next) !== JSON.stringify(c.roles || [])) { c.roles = next; changed = true; }
+      if (produced[c.name] && !Array.isArray(c.produced_mana)) { c.produced_mana = produced[c.name]; changed = true; }
     }
     if (changed && d === deck) { saveState(); renderDeck(); }
   } catch (e) {}
@@ -1443,6 +1487,186 @@ function statsPanel() {
   return el;
 }
 
+// ---- advanced stats: counts, creature types, color balance (pips asked vs sources made) ----
+const MANA_COLORS = ['W', 'U', 'B', 'R', 'G'];
+const MANA_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', C: 'Colorless' };
+const BASIC_TYPES = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G', Wastes: 'C' };
+// Colors a card makes. Cards saved before deck cards carried produced_mana get it from
+// refreshDeckRoles; until then a land's basic types (or its color identity) stand in.
+function producedColors(c) {
+  if (Array.isArray(c.produced_mana)) return { colors: c.produced_mana, guess: false };
+  if (!c.is_land) return { colors: [], guess: false };
+  const w = typeWords(c);
+  const basics = Object.keys(BASIC_TYPES).filter(t => w.has(t)).map(t => BASIC_TYPES[t]);
+  return { colors: basics.length ? basics : (c.color_identity || []), guess: true };
+}
+// colored pips in a cost: hybrid / phyrexian / {2/W} count once toward each color they name
+function costPips(c) {
+  const pips = {};
+  for (const m of (c.mana_cost || '').matchAll(/\{([^}]+)\}/g))
+    for (const x of MANA_COLORS.concat('C')) if (m[1].includes(x)) pips[x] = (pips[x] || 0) + 1;
+  return pips;
+}
+function advancedStats(comp) {
+  const s = { creatures: 0, noncreature: 0, permanents: 0, legendary: 0, rocks: 0, mvTotal: 0, mvAll: 0, nAll: 0,
+              subtypes: {}, pips: {}, landSrc: {}, otherSrc: {}, guess: false, colorlessLands: 0 };
+  for (const c of deck.cards) {
+    const q = c.qty || 1, t = mainType(c), w = typeWords(c);
+    const front = (c.type_line || '').split(' // ')[0];
+    if (!isCommander(c)) {
+      if (t === 'Creature') s.creatures += q; else if (t !== 'Land') s.noncreature += q;
+      if (!w.has('Instant') && !w.has('Sorcery')) s.permanents += q;
+      if (w.has('Legendary')) s.legendary += q;
+      if (typeof c.cmc === 'number') { s.mvAll += c.cmc * q; s.nAll += q; if (!c.is_land) s.mvTotal += c.cmc * q; }
+      if (w.has('Creature') && front.includes('—'))
+        for (const st of front.split('—')[1].trim().split(/\s+/)) if (st) s.subtypes[st] = (s.subtypes[st] || 0) + q;
+    }
+    // the commander's own cost counts: you cast it too
+    if (!c.is_land) for (const [x, n] of Object.entries(costPips(c))) s.pips[x] = (s.pips[x] || 0) + n * q;
+    const pr = producedColors(c);
+    if (pr.guess) s.guess = true;
+    const src = c.is_land ? s.landSrc : s.otherSrc;
+    for (const x of new Set(pr.colors)) src[x] = (src[x] || 0) + q;
+    if (c.is_land && pr.colors.length && pr.colors.every(x => x === 'C')) s.colorlessLands += q;
+    if (!c.is_land && !isCommander(c) && pr.colors.length) s.rocks += q;
+  }
+  // the colors to balance: the commander's identity, else whatever the cards ask for
+  const want = comp.colors.length ? comp.colors : Object.keys(s.pips).filter(x => x !== 'C');
+  s.colors = MANA_COLORS.filter(x => want.includes(x));
+  return s;
+}
+function advancedPanel(comp) {
+  const s = advancedStats(comp);
+  const el = document.createElement('details'); el.className = 'deck-statspanel adv';
+  el.open = !!prefs.advOpen;
+  el.addEventListener('toggle', () => { prefs.advOpen = el.open; savePrefs(); });
+  const nonland = s.creatures + s.noncreature;
+  const tile = (n, label, tip) => `<div class="ax"${tip ? ` title="${escapeHtml(tip)}"` : ''}><b>${n}</b><span>${label}</span></div>`;
+  const counts = [
+    tile(s.creatures, 'creatures'), tile(s.noncreature, 'noncreature spells'), tile(comp.lands, 'lands'),
+    tile(s.rocks, 'rocks &amp; dorks', 'Nonland cards that make mana (rocks, dorks, rituals, treasure makers)'),
+    tile(s.permanents, 'permanents'), tile(s.legendary, 'legendary'),
+    tile(nonland ? (s.mvTotal / nonland).toFixed(2) : '0', 'avg MV, spells'),
+    tile(s.nAll ? (s.mvAll / s.nAll).toFixed(2) : '0', 'avg MV, with lands'), tile(s.mvTotal, 'total MV'),
+  ].join('');
+  const subs = Object.entries(s.subtypes).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const subMax = subs.length ? subs[0][1] : 1;
+  const subRows = subs.map(([t, n]) =>
+    `<div class="ty-row"><span class="ty-l">${escapeHtml(t)}</span><span class="ty-bar"><i style="width:${Math.round(100 * n / subMax)}%"></i></span><span class="ty-n">${n}</span></div>`).join('');
+  // color balance: each color's share of the colored pips vs its share of the colored sources
+  const pipTot = s.colors.reduce((a, x) => a + (s.pips[x] || 0), 0);
+  const srcTot = s.colors.reduce((a, x) => a + (s.landSrc[x] || 0) + (s.otherSrc[x] || 0), 0);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const balRows = s.colors.map(x => {
+    const p = s.pips[x] || 0, l = s.landSrc[x] || 0, o = s.otherSrc[x] || 0;
+    const pp = pipTot ? 100 * p / pipTot : 0, sp = srcTot ? 100 * (l + o) / srcTot : 0;
+    const short = pipTot > 0 && pp - sp >= 10;
+    const tip = `${MANA_NAMES[x]}: ${plural(p, 'pip')} (${pp.toFixed(0)}% of colored pips) · ${plural(l, 'land')} + ${plural(o, 'other source')} (${sp.toFixed(0)}% of colored sources)`
+      + (short ? '\nUnder-supplied: this color asks for more than its share of sources' : '');
+    return `<div class="cb-row${short ? ' short' : ''}" title="${escapeHtml(tip)}">
+      <span class="cb-sym m-${x}">${x}</span>
+      <div class="cb-bars"><span class="cb-bar pip"><i class="m-${x}" style="width:${pp.toFixed(1)}%"></i></span>
+        <span class="cb-bar src"><i class="m-${x}" style="width:${sp.toFixed(1)}%"></i></span></div>
+      <span class="cb-n">${p}<small>pips</small></span><span class="cb-n">${l}${o ? `<small>+${o}</small>` : ''}<small>srcs</small></span></div>`;
+  }).join('');
+  const notes = [];
+  if (s.colorlessLands) notes.push(`${plural(s.colorlessLands, 'land')} ${s.colorlessLands === 1 ? 'makes' : 'make'} only colorless`);
+  if (s.pips.C) notes.push(`${plural(s.pips.C, '{C} pip')} · ${(s.landSrc.C || 0) + (s.otherSrc.C || 0)} {C} sources`);
+  if (s.guess) notes.push('some lands estimated from their type line until card data loads');
+  el.innerHTML = `<summary>Advanced stats</summary>
+    <div class="ax-grid">${counts}</div>
+    <div class="st-wrap">
+      ${s.colors.length ? `<div class="cb"><div class="adv-h">Color balance <span>cost <i class="cb-k pip"></i> vs production <i class="cb-k src"></i></span></div>${balRows}
+        <div class="adv-note">${escapeHtml(['Sources: lands + other mana makers'].concat(notes).join(' · '))}</div></div>` : ''}
+      ${subs.length ? `<div class="ty"><div class="adv-h">Creature types</div>${subRows}</div>` : ''}
+    </div>`;
+  return el;
+}
+
+// ---- draw odds: hypergeometric - chance to see at least k of the K hits in n cards from N ----
+const lnFact = [0];
+function lnC(n, k) {
+  if (k < 0 || k > n) return -Infinity;
+  for (let i = lnFact.length; i <= n; i++) lnFact[i] = lnFact[i - 1] + Math.log(i);
+  return lnFact[n] - lnFact[k] - lnFact[n - k];
+}
+function hyperPmf(N, K, n, x) { return Math.exp(lnC(K, x) + lnC(N - K, n - x) - lnC(N, n)); }
+function hyperAtLeast(N, K, n, k) {
+  let p = 0;
+  for (let x = Math.max(k, 0); x <= Math.min(K, n); x++) p += hyperPmf(N, K, n, x);
+  return Math.min(1, p);
+}
+// the calculator's inputs survive re-renders; K follows the picked category unless it's "custom"
+const hg = { cat: 'type:Land', K: 1, N: null, n: 7, k: 1 };
+function oddsCategories(comp) {
+  const cats = [], add = (id, label, n) => { if (n > 0) cats.push({ id, label, n }); };
+  const lib = deck.cards.filter(c => !isCommander(c));
+  const count = f => lib.reduce((a, c) => a + (f(c) ? (c.qty || 1) : 0), 0);
+  const typeLabel = { Land: 'Lands', Sorcery: 'Sorceries', Other: 'Other' };
+  for (const t of TYPE_ORDER) add('type:' + t, typeLabel[t] || t + 's', count(c => mainType(c) === t));
+  const groups = {};
+  for (const c of lib) { const g = cardGroup(c); if (g !== 'Lands') groups[g] = (groups[g] || 0) + (c.qty || 1); }
+  DECK_ROLES.concat(Object.keys(groups).filter(g => !DECK_ROLES.includes(g)))
+    .forEach(g => add('role:' + g, 'Role: ' + g, groups[g] || 0));
+  for (const x of MANA_COLORS.filter(x => !comp.colors.length || comp.colors.includes(x))) add('src:' + x, `${MANA_NAMES[x]} sources (lands)`, count(c => c.is_land && producedColors(c).colors.includes(x)));
+  add('rocks', 'Mana rocks & dorks', count(c => !c.is_land && producedColors(c).colors.length));
+  add('gc', 'Game changers', count(c => c.game_changer));
+  cats.push({ id: 'one', label: 'One specific card', n: 1 }, { id: 'custom', label: 'Custom count…', n: null });
+  return cats;
+}
+function oddsPanel(comp) {
+  const el = document.createElement('details'); el.className = 'deck-statspanel odds';
+  el.open = !!prefs.oddsOpen;
+  el.addEventListener('toggle', () => { prefs.oddsOpen = el.open; savePrefs(); });
+  const cats = oddsCategories(comp);
+  if (!cats.some(c => c.id === hg.cat)) hg.cat = cats[0].id;
+  const libSize = Math.max(1, comp.total - (deck.commander || []).filter(n => deckFind(n)).length);
+  const turnOpts = '<option value="0">opening hand</option>'
+    + Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}">turn ${i + 1}</option>`).join('');
+  el.innerHTML = `<summary>Draw odds</summary>
+    <div class="hg">
+      <label class="hg-f hg-wide">Looking for<select class="hg-cat">${cats.map(c =>
+        `<option value="${escapeHtml(c.id)}">${escapeHtml(c.label)}${c.n !== null ? ` (${c.n})` : ''}</option>`).join('')}</select></label>
+      <label class="hg-f">Hits in library<input class="hg-K" type="number" min="0"></label>
+      <label class="hg-f">Library size<input class="hg-N" type="number" min="1" placeholder="${libSize}"></label>
+      <label class="hg-f">Cards seen<input class="hg-n" type="number" min="0"></label>
+      <label class="hg-f">Seen by<select class="hg-t"><option value="">-</option>${turnOpts}</select></label>
+      <label class="hg-f">At least<input class="hg-k" type="number" min="0"></label>
+    </div>
+    <div class="hg-out"></div>
+    <div class="adv-note">By turn T you've seen 7 + T cards - in multiplayer Commander no one skips their first draw. Mulligans and extra draws aren't counted; add them to "cards seen".</div>`;
+  const $q = sel => el.querySelector(sel);
+  const iCat = $q('.hg-cat'), iK = $q('.hg-K'), iN = $q('.hg-N'), iSeen = $q('.hg-n'), iT = $q('.hg-t'), ik = $q('.hg-k');
+  iCat.value = hg.cat;
+  const sync = () => {
+    const cat = cats.find(c => c.id === hg.cat);
+    if (cat && cat.n !== null) hg.K = cat.n;
+    if (document.activeElement !== iK) iK.value = hg.K;
+    if (document.activeElement !== iN) iN.value = hg.N ?? '';
+    if (document.activeElement !== iSeen) iSeen.value = hg.n;
+    if (document.activeElement !== ik) ik.value = hg.k;
+    iT.value = hg.n >= 7 && hg.n <= 19 ? String(hg.n - 7) : '';
+    const N = hg.N || libSize, K = Math.min(hg.K, N), n = Math.min(hg.n, N), k = hg.k;
+    const pAt = hyperAtLeast(N, K, n, k), pEx = hyperPmf(N, K, n, k), pNone = hyperPmf(N, K, n, 0);
+    const pct = p => p >= 0.9995 && p < 1 ? '>99.9%' : p > 0 && p < 0.0005 ? '<0.1%' : (100 * p).toFixed(1) + '%';
+    const turns = Array.from({ length: 11 }, (_, t) => ({ t, p: hyperAtLeast(N, K, Math.min(7 + t, N), k) }));
+    $q('.hg-out').innerHTML = `
+      <div class="hg-main"><b>${pct(pAt)}</b><span>to see at least ${k} of ${K} in ${n} card${n === 1 ? '' : 's'} (library ${N})</span></div>
+      <div class="hg-sub">exactly ${k}: ${pct(pEx)} · none: ${pct(pNone)} · expected ${(n * K / N).toFixed(2)}</div>
+      <div class="hg-turns">${turns.map(({ t, p }) => `<div class="hg-tc${7 + t === n ? ' on' : ''}" title="${t ? 'by turn ' + t : 'opening hand'}: ${7 + t} cards, ${pct(p)}">
+        <span class="hg-tp">${Math.round(100 * p)}</span><span class="hg-tb"><i style="height:${(100 * p).toFixed(1)}%"></i></span><span class="hg-tx">${t ? 'T' + t : '7'}</span></div>`).join('')}</div>`;
+  };
+  const num = (v, d) => { const x = parseInt(v, 10); return Number.isFinite(x) && x >= 0 ? x : d; };
+  iCat.onchange = () => { hg.cat = iCat.value; sync(); };
+  iK.oninput = () => { hg.K = num(iK.value, 0); hg.cat = 'custom'; iCat.value = 'custom'; sync(); };
+  iN.oninput = () => { hg.N = num(iN.value, 0) || null; sync(); };
+  iSeen.oninput = () => { hg.n = num(iSeen.value, 0); sync(); };
+  iT.onchange = () => { if (iT.value !== '') { hg.n = 7 + +iT.value; sync(); } };
+  ik.oninput = () => { hg.k = num(ik.value, 0); sync(); };
+  sync();
+  return el;
+}
+
 // Rulebreaker commanders (Mystery Booster Commander Edition): cards they allow outside the
 // commander's colors aren't flagged off-color. Mirrors rulebreakers.exempt() on the server.
 const RULEBREAKERS = ['Grizzlegom, Hurloon Hero', 'Maular, the Next Evolution', 'Seluma, Light of Aysen', 'The Everforger',
@@ -1634,7 +1858,7 @@ function renderDeck() {
   if (warns.childNodes.length) head.appendChild(warns);
   deckView.appendChild(head);
   if (building()) deckView.appendChild(buildPanel(comp));
-  if (deck.cards.length) deckView.appendChild(statsPanel());
+  if (deck.cards.length) deckView.append(statsPanel(), advancedPanel(comp), oddsPanel(comp));
   refreshCompanion();
 
   // group -> cards, in taxonomy order (plus any custom role names at the end)
