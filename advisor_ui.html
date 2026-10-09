@@ -389,6 +389,11 @@
   .hg-tp { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .hg-tx { font-size: 11px; margin-top: 2px; }
   .hg-tc.on .hg-tx { font-weight: 700; color: var(--accent); }
+  .gf-turns { grid-template-columns: repeat(10, 1fr); height: 84px; margin-bottom: var(--s3); }
+  .gf-d { font-style: normal; font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 4px; }
+  .gf-d.good { color: var(--success-text); }
+  .gf-d.bad { color: var(--danger-text); }
+  .gf-after { font-size: 12px; color: var(--accent); margin-top: var(--s2); }
   .in-comps { display: flex; flex-direction: column; gap: 6px; }
   .in-comp { text-align: left; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
@@ -943,14 +948,16 @@ async function refreshDeckRoles() {
   try {
     const r = await fetch('/deck/roles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                            body: JSON.stringify({ names: d.cards.map(c => c.name),
-                                                                  mana: d.cards.filter(c => !Array.isArray(c.produced_mana)).map(c => c.name) }) });
+                                                                  mana: d.cards.filter(c => !Array.isArray(c.produced_mana)).map(c => c.name),
+                                                                  sim: d.cards.filter(c => !c.sim).map(c => c.name) }) });
     if (!r.ok) return;
-    const { roles, produced = {} } = await r.json();
+    const { roles, produced = {}, sims = {} } = await r.json();
     let changed = false;
     for (const c of d.cards) {
       const next = roles[c.name];
       if (next && JSON.stringify(next) !== JSON.stringify(c.roles || [])) { c.roles = next; changed = true; }
       if (produced[c.name] && !Array.isArray(c.produced_mana)) { c.produced_mana = produced[c.name]; changed = true; }
+      if (sims[c.name] && !c.sim) { c.sim = sims[c.name]; changed = true; }
     }
     if (changed && d === deck) { saveState(); renderDeck(); }
   } catch (e) {}
@@ -1667,6 +1674,338 @@ function oddsPanel(comp) {
   return el;
 }
 
+// ---- goldfish report: a statistical playtest, no AI. Thousands of seeded games of the deck's
+// first ten turns, played by a fixed, simple pilot: keep 3-5 landers (2 with cheap plays; the
+// first mulligan is free), draw every turn, play the land that lets you spend the most (a tapped
+// one when it costs nothing), then cast ramp, the commander, and the biggest spells you can pay
+// for - colors matched pip by pip. Card behavior comes from each card's sim profile (server:
+// _sim_profile). Not modeled: card draw, cost reducers, rituals/treasure, extra land drops.
+const GF_GAMES = 4000, GF_TURNS = 10;
+function gfRng(seed) {  // mulberry32: same seed, same games - so before/after differ by the cards, not the luck
+  return () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gfCost(c) {
+  let generic = 0; const pips = [];
+  for (const m of (c.mana_cost || '').split(' // ')[0].matchAll(/\{([^}]+)\}/g)) {
+    const s = m[1];
+    if (/^\d+$/.test(s)) generic += +s;
+    else if (s === 'X' || s === 'Y' || s.includes('P')) continue;  // X as 0; phyrexian paid with life
+    else {
+      const cols = s.split('/').filter(x => 'WUBRGC'.includes(x)).join('');  // {2/W} -> W, {W/U} -> either
+      if (cols) pips.push(cols); else generic += 1;  // {S} and friends
+    }
+  }
+  return { generic, pips };
+}
+function gfCard(c, ident) {
+  const sim = c.sim || {};
+  const card = { name: c.name, land: !!c.is_land, cost: gfCost(c) };
+  card.mv = card.cost.generic + card.cost.pips.length;
+  const cols = producedColors(c).colors;
+  if (card.land) {
+    const made = sim.fetch && !cols.length ? (ident.length ? ident : ['C']) : cols;
+    card.units = made.join('');
+    card.amt = made.length ? (sim.mana || 1) : 0;
+    card.tapped = !!sim.tapped;
+    card.basic = /\bBasic\b/.test(c.type_line || '');
+  } else {
+    // saved before cards carried a sim profile: a mana-making artifact/creature counts as a 1-mana rock
+    const mana = c.sim ? sim.mana : (cols.length && /Artifact|Creature/.test(c.type_line || '') ? 1 : 0);
+    if (mana && cols.length) card.src = { units: cols.join(''), amt: mana, dork: c.sim ? !!sim.dork : /Creature/.test(c.type_line || '') };
+    if (sim.ramp_bf || sim.ramp_hand) card.ramp = { bf: sim.ramp_bf || 0, hand: sim.ramp_hand || 0, tapped: !!sim.ramp_tapped };
+  }
+  return card;
+}
+// Pay a cost from a pool of mana units (each a string of the colors it can be, least flexible
+// first): match colored pips to units (augmenting paths), then generic from the least flexible
+// leftovers. Returns the pool indices spent, or null.
+function gfMatch(cost, pool) {
+  const need = cost.pips.length;
+  if (pool.length < need + cost.generic) return null;
+  const owner = new Array(pool.length).fill(-1);
+  const fits = (p, u) => { for (const x of cost.pips[p]) if (pool[u].includes(x)) return true; return false; };
+  const place = (p, seen) => {
+    for (let u = 0; u < pool.length; u++) {
+      if (seen[u] || !fits(p, u)) continue;
+      seen[u] = 1;
+      if (owner[u] < 0 || place(owner[u], seen)) { owner[u] = p; return true; }
+    }
+    return false;
+  };
+  for (let p = 0; p < need; p++) if (!place(p, new Uint8Array(pool.length))) return null;
+  const used = [];
+  for (let u = 0; u < pool.length; u++) if (owner[u] >= 0) used.push(u);
+  for (let u = 0, g = cost.generic; u < pool.length && g > 0; u++) if (owner[u] < 0) { used.push(u); g--; }
+  return used;
+}
+function gfAddUnits(pool, units, n) {
+  for (let i = 0; i < n; i++) pool.push(units);
+  pool.sort((a, b) => a.length - b.length);
+}
+// One turn's spells. real=false only measures (no library, no battlefield) and scores the plan:
+// casting the commander outranks any amount of mana spent; real=true plays it and returns mana spent.
+// order 'ramp' casts mana first; 'cmdr' casts the commander first - the pilot keeps the better.
+function gfCasts(g, pool, order, real) {
+  pool = pool.slice();
+  const hand = g.hand, done = new Set(), cmdrDone = new Set();
+  let spent = 0;
+  const pick = () => {
+    const cmdr = g.cmdrs.findIndex((c, i) => !g.cmdrCast[i] && !cmdrDone.has(i) && gfMatch(c.cost, pool));
+    if (order === 'cmdr' && cmdr >= 0) return { cmdr };
+    let best = -1;
+    hand.forEach((c, i) => {
+      if (c.land || done.has(i) || !(c.src || c.ramp) || !gfMatch(c.cost, pool)) return;
+      if (best < 0 || c.mv < hand[best].mv) best = i;
+    });
+    if (best >= 0) return { i: best };
+    if (cmdr >= 0) return { cmdr };
+    hand.forEach((c, i) => {
+      if (c.land || done.has(i) || !gfMatch(c.cost, pool)) return;
+      if (best < 0 || c.mv > hand[best].mv) best = i;
+    });
+    return best >= 0 ? { i: best } : null;
+  };
+  for (let next; (next = pick());) {
+    const card = next.cmdr !== undefined ? g.cmdrs[next.cmdr] : hand[next.i];
+    const used = new Set(gfMatch(card.cost, pool));
+    pool = pool.filter((_, u) => !used.has(u));
+    spent += used.size;
+    if (next.cmdr !== undefined) { cmdrDone.add(next.cmdr); if (real) g.cmdrCast[next.cmdr] = g.turn; continue; }
+    done.add(next.i);
+    if (card.src) {
+      if (!card.src.dork) gfAddUnits(pool, card.src.units, card.src.amt);  // rocks tap the turn they land
+      if (real) g.perms.push({ units: card.src.units, amt: card.src.amt, ready: !card.src.dork });
+    }
+    if (card.ramp) {
+      for (let k = 0; k < card.ramp.bf + card.ramp.hand; k++) {
+        const toHand = k >= card.ramp.bf;
+        if (!real) { if (!toHand && !card.ramp.tapped) gfAddUnits(pool, g.identUnit, 1); continue; }
+        const land = gfFetchBasic(g);
+        if (!land) break;
+        if (toHand) hand.push(land);
+        else {
+          g.lands.push({ units: land.units, amt: land.amt, ready: !card.ramp.tapped });
+          if (!card.ramp.tapped) gfAddUnits(pool, land.units, land.amt);
+        }
+      }
+    }
+  }
+  if (real) {
+    // had enough colored mana for something, just not its colors (spare colorless from a Sol Ring doesn't count)
+    const colored = pool.filter(u => u !== 'C').length;
+    const left = hand.filter((c, i) => !c.land && !done.has(i)).concat(g.cmdrs.filter((c, i) => !g.cmdrCast[i]));
+    g.colorStuckNow = left.some(c => c.mv <= colored && !gfMatch(c.cost, pool));
+    g.hand = hand.filter((_, i) => !done.has(i));
+    return spent;
+  }
+  return spent + 100 * cmdrDone.size;
+}
+// a ramp spell's land: a basic of the color the deck has least of, else any land with a basic type
+function gfFetchBasic(g) {
+  let best = -1, bestHave = Infinity;
+  g.lib.forEach((c, i) => {
+    if (!c.land || !c.basic) return;
+    const have = g.lands.filter(l => l.units.includes(c.units)).length;
+    if (have < bestHave) { best = i; bestHave = have; }
+  });
+  return best >= 0 ? g.lib.splice(best, 1)[0] : null;
+}
+function gfKeep(hand) {
+  const lands = hand.filter(c => c.land).length;
+  if (lands !== 2) return lands >= 3 && lands <= 5;
+  // a 2-lander is a keep with cheap ramp or two cheap plays (everyone draws on turn 1 in multiplayer)
+  const cheap = hand.filter(c => !c.land && c.mv <= 2);
+  return cheap.some(c => c.src || c.ramp) || cheap.length >= 2;
+}
+function gfGame(lib0, cmdrs, identUnit, seed, m) {
+  const rnd = gfRng(seed);
+  const lib = lib0.slice();
+  const shuffle = () => { for (let i = lib.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [lib[i], lib[j]] = [lib[j], lib[i]]; } };
+  // London mulligan, first one free (multiplayer Commander); keep whatever the fourth hand is
+  let hand, mulls = 0;
+  for (;; mulls++) {
+    shuffle();
+    hand = lib.splice(0, 7);
+    if (gfKeep(hand) || mulls === 3) break;
+    lib.push(...hand);
+  }
+  for (let b = Math.max(0, mulls - 1); b > 0; b--) {
+    const lands = hand.filter(c => c.land).length;
+    let i = -1;
+    hand.forEach((c, k) => {
+      if (lands > 4 ? c.land : !c.land) if (i < 0 || (!c.land && c.mv > hand[i].mv) || (c.land && c.tapped)) i = k;
+    });
+    if (i < 0) i = 0;
+    lib.push(hand.splice(i, 1)[0]);
+  }
+  const g = { lib, hand, cmdrs, cmdrCast: cmdrs.map(() => 0), lands: [], perms: [], identUnit, turn: 0 };
+  let landsSeen = hand.filter(c => c.land).length, stuck = false, dead = 0, spent16 = 0, avail16 = 0;
+  for (let t = 1; t <= GF_TURNS; t++) {
+    g.turn = t;
+    if (lib.length) { const c = lib.shift(); g.hand.push(c); if (t <= 6 && c.land) landsSeen++; }
+    for (const s of g.lands.concat(g.perms)) s.ready = true;
+    const pool = [];
+    for (const s of g.lands.concat(g.perms)) if (s.ready) gfAddUnits(pool, s.units, s.amt);
+    // the land drop that spends the most this turn; a tapped land when it costs nothing
+    let best = null;
+    const tried = new Set();
+    g.hand.forEach((c, i) => {
+      if (!c.land) return;
+      const key = c.units + '|' + c.amt + '|' + c.tapped;
+      if (tried.has(key)) return;
+      tried.add(key);
+      const p = pool.slice();
+      if (!c.tapped) gfAddUnits(p, c.units, c.amt);
+      const plan = Math.max(gfCasts(g, p, 'ramp', false), gfCasts(g, p, 'cmdr', false));
+      const newColor = [...c.units].some(x => !pool.some(u => u.includes(x))) ? 1 : 0;
+      const score = plan * 100 + (c.tapped ? 10 : 0) + newColor * 5;
+      if (!best || score > best.score) best = { i, score };
+    });
+    if (best) {
+      const c = g.hand.splice(best.i, 1)[0];
+      g.lands.push({ units: c.units, amt: c.amt, ready: !c.tapped });
+      if (!c.tapped) gfAddUnits(pool, c.units, c.amt);
+    }
+    const avail = pool.length;
+    const order = gfCasts(g, pool, 'cmdr', false) >= gfCasts(g, pool, 'ramp', false) ? 'cmdr' : 'ramp';
+    const spent = gfCasts(g, pool, order, true);
+    m.avail[t] += avail;
+    if (avail >= 4 && t <= 3) m.fourByThree.add(seed);
+    if (t <= 6) { spent16 += spent; avail16 += avail; }
+    if (t >= 2 && t <= 6 && avail > 0 && !spent) dead++;
+    if (t >= 2 && t <= 5 && g.colorStuckNow && spent < avail) stuck = true;
+    if (t === 4 && g.lands.length < 3) m.screw++;
+    if (g.cmdrCast[0]) m.cmdrBy[t]++;
+  }
+  m.games++;
+  if (mulls) m.mulls++;
+  if (landsSeen >= 8) m.flood++;
+  if (stuck) m.stuck++;
+  m.dead += dead; m.spent += spent16; m.availEarly += avail16;
+  if (cmdrs.length) {
+    const ct = g.cmdrCast[0];
+    if (ct && ct <= Math.max(1, cmdrs[0].mv)) m.onCurve++;
+    if (ct) { m.cmdrTurns += ct; m.cmdrCastN++; }
+  }
+}
+function gfSimulate(cards, cmdrNames, ident) {
+  const isCmdr = c => cmdrNames.some(n => lc(n) === lc(c.name));
+  const cmdrs = cards.filter(isCmdr).map(c => gfCard(c, ident));
+  const lib = [];
+  for (const c of cards) if (!isCmdr(c)) { const gc = gfCard(c, ident); for (let q = c.qty || 1; q > 0; q--) lib.push(gc); }
+  const m = { games: 0, avail: new Array(GF_TURNS + 1).fill(0), cmdrBy: new Array(GF_TURNS + 1).fill(0), fourByThree: new Set(),
+              screw: 0, flood: 0, stuck: 0, dead: 0, spent: 0, availEarly: 0, mulls: 0, onCurve: 0, cmdrTurns: 0, cmdrCastN: 0 };
+  const identUnit = ident.length ? ident.join('') : 'C';
+  for (let i = 0; i < GF_GAMES; i++) gfGame(lib, cmdrs, identUnit, i * 7919 + 1, m);
+  const n = m.games || 1;
+  return {
+    hasCmdr: cmdrs.length > 0, cmdrName: cmdrs.length ? cmdrs[0].name : '', cmdrMv: cmdrs.length ? cmdrs[0].mv : 0,
+    onCurve: m.onCurve / n, cmdrAvg: m.cmdrCastN ? m.cmdrTurns / m.cmdrCastN : 0,
+    fourByThree: m.fourByThree.size / n, screw: m.screw / n, flood: m.flood / n, stuck: m.stuck / n,
+    dead: m.dead / n, used: m.availEarly ? m.spent / m.availEarly : 0, mulls: m.mulls / n,
+    avail: m.avail.slice(1).map(x => x / n), cmdrBy: m.cmdrBy.slice(1).map(x => x / n),
+  };
+}
+
+// the latest reply's undecided suggestions, applied to a copy of the deck
+const gfAddCache = new Map();  // name -> deck card (older proposals carry only a slim addCard)
+async function gfPendingDeck() {
+  const entry = lastAssistantEntry();
+  const pending = ((entry && entry.proposals) || []).filter(p => p.status === 'pending');
+  if (!pending.length) return null;
+  const cards = deck.cards.map(c => Object.assign({}, c));
+  let cmdrs = (deck.commander || []).slice();
+  for (const p of pending) {
+    if (p.cut) {
+      const c = cards.find(x => lc(x.name) === lc(p.cut));
+      if (c && (c.qty || 1) > 1) c.qty -= 1;
+      else if (c) { cards.splice(cards.indexOf(c), 1); cmdrs = cmdrs.filter(n => lc(n) !== lc(c.name)); }
+    }
+    if (p.add) {
+      let add = p.addCard && p.addCard.sim ? p.addCard : gfAddCache.get(lc(p.add));
+      if (!add) {
+        try {
+          const r = await fetch('/deck/card?name=' + encodeURIComponent(p.add));
+          if (r.ok) { add = await r.json(); gfAddCache.set(lc(p.add), add); }
+        } catch (e) {}
+      }
+      if (!add) continue;
+      const have = cards.find(x => lc(x.name) === lc(add.name));
+      if (have) have.qty = (have.qty || 1) + (p.qty || 1);
+      else cards.push(Object.assign({}, add, { qty: p.qty || 1 }));
+    }
+  }
+  return { cards, cmdrs, n: pending.length };
+}
+let gfResult = null;  // { key, base, after, n } - reused across re-renders until the deck changes
+function gfKey() {
+  const entry = lastAssistantEntry();
+  const pending = ((entry && entry.proposals) || []).filter(p => p.status === 'pending').map(p => [p.cut, p.add, p.qty]);
+  return JSON.stringify([deck.cards.map(c => [c.name, c.qty || 1, !!c.sim, !!c.produced_mana]), deck.commander || [], pending]);
+}
+function goldfishPanel(comp) {
+  const el = document.createElement('details'); el.className = 'deck-statspanel odds goldfish';
+  el.open = !!prefs.goldfishOpen;
+  el.innerHTML = '<summary>Goldfish report</summary><div class="gf-body"></div>';
+  const run = async () => {
+    if (!el.open) return;
+    const body = el.querySelector('.gf-body');
+    const key = gfKey();
+    if (gfResult && gfResult.key === key) { body.innerHTML = gfHtml(gfResult); return; }
+    body.innerHTML = '<div class="adv-note">Simulating ' + GF_GAMES.toLocaleString() + ' games…</div>';
+    const pend = await gfPendingDeck();
+    await new Promise(r => setTimeout(r, 20));  // let "Simulating" paint
+    const ident = comp.colors;
+    const res = { key, n: pend ? pend.n : 0,
+                  base: gfSimulate(deck.cards, deck.commander || [], ident),
+                  after: pend ? gfSimulate(pend.cards, pend.cmdrs, ident) : null };
+    gfResult = res;
+    if (el.isConnected && gfKey() === key) body.innerHTML = gfHtml(res);
+  };
+  el.addEventListener('toggle', () => { prefs.goldfishOpen = el.open; savePrefs(); run(); });
+  if (el.open) setTimeout(run, 0);
+  return el;
+}
+function gfHtml({ base: b, after: a, n }) {
+  const pct = x => Math.round(100 * x) + '%';
+  // [value, label, tip, after value, higher is better?]
+  const tiles = [];
+  if (b.hasCmdr) tiles.push(
+    [pct(b.onCurve), 'commander on curve', `${b.cmdrName} cast by turn ${Math.max(1, b.cmdrMv)} (its mana value)`, a && pct(a.onCurve), a && a.onCurve - b.onCurve, true],
+    [b.cmdrAvg ? 'T' + b.cmdrAvg.toFixed(1) : '-', 'avg commander turn', 'Average turn the commander is first cast, in games where it is cast by turn ' + GF_TURNS,
+     a && (a.cmdrAvg ? 'T' + a.cmdrAvg.toFixed(1) : '-'), a && b.cmdrAvg - a.cmdrAvg, true]);
+  tiles.push(
+    [pct(b.fourByThree), '4 mana by turn 3', 'Games with 4+ mana available on turn 3 or earlier - how often ramp puts you ahead', a && pct(a.fourByThree), a && a.fourByThree - b.fourByThree, true],
+    [pct(b.screw), 'mana screw', 'Fewer than 3 lands in play on turn 4', a && pct(a.screw), a && a.screw - b.screw, false],
+    [pct(b.flood), 'flood', '8 or more lands among your first 13 cards (by turn 6)', a && pct(a.flood), a && a.flood - b.flood, false],
+    [pct(b.stuck), 'color-stuck', 'Games where, on turns 2-5, a spell was affordable by the amount of colored mana but not by its colors', a && pct(a.stuck), a && a.stuck - b.stuck, false],
+    [b.dead.toFixed(2), 'dead turns', 'Average turns 2-6 with mana up and nothing cast', a && a.dead.toFixed(2), a && a.dead - b.dead, false],
+    [pct(b.used), 'mana used', 'Share of the mana available on turns 1-6 that went into spells', a && pct(a.used), a && a.used - b.used, true],
+    [pct(b.mulls), 'mulligans', 'Games that mulliganed at least once: the pilot keeps 3-5 lands, or 2 with cheap ramp or two plays of 2 mana or less (first mulligan free)', a && pct(a.mulls), a && a.mulls - b.mulls, false]);
+  const tileHtml = tiles.map(([v, label, tip, av, d, up]) => {
+    // differences under ~1.5 points (or 0.05 turns) are simulation noise
+    const noise = label === 'dead turns' || label === 'avg commander turn' ? 0.05 : 0.015;
+    const cls = av === undefined || av === null || Math.abs(d) < noise ? '' : (d > 0) === up ? ' good' : ' bad';
+    return `<div class="ax" title="${escapeHtml(tip)}"><b>${v}${av !== undefined && av !== null ? `<em class="gf-d${cls}">→ ${av}</em>` : ''}</b><span>${label}</span></div>`;
+  }).join('');
+  const maxMana = Math.max(1, ...b.avail, ...(a ? a.avail : []));
+  const col = (vals, fmt, max, title) => vals.map((v, i) => `<div class="hg-tc" title="${escapeHtml(title(i + 1, v))}">
+      <span class="hg-tp">${fmt(v)}</span><span class="hg-tb"><i style="height:${(100 * v / max).toFixed(1)}%"></i></span><span class="hg-tx">T${i + 1}</span></div>`).join('');
+  const show = a || b;
+  return `${a ? `<div class="gf-after">→ with the ${n} pending suggestion${n === 1 ? '' : 's'} applied (charts too)</div>` : ''}
+    <div class="ax-grid">${tileHtml}</div>
+    <div class="adv-h">Mana available by turn <span>average</span></div>
+    <div class="hg-turns gf-turns">${col(show.avail, v => v.toFixed(1), maxMana, (t, v) => `turn ${t}: ${v.toFixed(2)} mana on average`)}</div>
+    ${b.hasCmdr ? `<div class="adv-h">Commander cast by turn</div>
+    <div class="hg-turns gf-turns">${col(show.cmdrBy, v => Math.round(100 * v), 1, (t, v) => `by turn ${t}: ${pct(v)} of games`)}</div>` : ''}
+    <div class="adv-note">${GF_GAMES.toLocaleString()} simulated games, same shuffles every run. The pilot keeps 3-5 landers, or 2 with cheap plays (first mulligan free), draws every turn, plays its best land, then casts ramp, the commander and the biggest spells it can pay for, colors included. It doesn't model card draw, cost reducers, rituals, treasure or extra land drops - read it for the mana, not the win.</div>`;
+}
+
 // Rulebreaker commanders (Mystery Booster Commander Edition): cards they allow outside the
 // commander's colors aren't flagged off-color. Mirrors rulebreakers.exempt() on the server.
 const RULEBREAKERS = ['Grizzlegom, Hurloon Hero', 'Maular, the Next Evolution', 'Seluma, Light of Aysen', 'The Everforger',
@@ -1860,7 +2199,7 @@ function renderDeck() {
   if (warns.childNodes.length) head.appendChild(warns);
   deckView.appendChild(head);
   if (building()) deckView.appendChild(buildPanel(comp));
-  if (deck.cards.length) deckView.append(statsPanel(), advancedPanel(comp), oddsPanel(comp));
+  if (deck.cards.length) deckView.append(statsPanel(), advancedPanel(comp), oddsPanel(comp), goldfishPanel(comp));
   refreshCompanion();
 
   // group -> cards, in taxonomy order (plus any custom role names at the end)
@@ -3630,6 +3969,7 @@ async function send(force) {
         if (interrupted && !bubble) bubble = addMessage('assistant', '');
         if (!bubble || !bubble.isConnected) loadActiveIntoUI();
         else renderTurnExtras(entry, bubble);
+        if (turnProposals.length && prefs.goldfishOpen) renderDeck();  // goldfish report: before/after the new suggestions
         scrollToBottom();  // the tray just took space from the chat - keep the reply in view
       }
     }

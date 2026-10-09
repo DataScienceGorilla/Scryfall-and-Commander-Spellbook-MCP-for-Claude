@@ -1259,7 +1259,8 @@ async def _validate_proposals(changes: list, deck: dict | None, identity: str | 
                     if q > 1 and slim.get("any_qty"):
                         item["qty"] = min(q, 40)
                     item["addCard"] = {k: slim.get(k) for k in ("name", "image", "image_back", "type_line", "mana_cost",
-                                                                "color_identity", "game_changer", "scryfall_uri")}
+                                                                "color_identity", "game_changer", "scryfall_uri",
+                                                                "cmc", "is_land", "produced_mana", "sim")}
         if problem:
             refused.append(problem)
         else:
@@ -2869,6 +2870,64 @@ def _produced_mana(c: dict) -> list[str]:
     return out
 
 
+_WORD_N = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+_MANA_ABILITY = re.compile(r"((?:\{[^}]+\}|[A-Za-z ]+?)(?:,\s*(?:\{[^}]+\}|[A-Za-z ]+?))*):\s*Add ([^.]+)")
+_ETB_TAPPED = re.compile(r"enters(?: the battlefield)? tapped", re.I)
+_LAND_CARD = r"(?:land|forest|plains|island|swamp|mountain) cards?"
+
+
+def _sim_profile(c: dict) -> dict:
+    """What the goldfish simulator needs from a card's rules text (front face), sparse:
+    tapped - a land that always enters tapped (conditional ones like check/shock lands count as untapped)
+    fetch - a land that fetches another land (makes any of the deck's colors)
+    mana / dork - net mana a permanent's {T} ability makes each turn (Sol Ring 2, a signet 1); dork = a creature
+    ramp_bf / ramp_hand / ramp_tapped - lands a spell or ETB puts onto the battlefield / into your hand."""
+    faces = c.get("card_faces") or []
+    front = faces[0] if faces else c
+    tl = (front.get("type_line") or c.get("type_line") or "")
+    text = front.get("oracle_text") or c.get("oracle_text") or ""
+    out: dict = {}
+    is_land = "Land" in tl and "Creature" not in tl
+    for sent in re.split(r"(?<=\.)\s|\n", text):
+        m = _ETB_TAPPED.search(sent)
+        if is_land and m and not re.search(r"unless|if you don't|if you control|you may", sent, re.I):
+            out["tapped"] = True
+    low = text.lower()
+    if is_land and re.search(r"search your library for [^.]*" + _LAND_CARD, low):
+        out["fetch"] = True
+        if "battlefield tapped" in low:
+            out["tapped"] = True
+    best = 0
+    # reminder text is someone else's ability (a Treasure's "Sacrifice: Add one mana")
+    for cost, add in _MANA_ABILITY.findall(re.sub(r"\([^)]*\)", "", text)):
+        if "{T}" not in cost or "Sacrifice" in cost:
+            continue
+        # "Add {W}, {U}, or {B}" is a choice of one; "Add {U}{B}" is both
+        n = max(len(re.findall(r"\{[WUBRGC]\}", alt)) for alt in re.split(r",? or |, ", add))
+        if not n:
+            w = re.search(r"\b(one|two|three|four|five) mana", add)
+            n = _WORD_N[w.group(1)] if w else 1
+        generic = sum(int(x) for x in re.findall(r"\{(\d+)\}", cost))
+        best = max(best, n - generic)
+    if best > 0 and (is_land and best > 1 or not is_land):
+        out["mana"] = best
+        if not is_land and "Creature" in tl:
+            out["dork"] = True
+    # ramp spells and ETB fetchers (Cultivate, Rampant Growth, Wood Elves) - not activated ones (Wayfarer's Bauble)
+    if not is_land and "search your library for" in low and "onto the battlefield" in low:
+        clause = low[low.index("search your library for"):]
+        lead = low[:low.index("search your library for")].split(".")[-1]
+        if re.search(_LAND_CARD, clause.split(".")[0]) and ":" not in lead:
+            two = re.search(r"(up to )?two [^.]*?" + _LAND_CARD, clause.split(".")[0])
+            if two and ("the other into your hand" in clause or "one onto the battlefield" in clause):
+                out["ramp_bf"], out["ramp_hand"] = 1, 1
+            else:
+                out["ramp_bf"] = 2 if two else 1
+            if "onto the battlefield tapped" in clause:
+                out["ramp_tapped"] = True
+    return out
+
+
 def _slim_deck_card(c: dict, qty: int) -> dict:
     """Structured card for the deck object: identity, cost, image, flags, concrete roles."""
     tl = c.get("type_line", "")
@@ -2893,6 +2952,7 @@ def _slim_deck_card(c: dict, qty: int) -> dict:
         "color_identity": c.get("color_identity", []),
         # colors of mana it can make (lands, rocks, dorks) - the deck stats' production side
         "produced_mana": _produced_mana(c),
+        "sim": _sim_profile(c),  # what the goldfish report needs from the rules text
         "image": img,
         # back face of a transform / modal double-faced card (adventures and splits have one image)
         "image_back": (faces[1].get("image_uris") or {}).get("normal") if len(faces) > 1 else None,
@@ -3132,19 +3192,24 @@ async def deck_roles(request: Request, _: None = Depends(require_auth)):
     names = [n for n in (body.get("names") or []) if isinstance(n, str)][:300]
     # cards saved before deck cards carried produced_mana: look it up for the deck stats
     mana = [n for n in (body.get("mana") or []) if isinstance(n, str)][:300]
-    produced = {}
-    if mana:
-        await _batch_resolve(mana)
-        for n in mana:
+    # and cards saved before they carried a goldfish sim profile
+    sim = [n for n in (body.get("sim") or []) if isinstance(n, str)][:300]
+    produced, sims = {}, {}
+    if mana or sim:
+        await _batch_resolve(mana + sim)
+        for n in dict.fromkeys(mana + sim):
             full = FULL_CARD_CACHE.get(n.lower()) or await _resolve_full_card(n)
             if full:
-                produced[n] = _produced_mana(full)
+                if n in mana:
+                    produced[n] = _produced_mana(full)
+                if n in sim:
+                    sims[n] = _sim_profile(full)
     try:
         import role_index
         roles = {n: role_index.roles_for(n) for n in names}
     except Exception:
         roles = {}
-    return JSONResponse({"roles": roles, "produced": produced})
+    return JSONResponse({"roles": roles, "produced": produced, "sims": sims})
 
 
 @app.post("/deck/ids")
