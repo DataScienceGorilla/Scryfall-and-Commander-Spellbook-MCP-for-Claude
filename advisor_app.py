@@ -654,8 +654,12 @@ zero-sum at 100 cards. Recommend cuts, not just adds.
   what's popular with this shell, not what fixes THIS deck's failure modes - pick the ones that
   serve the engine map and the gaps you found, respect the bracket/budget/brief, verify their text,
   and still cover needs it misses with scryfall_search_cards. Its picks skew toward staples, so
-  the intentional-omission rule above applies. When a pick came from it, a short "(Recommander)"
-  credit is enough.
+  the intentional-omission rule above applies.
+  CREDIT IT EVERY TIME (its terms require attribution): any card you recommend that appeared in
+  its results gets "(Recommander)" right after the card name in your reply, and the propose_changes
+  reason for that card starts with "Recommander:". Once per card is enough; cards you found
+  yourself get no tag. This is a sourcing tag, not tool narration, so the no-narration rule doesn't
+  block it.
 - scryfall_search_cards: find candidate cards by criteria (use id: for color identity!).
   e.g. id:mardu t:creature o:"whenever" cmc<=3
 - scryfall_get_card: verify EXACT oracle text before you rely on how a card works.
@@ -1058,6 +1062,31 @@ DECK_REF = "@deck"  # the model passes this as decklist_text; the server substit
 DECKLIST_TOOLS = {"scryfall_get_decklist_details", "spellbook_find_combos_in_decklist",
                   "spellbook_estimate_bracket", "recommander_suggest"}
 _DECK_DETAILS_CACHE: dict[str, str] = {}  # deck text -> scryfall_get_decklist_details output
+# session id -> lower(name) -> rank of every card recommander_suggest returned in that chat, so the
+# activity log can say which proposed adds Recommander had ranked (its hit rate).
+_RECOMMANDER_SEEN: dict[str, dict[str, int]] = {}
+_RECOMMANDER_LINE_RE = re.compile(r"^\d\.\d\d \*\*(.+?)\*\*", re.M)
+
+
+def _note_recommander(session_id: str, result: str) -> None:
+    names = _RECOMMANDER_LINE_RE.findall(str(result))
+    log_activity(f"RECOMMANDER sid={session_id[:8]} returned={len(names)}"
+                 + (f" top: {', '.join(names[:12])}" if names else f" ({' '.join(str(result).split())[:160]})"))
+    if len(_RECOMMANDER_SEEN) >= 500 and session_id not in _RECOMMANDER_SEEN:
+        _RECOMMANDER_SEEN.pop(next(iter(_RECOMMANDER_SEEN)))
+    seen = _RECOMMANDER_SEEN.setdefault(session_id, {})
+    for i, n in enumerate(names, 1):
+        for k in (n.lower(), n.split(" // ")[0].lower()):
+            seen.setdefault(k, i)
+
+
+def _recommander_hits(session_id: str, adds: list[str]) -> str:
+    """' recommander=a/b (Name #rank, ...)' for the PROPOSE log line, or '' if no call this chat."""
+    seen = _RECOMMANDER_SEEN.get(session_id)
+    if not seen or not adds:
+        return ""
+    hits = [f"{a} #{seen[a.lower()]}" for a in adds if a.lower() in seen]
+    return f" recommander={len(hits)}/{len(adds)}" + (f" ({', '.join(hits)})" if hits else "")
 
 # --- Interactive tools (workbench phase 3): proposals + questions the player decides on ---
 # These don't fetch data; they put UI in front of the player. The server validates each
@@ -1715,7 +1744,8 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                              if shown else "Nothing was shown.")
                             + (f" REFUSED (not shown): {'; '.join(refused)}. Fix or drop these." if refused else ""))
                         log_activity(f"PROPOSE sid={session_id[:8]} shown={len(shown)} refused={len(refused)}"
-                                     + (f" ({'; '.join(refused)})" if refused else ""))
+                                     + (f" ({'; '.join(refused)})" if refused else "")
+                                     + _recommander_hits(session_id, [i["add"] for i in shown if i.get("add")]))
                     elif block.name == "ask_player":
                         inp = block.input or {}
                         opts = [" ".join(str(o).split())[:120] for o in (inp.get("options") or [])][:6]
@@ -1751,9 +1781,12 @@ async def agent_stream(session_id: str, messages: list, model: str = REVIEW_MODE
                             if len(cmdrs) > 1 and not args.get("partner"):
                                 args["partner"] = cmdrs[1]
                     try:
-                        return await func(**args)
+                        result = await func(**args)
                     except Exception as e:
                         return f"Error running {block.name}: {e}"
+                    if block.name == "recommander_suggest":
+                        _note_recommander(session_id, result)
+                    return result
 
                 if time.monotonic() - t_ui >= 1:
                     timeline[-1] += f" -> ui {time.monotonic() - t_ui:.0f}s"
