@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO))
 # Set-but-empty so load_dotenv (which never overrides) can't turn the login back on.
 os.environ["ADVISOR_PASSWORD"] = ""
 os.environ["ADVISOR_USERS"] = ""
+os.environ["ADVISOR_SITE_CODE"] = ""  # the sign-up site code turns the login on too
 os.environ["ADVISOR_SESSION_SECRET"] = "dev-only"
 
 import uvicorn  # noqa: E402

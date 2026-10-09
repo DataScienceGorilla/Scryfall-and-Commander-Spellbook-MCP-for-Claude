@@ -3147,6 +3147,21 @@ async def deck_roles(request: Request, _: None = Depends(require_auth)):
     return JSONResponse({"roles": roles, "produced": produced})
 
 
+@app.post("/deck/ids")
+async def deck_ids(request: Request, _: None = Depends(require_auth)):
+    """Scryfall card ids for deck cards that don't carry a chosen printing - Archidekt's
+    playtester link names cards by id. Default printing, same as the deck view shows."""
+    body = await request.json()
+    names = [n for n in (body.get("names") or []) if isinstance(n, str)][:300]
+    await _batch_resolve(names)
+    ids = {}
+    for n in names:
+        full = FULL_CARD_CACHE.get(n.lower()) or await _resolve_full_card(n)
+        if full and full.get("id"):
+            ids[n] = full["id"]
+    return JSONResponse({"ids": ids})
+
+
 AUTOCOMPLETE_CACHE: dict[str, list] = {}
 
 

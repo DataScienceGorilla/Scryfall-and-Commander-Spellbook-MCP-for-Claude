@@ -1775,6 +1775,7 @@ function buildToolbar() {
     + '<ul class="ac-list" hidden></ul></div>'
     + '<button class="tb-btn" id="briefBtn" title="Commander, bracket, goals and limits for the advisor">Brief</button>'
     + '<button class="tb-btn" id="copyDeckBtn" title="Copy the decklist in a format your deckbuilder imports">Export ▾</button>'
+    + '<button class="tb-btn" id="goldfishBtn" title="Open this list in the Archidekt playtester to goldfish it - no account needed">Goldfish ↗</button>'
     + '<button class="tb-btn tb-icon" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>';
   const input = tb.querySelector('#addCardInput');
   attachAutocomplete(input, tb.querySelector('.ac-list'), {
@@ -1784,6 +1785,7 @@ function buildToolbar() {
   tb.querySelector('#undoBtn').addEventListener('click', undo);
   tb.querySelector('#copyDeckBtn').addEventListener('click', (e) => toggleExportMenu(e.currentTarget));
   tb.querySelector('#briefBtn').addEventListener('click', () => openIntake());
+  tb.querySelector('#goldfishBtn').addEventListener('click', goldfishInArchidekt);
   return tb;
 }
 function syncToolbar() {
@@ -2028,6 +2030,37 @@ function copyDecklist(format = 'plain') {
     () => showToast(`Decklist copied - ${EXPORT_FORMATS[format]}`
                     + (format === 'plain' && (deck.commander || []).length ? '. Commander is on the first line.' : '')),
     () => showToast("Couldn't copy - clipboard blocked"));
+}
+// Goldfish: Archidekt's playtester sandbox takes the whole deck in its URL (the same link
+// EDHREC's average decks use) - [{c: 'c' commander | 'm' main, f: foil, q: qty, u: Scryfall id}].
+// Chosen printings carry their id; the rest are looked up (default printing) by /deck/ids.
+// The tab opens before the lookup so popup blockers treat it as the click's own window.
+async function goldfishInArchidekt() {
+  if (!deck || !deck.cards.length) return;
+  const tab = window.open('', '_blank');
+  try {
+    const need = deck.cards.filter(c => !(c.printing && c.printing.id)).map(c => c.name);
+    let ids = {};
+    if (need.length) {
+      const r = await fetch('/deck/ids', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                           body: JSON.stringify({ names: need }) });
+      ids = (await r.json()).ids || {};
+    }
+    const cards = [], missing = [];
+    for (const c of deck.cards) {
+      const u = (c.printing && c.printing.id) || ids[c.name];
+      if (u) cards.push({ c: isCommander(c) ? 'c' : 'm', f: 0, q: c.qty || 1, u });
+      else missing.push(c.name);
+    }
+    cards.sort((a, b) => (a.c === 'c' ? 0 : 1) - (b.c === 'c' ? 0 : 1));
+    const url = 'https://archidekt.com/playtester-v2/sandbox?deck=' + encodeURIComponent(JSON.stringify(cards));
+    if (tab) tab.location.href = url; else window.open(url, '_blank');
+    if (missing.length) showToast(`Left out (no Scryfall match): ${missing.join(', ')}`);
+    else if (deck.companion) showToast(`Companion ${deck.companion.name} isn't in the playtester - it only takes the deck`);
+  } catch (e) {
+    if (tab) tab.close();
+    showToast("Couldn't build the playtest link - try again");
+  }
 }
 function toggleExportMenu(btn) {
   let menu = document.getElementById('exportMenu');
