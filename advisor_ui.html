@@ -133,6 +133,7 @@
     padding: 4px 12px; font: inherit; font-size: 12.5px; cursor: pointer; }
   .prop-btn:hover { border-color: var(--accent); }
   .prop-btn.ok { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 650; }
+  .prop-btn:disabled { opacity: .45; cursor: default; }
   .prop-status { font-size: 12.5px; color: var(--muted); }
   .prop-actions { flex-wrap: wrap; }
   .prop-note { flex: 1 1 180px; min-width: 140px; background: var(--panel); color: var(--text);
@@ -239,6 +240,8 @@
     padding: 0 20px; font-weight: 650; cursor: pointer;
   }
   #send:disabled { opacity: .5; cursor: default; }
+  #send.stop { background: var(--panel-2); color: var(--danger-text); border-color: var(--danger); }
+  .interrupted-note { font-size: 12px; color: var(--muted); font-style: italic; margin: 4px 0 0 2px; }
 
   /* Canvas pane */
   #canvas { flex: var(--canvas-flex, 1 1 0); min-width: 300px; display: flex; flex-direction: column; background: var(--panel); }
@@ -903,6 +906,7 @@ function loadActiveIntoUI() {
     for (const m of conversation) {
       const b = addMessage(m.role, m.text, m.note);
       if (m.role === 'assistant') renderTurnExtras(m, b);
+      if (m.interrupted) markInterrupted(b, !(m.text || '').trim());
       if (m.role === 'assistant' && deckIdentity === null) {
         const mm = m.text.match(/%%IDENTITY:([WUBRGC]+)%%/i);
         if (mm) setDeckIdentity(mm[1].toUpperCase());
@@ -2018,7 +2022,7 @@ function showTray(entry, title) {
   trayEntry = entry; trayTitle.textContent = title; trayEl.hidden = false;
   // say what typing does while something's waiting
   inputEl.placeholder = !entryPending(entry) ? INPUT_HINT
-    : entry.question && !entry.question.answer ? 'Pick an answer above, or type your own'
+    : entry.question && !entry.question.answer ? 'Pick an answer above, type your own - or both'
     : 'Decide above - or send a message to skip these and move on';
 }
 function hideTray() { trayEntry = null; trayEl.hidden = true; trayBody.innerHTML = ''; inputEl.placeholder = INPUT_HINT; }
@@ -2036,7 +2040,11 @@ function activeDecisionEntry() { const m = lastAssistantEntry(); return m && ent
 function skipPending(m, typed) {
   (m.proposals || []).forEach(p => { if (p.status === 'pending') p.status = 'skipped'; });
   if (m.question && !m.question.answer && !m.question.skipped) {
-    if (typed) { m.question.answer = typed; m.question.typed = true; } else m.question.skipped = true;
+    const pick = Array.isArray(m.question.pick) ? m.question.pick : [];
+    // typed in the chat box: with an option picked above, the message is a note on that pick
+    if (typed && pick.length) { m.question.answer = pick.join(' · '); m.question.comment = typed; }
+    else if (typed) { m.question.answer = typed; m.question.typed = true; } else m.question.skipped = true;
+    delete m.question.pick;
   }
   if (m.startDeck && m.startDeck.status === 'pending') m.startDeck.status = 'skipped';
 }
@@ -2453,58 +2461,72 @@ function questionCard(q) {
   const title = document.createElement('div'); title.className = 'q-title'; title.textContent = q.question;
   box.appendChild(title);
   const row = document.createElement('div'); row.className = 'q-options';
-  const picked = new Set();
+  // An answer can be a pick, typed words, or both ("B - but keep it under $5"): clicking an
+  // option selects it (one, or several for multi), the note box adds to it, Send sends.
+  // q.pick holds the selection until then, so typing in the chat box instead still carries it.
+  const open = !q.answer && !q.skipped;
+  if (open && !Array.isArray(q.pick)) q.pick = [];
+  const chosen = open ? q.pick : String(q.answer || '').split(' · ');
+  let go = null, inp = null;
+  const refresh = () => { if (go) go.disabled = !(q.pick.length || inp.value.trim()); };
   for (const opt of q.options || []) {
     const b = document.createElement('button'); b.className = 'q-opt'; b.textContent = opt;
-    if (q.answer || q.skipped) { b.disabled = true; if (q.answer && String(q.answer).split(' · ').includes(opt)) b.classList.add('sel'); }
-    else if (q.multi) b.onclick = () => { picked.has(opt) ? picked.delete(opt) : picked.add(opt); b.classList.toggle('sel'); };
-    else b.onclick = () => answerQuestion(q, opt, box);
+    if (chosen.includes(opt) && (open || q.answer)) b.classList.add('sel');
+    if (!open) b.disabled = true;
+    else b.onclick = () => {
+      const i = q.pick.indexOf(opt);
+      if (i >= 0) q.pick.splice(i, 1);
+      else if (q.multi) q.pick.push(opt);
+      else q.pick.splice(0, q.pick.length, opt);
+      row.querySelectorAll('.q-opt').forEach(x => x.classList.toggle('sel', q.pick.includes(x.textContent)));
+      refresh();
+      inp.focus();
+    };
     row.appendChild(b);
   }
   box.appendChild(row);
   if (q.skipped) {
     const own = document.createElement('div'); own.className = 'q-own'; own.textContent = '– Skipped';
     box.appendChild(own);
-  } else if (!q.answer) {
-    const foot = document.createElement('div'); foot.className = 'q-foot';
-    if (q.multi) {
-      const go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Send';
-      go.onclick = () => { if (picked.size) answerQuestion(q, [...picked].join(' · '), box); };
-      foot.appendChild(go);
+  } else if (open) {
+    const foot = document.createElement('div'); foot.className = 'q-foot q-own-row';
+    inp = document.createElement('input'); inp.type = 'search'; inp.className = 'prop-note q-own-input';
+    inp.placeholder = (q.options || []).length ? 'Add a note, or type your own answer… (optional)' : 'Your answer…';
+    for (const a of NO_AUTOFILL.match(/[\w-]+(="[^"]*")?/g)) {
+      const [k, v] = a.split('='); inp.setAttribute(k, v ? v.replace(/"/g, '') : '');
     }
-    // "Something else" opens an answer box right in the card (typing in the chat box works too)
-    const other = document.createElement('button'); other.className = 'prop-btn'; other.textContent = 'Something else…';
-    other.onclick = () => {
-      other.remove();
-      const own = document.createElement('div'); own.className = 'q-own-row';
-      const inp = document.createElement('input'); inp.type = 'search'; inp.className = 'prop-note q-own-input';
-      inp.placeholder = 'Your answer…';
-      for (const a of NO_AUTOFILL.match(/[\w-]+(="[^"]*")?/g)) {
-        const [k, v] = a.split('='); inp.setAttribute(k, v ? v.replace(/"/g, '') : '');
-      }
-      const go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Send';
-      const submit = () => { const v = inp.value.trim(); if (v) answerQuestion(q, v, box); };
-      go.onclick = submit;
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
-      own.append(inp, go);
-      foot.appendChild(own);
-      inp.focus();
+    go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Send';
+    const submit = () => {
+      const note = inp.value.trim();
+      if (q.pick.length) answerQuestion(q, q.pick.join(' · '), box, note);
+      else if (note) answerQuestion(q, note, box);
     };
-    foot.appendChild(other);
+    go.onclick = submit;
+    inp.addEventListener('input', refresh);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    foot.append(inp, go);
     box.appendChild(foot);
-  } else if (!(q.options || []).some(o => String(q.answer).split(' · ').includes(o))) {
+    refresh();
+  } else if (q.comment) {
+    const own = document.createElement('div'); own.className = 'q-own';
+    own.textContent = 'You added: ' + q.comment;
+    box.appendChild(own);
+  } else if (!(q.options || []).some(o => chosen.includes(o))) {
     const own = document.createElement('div'); own.className = 'q-own';
     own.textContent = 'You answered: ' + q.answer;
     box.appendChild(own);
   }
   return box;
 }
-function answerQuestion(q, answer, box) {
+function answerQuestion(q, answer, box, note) {
   if (streaming) { showToast('Wait for the current answer to finish'); return; }
   q.answer = answer;
+  if (note) q.comment = note;
+  if (!(q.options || []).includes(answer.split(' · ')[0])) q.typed = true;
+  delete q.pick;
   saveState();
   if (box) box.replaceWith(questionCard(q));  // lock the buttons, show the pick
-  inputEl.value = answer;
+  inputEl.value = note ? `${answer} - ${note}` : answer;
   send(true);
 }
 
@@ -2789,8 +2811,11 @@ inputEl.addEventListener('input', () => {
 });
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  else if (e.key === 'Escape' && streaming) { e.preventDefault(); stopAnswer(); }
 });
-sendBtn.addEventListener('click', send);
+// while an answer streams the button is Stop - or "Send" (interject) once something's typed
+sendBtn.addEventListener('click', () => streaming && !inputEl.value.trim() ? stopAnswer() : send());
+inputEl.addEventListener('input', () => { if (streaming) sendBtn.textContent = inputEl.value.trim() ? 'Send' : 'Stop'; });
 newChatBtn.addEventListener('click', newChat);
 sidebarToggle.addEventListener('click', () => { document.body.classList.toggle('nosidebar'); if (typeof applyPrefs === 'function') applyPrefs(); });
 
@@ -3058,6 +3083,27 @@ function flashCard(name) {
 
 // ---- send / stream ----
 let streaming = false;
+// Interjecting: while an answer streams, the send button is a Stop button and the box stays
+// live - Enter (or Stop, or Escape) cuts the answer off where it is. The partial answer is kept,
+// marked interrupted (the advisor is told it was cut off), and a typed message goes out next.
+let streamAbort = null, streamDone = Promise.resolve(), streamChat = null;
+const SEND_HINT_BUSY = 'Type to jump in - Enter stops this answer and sends yours (Esc just stops)';
+function stopAnswer() { if (streamAbort && streamChat === activeId) streamAbort.abort(); }
+function setStreamingUI(on) {
+  streaming = on;
+  sendBtn.textContent = on ? 'Stop' : 'Send';
+  sendBtn.classList.toggle('stop', on);
+  sendBtn.title = on ? 'Stop the answer (Esc)' : '';
+  if (on) inputEl.placeholder = SEND_HINT_BUSY;
+  else if (inputEl.placeholder === SEND_HINT_BUSY) inputEl.placeholder = INPUT_HINT;
+}
+function markInterrupted(bubble, empty) {
+  const msg = bubble && bubble.closest('.msg');
+  if (!msg || msg.querySelector('.interrupted-note')) return;
+  const n = document.createElement('div'); n.className = 'interrupted-note';
+  n.textContent = empty ? '⏹ Stopped before answering' : '⏹ Stopped here';
+  msg.appendChild(n);
+}
 
 // "I want to build a ... deck" with no deck loaded -> offer the guided build first (once per chat).
 const BUILD_INTENT = /\bfrom scratch\b|\b(build|building|brew|brewing|make|making|start|starting|put together|create|creating)\b[^.?!\n]{0,60}\b(deck|commander|edh|list)\b|\bnew (deck|build|commander deck)\b|\b(build|brew)(ing)?\s+(something\s+|a\s+deck\s+)?(around|with)\b/i;
@@ -3080,7 +3126,17 @@ function offerBuild(text) {
 
 async function send(force) {
   const text = inputEl.value.trim();
-  if (!text || streaming || !activeId) return;
+  if (streaming) {
+    // the app's own follow-ups (auto-continue, build steps) never cut an answer off
+    if (force === true || !text) return;
+    if (streamChat !== activeId) { showToast('Another chat is still answering - wait a moment, or stop it there'); return; }
+    inputEl.value = ''; inputEl.style.height = 'auto';
+    stopAnswer();
+    await streamDone;
+    inputEl.value = text;
+    return send();
+  }
+  if (!text || !activeId) return;
   if (force !== true && !deck && chats[activeId] && !chats[activeId].buildOffered
       && !looksLikeDeck(text) && BUILD_INTENT.test(text)) {
     inputEl.value = ''; inputEl.style.height = 'auto';
@@ -3104,7 +3160,9 @@ async function send(force) {
     const lb = [...messagesEl.querySelectorAll('.msg.assistant .bubble')].pop();
     if (lb) renderTurnExtras(live, lb);
   }
-  streaming = true; sendBtn.disabled = true;
+  setStreamingUI(true);
+  const abort = streamAbort = new AbortController(); streamChat = originId;
+  let finishStream; streamDone = new Promise(r => { finishStream = r; });
   const userEntry = { role: 'user', text };
   addMessage('user', text);
   originConv.push(userEntry); saveState(originId);
@@ -3134,7 +3192,7 @@ async function send(force) {
 
   try {
     const resp = await fetch('/chat', {
-      method: 'POST',
+      method: 'POST', signal: abort.signal,
       headers: { 'Content-Type': 'application/json' },
       // Send the full transcript (this browser is the source of truth), so the
       // model keeps context even if the server restarted since the last message.
@@ -3203,12 +3261,15 @@ async function send(force) {
       }
     }
   } catch (e) {
-    if (onScreen()) addMessage('assistant', '⚠️ Connection error: ' + e.message);
+    if (!abort.signal.aborted && onScreen()) addMessage('assistant', '⚠️ Connection error: ' + e.message);
   } finally {
     if (onScreen()) activity.finish();
-    // Always persist the answer to the chat that ASKED, wherever the user is now.
-    if (acc.trim() || turnProposals.length || turnQuestion || turnStartDeck) {
+    const interrupted = abort.signal.aborted;
+    // Always persist the answer to the chat that ASKED, wherever the user is now. A stopped
+    // answer is kept even when empty, so the transcript shows (and the advisor knows) where it was cut.
+    if (acc.trim() || turnProposals.length || turnQuestion || turnStartDeck || interrupted) {
       const entry = { role: 'assistant', text: acc };
+      if (interrupted) entry.interrupted = true;
       if (turnStartDeck) entry.startDeck = turnStartDeck;
       if (turnProposals.length) entry.proposals = turnProposals;
       if (turnQuestion) entry.question = turnQuestion;
@@ -3217,11 +3278,14 @@ async function send(force) {
       // If that chat is on screen but the live bubble was lost to a tab-switch
       // (or was never drawn), re-render it so the finished answer shows.
       if (onScreen()) {
+        if (interrupted && !bubble) bubble = addMessage('assistant', '');
         if (!bubble || !bubble.isConnected) loadActiveIntoUI();
-        else renderTurnExtras(entry, bubble);
+        else { renderTurnExtras(entry, bubble); if (interrupted) markInterrupted(bubble, !acc.trim()); }
       }
     }
-    streaming = false; sendBtn.disabled = false;
+    if (streamAbort === abort) streamAbort = null;
+    setStreamingUI(false);
+    finishStream();
     inputEl.focus();
   }
 }

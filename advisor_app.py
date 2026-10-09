@@ -1539,6 +1539,8 @@ def _decisions_summary(m: dict) -> str:
     if isinstance(q, dict) and q.get("question"):
         out.append(f"[You asked: \"{str(q['question'])[:200]}\" - options: {', '.join(map(str, q.get('options') or []))[:300]}"
                    + (f" - they answered by typing: {str(q.get('answer'))[:200]}]" if q.get("answer") and q.get("typed")
+                      else f" - they picked: {str(q.get('answer'))[:200]}, and added: \"{str(q.get('comment'))[:400]}\" "
+                           "(their note qualifies the pick - honor both)]" if q.get("answer") and q.get("comment")
                       else f" - they answered: {str(q.get('answer'))[:200]}]" if q.get("answer")
                       else " - they skipped it]" if q.get("skipped") else "]"))
     return ("\n\n" + "\n".join(out)) if out else ""
@@ -2277,6 +2279,13 @@ async def chat(request: Request, _: None = Depends(require_auth)):
         out = []
         for m in raw:
             text = (m.get("text") or "").strip()
+            if m.get("role") == "assistant" and m.get("interrupted"):
+                # the player hit Stop / jumped in mid-answer: say so, so the model doesn't
+                # treat a half-finished reply as its considered answer
+                text = (text + "\n\n[The player stopped this reply here to jump in - it's incomplete. Respond "
+                        "to their new message; resume or redo the cut-off part only if it's still relevant.]"
+                        if text else "[The player stopped this reply before you said anything - respond to "
+                        "their new message.]")
             if m.get("role") not in ("user", "assistant") or not text:
                 continue
             if m["role"] == "assistant":
