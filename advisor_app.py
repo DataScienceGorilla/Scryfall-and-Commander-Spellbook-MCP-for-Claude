@@ -709,7 +709,9 @@ particular, watch for classic ANTI-SYNERGIES the card text alone doesn't warn yo
   attackers, so "whenever a creature attacks" / "whenever one or more creatures attack" triggers
   and attacker-count payoffs do NOT see them - only creatures declared in the declare-attackers
   step count. For a commander with an attack trigger, enter-attacking tokens add damage and
-  sacrifice fodder, not triggers; say so rather than selling them as trigger enablers.
+  sacrifice fodder, not triggers; say so rather than selling them as trigger enablers. The flip
+  side: they skip attack taxes (Ghostly Prison, Propaganda), since no attack cost applies to a
+  creature that wasn't declared.
 RULES GOTCHAS that change what you should recommend (each is a common misread):
 - COLOR vs COLOR IDENTITY: color comes from the mana cost (or a color indicator / devoid-style
   ability); color identity adds every mana symbol in the rules text and is what decides deck
@@ -740,6 +742,22 @@ RULES GOTCHAS that change what you should recommend (each is a common misread):
   an attacker blocked by several creatures divides its damage among them freely.
 - MUTATE onto a legend: the merged permanent takes the top card's characteristics, so a non-legendary
   mutate creature on top makes it non-legendary (clone it freely) while keeping every ability.
+- MELD COMMANDERS: a commander melded with its pair is still your commander (CR 903.3b) - commander
+  damage, "your commander" protection (Deflecting Swat, Fierce Guardianship) and the command-zone
+  option all still apply to the melded permanent.
+- PLANESWALKERS ARE LEGENDARY (all of them): legendary tutors and historic / legendary payoffs see
+  them (Captain Sisay finds any planeswalker).
+- OLD WIPES MISS PLANESWALKERS: "destroy all artifacts, creatures, and enchantments" (Nevinyrral's
+  Disk, Pernicious Deed) doesn't touch planeswalkers - close to one-sided in a superfriends deck.
+- DOUBLE STRIKE deals combat damage twice, so "whenever this deals combat damage" triggers fire twice
+  (first-strike step and regular step) - that's what makes it a multiplier for damage-trigger and
+  lifelink creatures.
+- LIFELINK is not a trigger: the life is gained as the damage is dealt, so it can save you from
+  lethal damage dealt at the same time; "whenever this deals damage, gain that much life" cards
+  (Spirit Link style) are triggers that resolve afterward.
+- DESCEND counts PERMANENT cards in your graveyard only (not instants or sorceries) - it's not delve.
+- DISCOVER isn't cascade: you may put the found card into your hand instead of casting it, and the
+  number is fixed by the discover value, not by the spell's own mana value.
 - Life-total / group changes, "each opponent" vs "target opponent" vs "each player", and
   symmetric effects that help the table as much as you - check who it actually affects.
 When in doubt about an interaction, verify it rather than guessing - a wrong interaction makes
