@@ -304,9 +304,9 @@
   /* Stacks: one column per group, packed like a wall; the cards overlap so each shows its title
      bar, the last card and the one under the pointer open whole (pushing the rest down). A
      negative margin in % is of the column's width, so 120% leaves ~20% of the width showing. */
-  .deck-groups.stacks { column-width: calc(var(--card-min, 105px) * 1.45); column-gap: var(--s3); }
-  .deck-groups.stacks > .role-group:not(.empty-group), body.dragging .deck-groups.stacks > .role-group.empty-group {
-    break-inside: avoid; display: inline-block; width: 100%; }
+  .deck-groups.stacks { display: flex; gap: var(--s3); align-items: flex-start; }
+  .deck-groups.stacks .stack-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+  .deck-groups.stacks .role-group:not(.empty-group), body.dragging .deck-groups.stacks .role-group.empty-group { display: block; }
   .deck-groups.stacks .role-grid { display: flex; flex-direction: column; gap: 0; }
   .deck-groups.stacks .role-grid > .card-tile { flex-shrink: 0; margin-bottom: -120%; box-shadow: 0 -1px 3px var(--shadow);
     transition: margin-bottom .15s ease, box-shadow .12s; }
@@ -2557,10 +2557,32 @@ function renderDeck() {
     groupsEl.appendChild(section);
     if (g === 'Commander' && deck.companion) groupsEl.appendChild(companionSection());
   }
+  groupsEl._sections = [...groupsEl.children];  // role order, for re-laying out the stacks
+  layoutStacks();
   if (!deck.maybe) deck.maybe = [];
   deckView.appendChild(maybeSection());
   cardsEl.scrollTop = scroll;
 }
+// Stacks layout: as many columns as the panel fits, each group dropped into the shortest column in
+// role order, so every column gets used however wide the panel is. (CSS multi-column can't: it
+// balances heights, and one tall unsplittable group leaves the rest of the width empty.) Re-run
+// when the panel or the card size changes the column count.
+function layoutStacks() {
+  const el = cardsEl.querySelector('.deck-groups.stacks');
+  if (!el || !el._sections || !el.clientWidth) return;
+  const gap = parseFloat(getComputedStyle(el).columnGap) || 12;
+  const n = Math.max(1, Math.floor((el.clientWidth + gap) / ((prefs.cardMin || 105) * 1.45 + gap)));
+  if (Number(el.dataset.cols) === n) return;
+  el.dataset.cols = n;
+  const cols = Array.from({ length: n }, () => { const c = document.createElement('div'); c.className = 'stack-col'; return c; });
+  el.replaceChildren(...cols);
+  for (const sec of el._sections) {
+    let best = cols[0];
+    for (const c of cols) if (c.offsetHeight < best.offsetHeight) best = c;
+    best.appendChild(sec);
+  }
+}
+new ResizeObserver(() => layoutStacks()).observe(cardsEl);
 
 function deckCardTile(c, ident) {
   const tile = document.createElement('div');
@@ -4452,6 +4474,7 @@ function applyPrefs() {
   if (prefs.canvasW) root.setProperty('--canvas-flex', `0 0 ${Math.max(300, Math.min(prefs.canvasW, maxW))}px`); else root.removeProperty('--canvas-flex');
   root.setProperty('--card-min', prefs.cardMin + 'px');
   document.body.classList.toggle('prose-serif', !!prefs.proseSerif);
+  if (typeof layoutStacks === 'function') layoutStacks();  // the card size sets how many stacks fit
 }
 applyPrefs();
 
