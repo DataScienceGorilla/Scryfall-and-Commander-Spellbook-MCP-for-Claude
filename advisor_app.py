@@ -703,8 +703,43 @@ particular, watch for classic ANTI-SYNERGIES the card text alone doesn't warn yo
   still fire, so it can be intentional in an aristocrats/ETB shell - but it is NOT a "swing at
   every opponent" payoff on a legend. Say which effect the player is actually buying.)
 - Copy effects generally only copy printed characteristics (not counters, Auras/Equipment, or
-  non-copy buffs). "Enters tapped and attacking" tokens were never declared as attackers, so
-  "whenever a creature attacks" abilities don't retrigger off them.
+  non-copy buffs).
+- ATTACKS vs ENTERS ATTACKING: creatures put onto the battlefield attacking (mobilize, myriad,
+  Hero of Bladehold-style tokens, anything "created tapped and attacking") were never DECLARED as
+  attackers, so "whenever a creature attacks" / "whenever one or more creatures attack" triggers
+  and attacker-count payoffs do NOT see them - only creatures declared in the declare-attackers
+  step count. For a commander with an attack trigger, enter-attacking tokens add damage and
+  sacrifice fodder, not triggers; say so rather than selling them as trigger enablers.
+RULES GOTCHAS that change what you should recommend (each is a common misread):
+- COLOR vs COLOR IDENTITY: color comes from the mana cost (or a color indicator / devoid-style
+  ability); color identity adds every mana symbol in the rules text and is what decides deck
+  legality. Lands have no mana cost, so they are colorless (All Is Dust spares them, and spares
+  devoid and colorless cards).
+- COLORLESS IS NOT A COLOR: "any color in your commander's color identity" (Arcane Signet, Command
+  Tower) makes NOTHING in a colorless deck; Wastes have no basic land type, so domain, land-type
+  tutors and Myriad Landscape can't use them.
+- TOKENS AREN'T CARDS: text that says "card" (Dauthi Voidwalker, many "for each card" counts)
+  ignores tokens - check the wording before selling it in a token deck.
+- CAST vs COPY: a copy only counts as cast when the effect says "cast" (Kefnet-style); Fork-style
+  copies don't trigger "whenever you cast" payoffs (Magecraft says "cast or copy" to catch both).
+- NO MANA COST = MANA VALUE 0 (Living End, Ancestral Vision): cascade and "mana value X or less"
+  effects can cast them, but "flashback equal to its mana cost" (Snapcaster Mage) can't.
+- ONE ALTERNATIVE COST per spell: flashback can't be combined with Force of Will's pitch or Cyclonic
+  Rift's overload. Delve, convoke and improvise are ways to PAY, not alternative costs, so they do
+  combine (Snapcaster + Treasure Cruise); additional costs like kicker are still payable on top.
+  Casting from the graveyard via Yawgmoth's Will-style "play from" effects keeps alternative costs.
+- COST IS LOCKED BEFORE YOU PAY: affinity and cost reducers count before mana abilities, so a
+  Treasure counts toward affinity and can still be sacrificed for mana; but a creature or artifact
+  sacrificed for mana is gone before convoke or improvise could tap it for the same spell.
+- FIGHT needs both creatures: if either leaves the battlefield first, no one deals damage (no last
+  known information) - fight removal is easy to blank in response.
+- LAST KNOWN INFORMATION: a trigger that doesn't target the creature it reads (Warstorm Surge's
+  "equal to its power") still resolves using that creature's last known stats if it dies; a
+  spell or ability that TARGETS it does nothing to it once it's gone.
+- COMBAT DAMAGE: since the 2024 Foundations rules update there is no damage assignment order -
+  an attacker blocked by several creatures divides its damage among them freely.
+- MUTATE onto a legend: the merged permanent takes the top card's characteristics, so a non-legendary
+  mutate creature on top makes it non-legendary (clone it freely) while keeping every ability.
 - Life-total / group changes, "each opponent" vs "target opponent" vs "each player", and
   symmetric effects that help the table as much as you - check who it actually affects.
 When in doubt about an interaction, verify it rather than guessing - a wrong interaction makes
@@ -794,12 +829,13 @@ SYSTEM_PROMPT += (
 
 # System prompt v2 ("coach"): v1's sections regrouped into stance / knowledge / situation /
 # mechanics, plus a per-turn [SITUATION] block on the player's message (prompt_v2.py). A/B by
-# "prompt_variant" in /chat; ADVISOR_PROMPT_DEFAULT picks the default.
+# "prompt_variant" in /chat; ADVISOR_PROMPT_DEFAULT picks the default (v2 since the Squall taste
+# test; "v1" brings Classic back for everyone).
 import prompt_v2
 SYSTEM_PROMPT_V2 = prompt_v2.build(SYSTEM_PROMPT)
-PROMPT_DEFAULT = os.environ.get("ADVISOR_PROMPT_DEFAULT", "v1")
+PROMPT_DEFAULT = os.environ.get("ADVISOR_PROMPT_DEFAULT", "v2")
 if PROMPT_DEFAULT not in ("v1", "v2"):
-    PROMPT_DEFAULT = "v1"
+    PROMPT_DEFAULT = "v2"
 
 # =============================================================================
 # THEORY CORPUS (deckbuilding_search tool) - lazy loaded, mirrors rules pattern
@@ -2724,8 +2760,7 @@ async def chat(request: Request, _: None = Depends(require_auth)):
         ctx.append(f"deck {sum(int(c.get('qty') or 1) for c in deck['cards'])}c")
     if memory_text:
         ctx.append(f"mem@{mem_upto}")
-    if variant != "v1":
-        ctx.append(f"prompt {variant}")
+    ctx.append(f"prompt {variant}")
     who = request.session.get("user") or "-"
     account = _session_user(request)  # "" on the login-free dev server: no profile there
     log_activity(f"QUERY  sid={session_id[:8]} user={who} ip={client_ip} [{model.replace('claude-','')}]"
@@ -2793,7 +2828,7 @@ async def chat(request: Request, _: None = Depends(require_auth)):
             yield chunk
         if history is not None:  # keep a copy for the admin page (players are told)
             answer = capture.entry()
-            if answer and variant != "v1":
+            if answer:
                 answer["prompt"] = variant  # which system prompt wrote it (A/B), shown on the admin page
             _save_chat(session_id, who, history, answer, deck)
             _maybe_learn(account, session_id, history, deck)  # background; never delays the answer

@@ -14,9 +14,17 @@ Lily's). Use the SAME numbers and terms so the advice and the panel agree:
 - THE CURVE: the 2-3 slots are the spine where the deck curves out. The commander is a guaranteed
   spell at its own mana value, so that slot needs fewer cards (a 4-drop commander still wants ~7 other
   four-drops); a 7+ commander turns the early game into setup and moves the density into 4-6.
-- CUTTING to 100: trim crowded curve slots first, then interaction (cut 2-4, keep a wipe or two and the
-  flexible answers), then the secondary utility (a cheap commander can trim ramp, a heavy one draw).
-  Never lands. Ask which cards are pets before you cut them.
+- CUTTING to 100: first name how the deck wins and PROTECT it - finishers, the cards that multiply the
+  commander's trigger (extra combats for an attack trigger, doublers for a token one), combo pieces
+  and the player's pets are the LAST things to cut, never the first; an expensive finisher isn't
+  "clunky" if it's how the deck ends games. Then trim crowded curve slots, then interaction (cut 2-4,
+  keep a wipe or two and the flexible answers), then the secondary utility: a cheap commander trims
+  RAMP before draw, a heavy one draw before ramp. Never lands. Don't cut by mana symbols or color
+  weight alone. When the player says they love every card, ask which ones are untouchable or say
+  which cuts you're least sure of.
+- READ THE TEMPLATE THROUGH THE DECK'S SPEED. A low-curve, go-wide deck that empties its hand by turn
+  4-5 wants card draw ABOVE the template and ramp BELOW it - "draw over target" there is the right
+  call, not a surplus to trim. A slow, top-heavy deck is the reverse.
 - Fix failures in order of severity (Liebig's law - the scarcest resource is the bottleneck): lands
   (catastrophic), then ramp (a ceiling), then draw (the quiet one).
 

@@ -4435,8 +4435,8 @@ applyPrefs();
     <div class="row"><h4>Chat text</h4>
       <div class="seg"><button type="button" data-serif="1">Cormorant</button><button type="button" data-serif="0">Karla</button></div></div>
     <div class="row"><h4>Advisor style</h4>
-      <div class="seg seg-prompt"><button type="button" data-prompt="">Classic</button><button type="button" data-prompt="v2">Coach (beta)</button></div>
-      <div class="hint">Coach is a new system prompt being tested - same knowledge, more of an advisor at your side.</div></div>
+      <div class="seg seg-prompt"><button type="button" data-prompt="v2">Coach</button><button type="button" data-prompt="v1">Classic</button></div>
+      <div class="hint">Coach is the advisor at your side: it reads the deck, then asks where you want it to go. Classic is the earlier, more review-style advisor.</div></div>
     <div class="row"><div class="hint">Drag the line between the chat and the deck to resize them.</div>
       <button type="button" class="reset" id="setReset">Reset layout</button></div>
     <div class="row" id="setProfileRow" hidden><h4>Memory</h4>
@@ -4453,7 +4453,7 @@ applyPrefs();
     card.max = Math.max(150, Math.min(600, Math.floor(avail / 5) * 5));
     card.value = Math.min(prefs.cardMin, card.max);
     pop.querySelectorAll('.seg button[data-serif]').forEach(b => b.classList.toggle('on', !!prefs.proseSerif === (b.dataset.serif === '1')));
-    pop.querySelectorAll('.seg button[data-prompt]').forEach(b => b.classList.toggle('on', (prefs.promptVariant || '') === b.dataset.prompt));
+    pop.querySelectorAll('.seg button[data-prompt]').forEach(b => b.classList.toggle('on', (prefs.promptVariant || 'v2') === b.dataset.prompt));
   };
   card.addEventListener('input', () => { prefs.cardMin = Number(card.value); applyPrefs(); });
   card.addEventListener('change', savePrefs);
@@ -4461,7 +4461,7 @@ applyPrefs();
     prefs.proseSerif = b.dataset.serif === '1'; applyPrefs(); savePrefs(); paint();
   }));
   pop.querySelectorAll('.seg button[data-prompt]').forEach(b => b.addEventListener('click', () => {
-    prefs.promptVariant = b.dataset.prompt || null; savePrefs(); paint();
+    prefs.promptVariant = b.dataset.prompt === 'v2' ? null : b.dataset.prompt; savePrefs(); paint();  // Coach = the server default
   }));
   pop.querySelector('#setReset').addEventListener('click', () => { prefs = { ...PREF_DEFAULTS }; applyPrefs(); savePrefs(); paint(); });
   pop.querySelector('#setTour').addEventListener('click', () => { pop.hidden = true; openWelcome(); });
