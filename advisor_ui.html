@@ -375,6 +375,41 @@
   .m-W { background: #c9a94a; } .m-U { background: #2f67a8; } .m-B { background: #3b302a; }
   .m-R { background: #b0402c; } .m-G { background: #3f7a4c; } .m-C { background: #8b8578; }
   .deck-statspanel.adv, .deck-statspanel.odds { margin-top: 0; }
+  /* deck template: targets that follow the deck, a suggested curve, odds by turn 3, Auto fill */
+  .deck-statspanel.tpl { margin-top: 0; }
+  .tpl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; margin: var(--s2) 0; }
+  .tpl-head select { font: inherit; font-size: 13px; padding: 2px 6px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius); }
+  .tpl-head .tpl-sub { color: var(--muted); font-size: 12px; }
+  .tpl-row { display: grid; grid-template-columns: 84px 1fr 52px 74px auto; align-items: center; gap: var(--s2); font-size: 13px; padding: 3px 0; }
+  .tpl-bar { height: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; position: relative; }
+  .tpl-bar i { display: block; height: 100%; background: var(--accent); }
+  .tpl-row.ok .tpl-bar i { background: var(--success); }
+  .tpl-row.over .tpl-bar i { background: var(--danger); opacity: .8; }
+  .tpl-n { font-variant-numeric: tabular-nums; text-align: right; }
+  .tpl-row.short .tpl-n { color: var(--danger-text); }
+  .tpl-odds { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tpl-act { justify-self: end; }
+  .tpl-act button { padding: 3px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .tpl-act .tpl-note { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .tpl-curve { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin-top: var(--s3); }
+  .tpl-cc { display: flex; flex-direction: column; align-items: center; font-size: 11.5px; }
+  .tpl-ccb { position: relative; width: 100%; height: 56px; display: flex; align-items: flex-end; }
+  .tpl-ccb i { display: block; width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; }
+  .tpl-ccb b { position: absolute; left: -2px; right: -2px; border-top: 2px dashed var(--ink-strong, var(--text)); opacity: .55; }
+  .tpl-chip { margin-top: 3px; font-size: 10.5px; font-weight: 700; padding: 0 5px; border-radius: 999px; min-height: 15px; }
+  .tpl-chip.add { background: var(--accent-tint); color: var(--accent); }
+  .tpl-chip.cut { background: rgba(217,86,79,.15); color: var(--danger-text); }
+  .fill-tray { margin: var(--s2) 0 var(--s3); border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-tint); padding: var(--s2); }
+  .fill-head { display: flex; align-items: center; gap: var(--s2); font-size: 13px; font-weight: 650; margin-bottom: var(--s2); }
+  .fill-head span { flex: 1; }
+  .fill-head button, .fill-item button { padding: 3px 9px; font-size: 12px; cursor: pointer; }
+  .fill-item { display: grid; grid-template-columns: 46px 1fr auto; gap: var(--s2); align-items: center; padding: 4px 0; border-top: 1px solid var(--border); }
+  .fill-item img { width: 46px; aspect-ratio: 63/88; object-fit: cover; border-radius: var(--radius-card); cursor: zoom-in; display: block; }
+  .fill-item .fi-name { font-size: 13px; font-weight: 650; }
+  .fill-item .fi-why { font-size: 12px; color: var(--muted); }
+  .fill-item .fi-acts { display: flex; gap: 4px; }
+  .fill-status { font-size: 12.5px; color: var(--muted); padding: 4px 0; }
   .adv-h { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; display: flex; gap: var(--s2); flex-wrap: wrap; }
   .adv-h span { text-transform: none; letter-spacing: 0; }
   .adv-note { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
@@ -1389,6 +1424,186 @@ function buildPanel(comp) {
   }
   return el;
 }
+// ---- deck template (the player's Rebel Lily framework, always on) ----
+// Targets for lands, ramp, draw and interaction that follow the deck, a suggested curve around the
+// operational threshold, the odds of seeing each by turn 3, and Auto fill: suggestions for a short
+// section that the player adds, saves to Maybe or skips one by one. In build mode the build's own
+// targets are used, so the two panels agree.
+const TEMPLATE_ROWS = [['lands', 'Lands'], ['ramp', 'Ramp'], ['draw', 'Draw'], ['interaction', 'Interaction']];
+// the turn the deck needs to "do the thing": the commander's mana value unless the player set it
+function operationalThreshold(comp) {
+  return (deck.template && deck.template.threshold) || autoThreshold(comp);
+}
+function autoThreshold(comp) {
+  const cmdrs = (deck.commander || []).map(n => deckFind(n)).filter(Boolean);
+  const mv = cmdrs.length ? Math.max(...cmdrs.map(c => c.cmc || 0)) : Math.round(comp.avgMv) || 4;
+  return Math.max(1, Math.min(8, Math.round(mv)));
+}
+function templateTargets(comp) {
+  const T = operationalThreshold(comp);
+  if (building()) { const b = buildTargets(); return { T, lands: b.lands, ramp: b.ramp, draw: b.draw, interaction: b.interaction }; }
+  const nonlands = deck.cards.reduce((a, c) => a + (!c.is_land && !isCommander(c) ? (c.qty || 1) : 0), 0);
+  const avg = nonlands >= 20 ? comp.avgMv : T;  // a thin list's average says little yet
+  // Lily's template: 38 lands, 24 ramp + draw split by the threshold (12 / 12 at 4, toward ramp
+  // above it, toward draw below), 8-12 interaction - 10 at casual tables, 12 at bracket 3+. Lands
+  // are a floor-ish 38: one fewer only for a very low curve, more for a heavy one.
+  const [ramp, draw] = T >= 5 ? [14, 10] : T >= 4 ? [12, 12] : T >= 3 ? [10, 14] : [8, 16];
+  const lands = avg < 2.6 ? 37 : avg >= 4.3 ? 40 : avg >= 3.8 ? 39 : 38;
+  return { T, ramp, draw, lands, interaction: deck.bracket >= 3 ? 12 : 10 };
+}
+// Suggested nonland count per mana value (0..6, 7+), after Lily's mana-curve video: the 2-3 slots
+// are the spine where a deck curves out, with a tail above for payoffs and finishers. The
+// commander is a guaranteed spell at its own cost, so that slot needs fewer cards - barely at 2-3,
+// clearly at 4-6 (a 4-drop commander still wants ~7 four-drops) - and a 5-6 drop nudges the
+// spine up while a 7+ commander turns the early game into setup, moving the density into 4-6.
+// Largest remainder keeps the sum exact.
+function curveTargets(T, slots, cmdrMv) {
+  const peak = T >= 7 ? 4.5 : T >= 5 ? 3 : 2.5;
+  const low = T >= 7 ? 2.0 : 1.3;  // a 7+ deck's cheap slots are its ramp - thinner, not empty
+  const bell = mv => { const d = mv - peak; return Math.exp(-(d * d) / (2 * (d < 0 ? low : 1.8) ** 2)); };
+  const w = Array.from({ length: 8 }, (_, mv) => mv === 0 ? 0.06 : mv < 7 ? bell(mv)
+    : [7, 8, 9, 10].reduce((a, x) => a + bell(x), 0));
+  if (cmdrMv >= 2 && cmdrMv <= 6) w[cmdrMv] *= cmdrMv <= 3 ? 0.9 : 0.55;
+  const sum = w.reduce((a, b) => a + b, 0);
+  const raw = w.map(x => slots * x / sum), out = raw.map(Math.floor);
+  let left = slots - out.reduce((a, b) => a + b, 0);
+  raw.map((x, i) => [x - out[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { out[i]++; left--; } });
+  return out;
+}
+let fillTray = null;  // { section, items: [suggestion], skipped: [names], loading, error } - not saved
+function templatePanel(comp) {
+  const t = templateTargets(comp), have = buildCounts();
+  const nCmdr = Math.max(1, (deck.commander || []).length);
+  const N = comp.total >= 100 ? comp.total - nCmdr : 100 - nCmdr;  // the library once the deck is full
+  const pct = p => Math.round(100 * p) + '%';
+  const el = document.createElement('details'); el.className = 'deck-statspanel tpl';
+  el.open = prefs.templateOpen !== false;
+  el.addEventListener('toggle', () => { prefs.templateOpen = el.open; savePrefs(); });
+  const tOpts = Array.from({ length: 8 }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('');
+  el.innerHTML = `<summary>Template</summary>
+    <div class="tpl-head"><label title="The turn your deck needs to do its thing - your commander's mana value unless you set it. Ramp and draw split, lands and the curve follow it.">Operational threshold
+      <select class="tpl-t"><option value="">auto</option>${tOpts}</select></label>
+      <span class="tpl-sub">avg MV ${comp.avgMv.toFixed(2)} · odds = seen by turn 3 (10 cards)</span></div>
+    <div class="tpl-rows"></div><div class="tpl-curve"></div>
+    <div class="adv-note">Targets follow Rebel Lily's template: ~38 lands, 24 ramp + draw split by the threshold, 8-12 interaction, the rest for your themes; the curve thins your commander's own slot. Cutting? Trim crowded curve slots first, then interaction, never lands.</div>`;
+  const sel = el.querySelector('.tpl-t');
+  sel.value = (deck.template && deck.template.threshold) ? String(deck.template.threshold) : '';
+  sel.querySelector('option[value=""]').textContent = `auto (${autoThreshold(comp)})`;
+  sel.onchange = () => {
+    deck.template = Object.assign({}, deck.template, { threshold: sel.value ? +sel.value : null });
+    saveState(); renderDeck();
+  };
+  const rows = el.querySelector('.tpl-rows');
+  for (const [k, label] of TEMPLATE_ROWS) {
+    const n = have[k], target = t[k], gap = target - n;
+    const row = document.createElement('div');
+    row.className = 'tpl-row ' + (gap > 0 ? 'short' : gap < -2 ? 'over' : 'ok');
+    const odds = k === 'lands' ? hyperAtLeast(N, Math.min(n, N), 10, 3) : hyperAtLeast(N, Math.min(n, N), 10, 1);
+    row.innerHTML = `<span>${label}</span><span class="tpl-bar"><i style="width:${Math.min(100, Math.round(100 * n / Math.max(1, target)))}%"></i></span>
+      <span class="tpl-n">${n}/${target}</span><span class="tpl-odds" title="${k === 'lands' ? 'Chance of 3+ lands' : 'Chance of at least one'} in your first 10 cards (opening hand + 3 draws)">${pct(odds)}${k === 'lands' ? ' 3+' : ''}</span>
+      <span class="tpl-act"></span>`;
+    const act = row.querySelector('.tpl-act');
+    if (gap > 0 && k === 'lands') {
+      const room = Math.min(gap, 100 - comp.total);
+      if (room > 0 && (deck.commander || []).length) {
+        const b = document.createElement('button'); b.className = 'tb-btn'; b.textContent = `Fill ${room} basic${room > 1 ? 's' : ''}`;
+        b.title = "Split by your spells' color requirements";
+        b.onclick = () => fillBasics(room);
+        act.appendChild(b);
+      } else act.innerHTML = `<span class="tpl-note">${gap} short</span>`;
+    } else if (gap > 0) {
+      const b = document.createElement('button'); b.className = 'tb-btn'; b.textContent = `Auto fill ${Math.min(gap, 12)}`;
+      b.title = `Suggest ${label.toLowerCase()} cards for this deck - you pick which go in`;
+      b.disabled = !!(fillTray && fillTray.loading);
+      b.onclick = () => runFill(k, Math.min(gap, 12));
+      act.appendChild(b);
+    } else if (gap < -2) act.innerHTML = `<span class="tpl-note">${-gap} over</span>`;
+    rows.appendChild(row);
+    if (fillTray && fillTray.section === k) rows.appendChild(fillTrayEl(label));
+  }
+  // curve: bars are the deck now, the dashed line is the suggestion; chips say how far off
+  const cur = Array(8).fill(0);
+  for (const c of deck.cards) if (!c.is_land && !isCommander(c)) cur[Math.min(7, Math.floor(c.cmc || 0))] += c.qty || 1;
+  const cmdrMvs = (deck.commander || []).map(n => deckFind(n)).filter(Boolean).map(c => Math.floor(c.cmc || 0));
+  const want = curveTargets(t.T, Math.max(0, 100 - nCmdr - t.lands), cmdrMvs.length ? Math.max(...cmdrMvs) : 0);
+  const max = Math.max(1, ...cur, ...want);
+  el.querySelector('.tpl-curve').innerHTML = cur.map((n, i) => {
+    const d = want[i] - n, x = i === 7 ? '7+' : i;
+    const chip = Math.abs(d) >= 2 ? `<span class="tpl-chip ${d > 0 ? 'add' : 'cut'}">${d > 0 ? '+' : '−'}${Math.abs(d)}</span>` : '<span class="tpl-chip"></span>';
+    return `<div class="tpl-cc" title="MV ${x}: ${n} now, about ${want[i]} suggested${Math.abs(d) >= 2 ? ` - ${Math.abs(d)} ${d > 0 ? 'room' : 'over'}` : ''}">
+      <div class="tpl-ccb"><i style="height:${Math.round(100 * n / max)}%"></i><b style="bottom:${Math.round(100 * want[i] / max)}%"></b></div>
+      <span>${x}${i === t.T ? '★' : ''}</span>${chip}</div>`;
+  }).join('');
+  return el;
+}
+function fillTrayEl(label) {
+  const tray = document.createElement('div'); tray.className = 'fill-tray';
+  const f = fillTray;
+  tray.innerHTML = `<div class="fill-head"><span>${label} suggestions</span></div>`;
+  const head = tray.querySelector('.fill-head');
+  const addAll = document.createElement('button'); addAll.className = 'prop-btn ok'; addAll.textContent = 'Add all';
+  addAll.disabled = f.loading || !f.items.length;
+  addAll.onclick = async () => {
+    pushUndo();
+    const items = f.items.splice(0);
+    for (const p of items) await acceptProposal(p, true);
+    deckChanged();
+    showToast(`Added ${items.length} card${items.length === 1 ? '' : 's'}`, true);
+  };
+  const close = document.createElement('button'); close.className = 'prop-btn'; close.textContent = 'Close';
+  close.onclick = () => { fillTray = null; renderDeck(); };
+  head.append(addAll, close);
+  for (const p of f.items) {
+    const c = p.addCard || {};
+    const item = document.createElement('div'); item.className = 'fill-item';
+    item.innerHTML = `${c.image ? `<img src="${escapeHtml(c.image)}" alt="" loading="lazy">` : '<span></span>'}
+      <div><div class="fi-name"></div><div class="fi-why"></div></div><div class="fi-acts"></div>`;
+    item.querySelector('.fi-name').textContent = `${c.name}${typeof c.cmc === 'number' ? ' · MV ' + c.cmc : ''}${c.game_changer ? ' · game changer' : ''}`;
+    item.querySelector('.fi-why').textContent = p.reason || '';
+    const img = item.querySelector('img');
+    if (img) img.onclick = () => openLightbox({ img: c.image, imgBack: c.image_back || null, canonical: c.name, scryfall: c.scryfall_uri || null });
+    const acts = item.querySelector('.fi-acts');
+    const btn = (text, cls, title, fn) => { const b = document.createElement('button'); b.className = 'prop-btn ' + cls; b.textContent = text; b.title = title; b.onclick = fn; acts.appendChild(b); };
+    const drop = () => { f.items = f.items.filter(x => x !== p); };
+    btn('Add', 'ok', 'Put it in the deck', async () => { pushUndo(); drop(); await acceptProposal(p, true); deckChanged(); showToast(`Added ${p.add}`, true); });
+    btn('Maybe', 'maybe', 'Save it to your Maybe board', () => { pushUndo(); drop(); setMaybe(p, true); deckChanged(); showToast(`Saved ${p.add} to Maybe`, true); });
+    btn('Skip', '', "Not this one - it won't be suggested again here", () => { drop(); f.skipped.push(p.add); renderDeck(); });
+    tray.appendChild(item);
+  }
+  const status = document.createElement('div'); status.className = 'fill-status';
+  if (f.loading) status.textContent = 'Finding cards that fit this deck…';
+  else if (f.error) status.textContent = f.error;
+  else if (!f.items.length) {
+    status.textContent = 'All decided. ';
+    const more = document.createElement('button'); more.className = 'prop-btn'; more.textContent = 'Suggest more';
+    more.onclick = () => runFill(f.section, f.n);
+    status.appendChild(more);
+  }
+  if (status.childNodes.length) tray.appendChild(status);
+  return tray;
+}
+async function runFill(section, n) {
+  const comp = deckComposition();
+  const prev = fillTray && fillTray.section === section ? fillTray : null;
+  const tray = fillTray = { section, n, items: [], skipped: prev ? prev.skipped : [], loading: true, error: null };
+  renderDeck();
+  try {
+    const r = await fetch('/deck/fill', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ section, n, commander: deck.commander || [], cards: deck.cards.map(c => c.name),
+        exclude: tray.skipped.concat((deck.maybe || []).map(m => m.add).filter(Boolean)),
+        identity: [...(commanderIdentity() || comp.colors)].join(''), threshold: operationalThreshold(comp),
+        bracket: deck.bracket || 0, gc: comp.gc }) });
+    const data = await r.json();
+    if (fillTray !== tray) return;  // closed, or another section asked meanwhile
+    tray.items = (data.cards || []).map(c => ({ add: c.name, addCard: c, reason: c.reason, status: 'pending' }));
+    if (!tray.items.length) tray.error = 'No more suggestions for this section right now.';
+  } catch (e) {
+    if (fillTray !== tray) return;
+    tray.error = "Couldn't get suggestions - try again in a moment.";
+  }
+  tray.loading = false;
+  renderDeck();
+}
 // Fill land slots with basics, split by how many colored pips the nonland cards ask for.
 async function fillBasics(n) {
   const ident = [...(commanderIdentity() || [])].filter(x => BASICS[x]);
@@ -2250,7 +2465,7 @@ function renderDeck() {
   if (warns.childNodes.length) head.appendChild(warns);
   deckView.appendChild(head);
   if (building()) deckView.appendChild(buildPanel(comp));
-  if (deck.cards.length) deckView.append(statsPanel(), advancedPanel(comp), oddsPanel(comp), goldfishPanel(comp));
+  if (deck.cards.length) deckView.append(templatePanel(comp), statsPanel(), advancedPanel(comp), oddsPanel(comp), goldfishPanel(comp));
   refreshCompanion();
 
   // group -> cards, in taxonomy order (plus any custom role names at the end)

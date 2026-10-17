@@ -1,54 +1,58 @@
 # Commander Challenge - Deckbuilding Playbook
 
-*Distilled from 4 videos. Lenses to weigh with judgment, not a checklist.*
+*Distilled from 5 videos. Lenses to weigh with judgment, not a checklist.*
 
-# THE COMMANDER CHALLENGE PLAYBOOK
+# COMMANDER CHALLENGE PLAYBOOK
 
-## HOW COMMANDER CHALLENGE THINKS
+## HOW THEY THINK
+Deckbuilding is applied engineering in service of fun: find the shape of a strategy, strip dead weight, and stack overlapping synergies so the deck does more with fewer, cheaper, better-chosen cards — all while never losing sight of the fact that you're sitting across from three other humans who also want to play Magic.
 
-Deckbuilding is engineering with taste: diagnose the actual problem this deck needs to solve — a color's structural weakness, a budget ceiling, a social table, a power bracket — then build a web of synergy around a chosen strategy rather than stacking generically "good" cards. Power and fun are not opposites; a deck that's resilient, efficient, and quietly explosive is more fun to pilot and more fun to play against than one that's either mediocre or oppressive.
+## LENSES (apply what fits, discard what doesn't)
 
-## LENSES (weigh with judgment — not every lens fires every build)
+**1. Overlapping Synergy Density.** Favor cards that connect to multiple other cards/commander lines, not just one. *Why:* a card that does one thing is a weak link; a card that does three things multiplies the deck's power without raising its mana curve.
 
-**Strategy before Commander.** When a color or archetype has a systemic weakness (Red's lack of small-value engines, a low budget, a social meta that punishes aggro), build the plan first and find the Commander that complements it. Relying on "what's typical for this color" inherits its weaknesses instead of engineering around them.
+**2. Deck Shape (Generators / Amplifiers / Payoffs / Pillars).** Know your primary action, what amplifies it, what cashes it in for the win, and support all of it with card advantage, mana advantage, and interaction. *Why:* raw card power without a clear capitalization step is how decks stall in "pretty good, goes nowhere" bracket-2 purgatory.
 
-**Spider-web synergy over isolated pieces.** Favor cards that connect to *many* other cards in the 99, not just the Commander. A deck should ideally still function if the Commander is removed. This matters most under budget or combo pressure, where isolated combo pieces don't earn their slot.
+**3. Commander as a Free, Always-On Slot.** Whatever category the commander fills (generator/amplifier/payoff/advantage engine), lighten that category in the 99 and reinforce what it doesn't cover. *Why:* the commander is guaranteed access every game — don't pay twice for the same job.
 
-**The Commander slot is a free, always-available resource.** Since it's accessible every game, load card advantage, sac outlets, or engine effects onto the Commander to free real-deck budget/slots for combo density or resilience elsewhere. A utility piece (sac outlet, draw engine) usually beats a pure payoff in the command zone — it works with or without the combo online.
+**4. Multiplayer Scaling.** Weight "any player," "each opponent," symmetrical triggers heavily; discount "once per turn" or single-target effects. *Why:* four turn cycles instead of two means broad triggers fire far more than 1v1 intuition suggests.
 
-**Card advantage needs density AND a curve, not just a number.** Enough net-positive draw (roughly a dozen-plus pieces) so you're never empty-handed, weighted toward cheap/early pieces so you're not holding dead cards turn one, with the pieces themselves tied to your theme rather than generic. But if your engine/Commander already floods you with cards, cut the redundant draw package — stacking advantage on advantage is waste, not safety.
+**5. Resilience Over Raw Power.** Ask how hard you are to kill, how exposed your engine is to removal/wipes, how fast you rebuild. Favor artifact/enchantment-based engines and redundancy over single points of failure. *Why:* a brilliant plan that gets two-for-oned off the board never executes.
 
-**Mana value must be earned.** The higher the cost, the more dramatic the swing needs to be. A 6-mana card should reshape the game; a 2-mana card just needs to be a solid repeatable piece. This filters bloat without needing a formula.
+**6. Mana-Value Accountability.** The higher the cost, the more dramatically the card must swing the game; cheap cards earn slots through repeatable value instead. *Why:* "fine" isn't good enough at any cost, but the bar for fine rises with CMC.
 
-**Resilience is a design goal, not an accident.** Ask: how hard am I to kill, how exposed is my engine to removal, how fast do I rebuild? Use permanent types that dodge common answers (artifacts/enchantments vs. wipes, vehicles vs. board wipes), avoid single points of failure, and — especially in fragile colors — protect the life total deliberately since some colors have no natural cushion.
+**7. Card Advantage as a Curved, On-Theme Package.** Build a real floor of draw/advantage, weighted toward cheap and consistent over top-heavy and swingy, ideally synergistic with the plan. *Why:* running dry loses games, but bolted-on generic draw is a missed opportunity for more synergy.
 
-**Multiplayer math changes card value.** Effects that trigger off "any player," "each opponent," or "whenever a creature ETBs" scale far harder across a 4-player table than a 1v1 frame suggests — and conversely, once-per-turn/single-target effects are weaker than they look. Read cards through this multiplier before judging their power.
+**8. Hide Power, Read the Table.** Optics matter as much as contents — visibly scary strategies get removed regardless of efficiency; incremental or "cute" engines survive to execute. *Why:* Commander is political; an unkilled plan beats a stronger plan that announces itself.
 
-**Explosive ramp and free resources compress the game.** Mana doubling, extra turns, and things that generate value without costing mana each turn (Rhystic Study-style effects) let you do more before opponents get a window to react. Scale how much of this you run with your intended power level.
+**9. Soft Combos & Free Resources.** Repeatable loops needing light input, and effects that generate value without spending mana, hit the power/fun sweet spot. *Why:* hard auto-win combos can skip the game for the table; soft combos and passive value stay powerful and interactive.
 
-**Soft combos over hard infinites, sometimes.** A repeatable loop that requires setup to convert into a win is often more fun, more budget-friendly, and less likely to get you removed from the table than an auto-win infinite — worth choosing deliberately in casual/budget contexts, less relevant in cEDH.
+**10. Patch Structural Weaknesses Deliberately.** When a color/strategy has a known hole, build bottom-up from the strategy and intentionally source the answer rather than defaulting to that color's usual toolkit. *Why:* leaning on stereotype reproduces the weakness.
 
-**Hide power, then explode.** A deck that looks unassuming while quietly ramping survives longer at the table than one that announces its plan; save the explosive turn for when opponents have no time to answer it.
+**11. Budget Math.** In cheap builds, judge cards by how many others they combo/synergize with, not whether the line exists on paper; lean on the commander to replace expensive tutors/draw. *Why:* one $7 piece can eat a whole budget deck's card-advantage allowance — this lens is irrelevant outside budget contexts.
 
-**Table and social awareness override raw power.** Pick what's fun to pilot, but cut anything that stops opponents from playing the game — you'll get targeted and lose your own fun too. This is a filter applied during cuts, not a build-around.
-
-**Use the Commander's text as a search key.** Break its abilities into individual keywords and hidden mechanical threads, then search for cards sharing multiple of those threads — this surfaces layered synergies you won't find guessing.
+**12. Rule of Cool, Bounded by Table Fun.** Pick what excites you, but cut anything so oppressive it stops others from playing. *Why:* fun is the actual win condition; matters most at commander selection, less once the skeleton is set.
 
 ## RED FLAGS
-- A combo piece that only synergizes with one other card — spider-web violation, wasted slot.
-- Generic card draw stacked on top of an engine that already floods your hand.
-- A payoff-only Commander when a utility/resource Commander was available for the same strategy.
-- A fragile color/deck with no life-total or resilience plan.
-- An "obviously scary" Commander that invites the table to remove you turn one.
-- Expensive cards that don't dramatically swing the game relative to their cost.
-- All-in reliance on a single combo or card with no redundancy or backup plan.
-- Judging a card's power in a 1v1 frame when it will actually be played 4-player.
+- A card that only has one connection point when a near-identical option has three — wasted slot.
+- High-CMC cards that provide merely good, not game-altering, value.
+- A deck that "does its thing" (mills, makes tokens, counters up) with no built-in step that converts that into a win.
+- All-creature engines with zero resilience against a single board wipe.
+- Generic card draw disconnected from the deck's identity, or too much of it loaded at high CMC.
+- Choosing a commander for raw power while ignoring that it locks opponents out of playing — nobody has fun, including you.
+- Evaluating a combo purely as "does it go infinite" without weighing its cost against its web of secondary synergies.
+- Defaulting to a color's typical answer when that color has a known format-level weakness there.
+- Telegraphing the win turn early, inviting removal before you can pull the trigger.
 
-## WORKED EXAMPLES (situational, not exhaustive)
-- **Red discard deck**: leans on strategy-first building, Scryfall keyword-chaining (Pyre of the World Tree → Land's Edge/Seismic Assault), and then *cuts* the standard card-advantage package because the engine already provides velocity — restraint, not stacking.
-- **$27 combo deck**: spider-web lens dominates; rejects a real infinite (Shalai lifelink loop) purely on combo-to-dollar math, and picks a 2-mana sac-outlet Commander to double as both engine and card-advantage source.
-- **Hayabusa build**: keyword extraction defines the shopping list, but the final Commander choice is filtered through rule-of-cool and table politeness (rejecting Jet for being oppressive) — power and social lenses both applied, deliberately, not just one.
-- **Bilbo/Ratchet/Ova Enigma builds**: each foregrounds a *different* single lens — multiplayer trigger math, permanent-type resilience, or explosive ramp density — without trying to force all three into one deck.
+## WORKED EXAMPLES
+
+**Budget spiderweb combo deck:** Lenses foregrounded: spiderwebbing, commander-as-resource, budget math. Rejected Blood Pet + Enduring Renewal and the Shalai lifelink loop — real combos, but $2–7 each is too much of a $30 budget relative to how few other cards they touch. Chose Bartolome (2-mana sac outlet) as commander instead of a card-draw or payoff commander, since it does double duty and frees budget elsewhere. Multiplayer scaling and hide-power lenses weren't relevant here and were ignored.
+
+**Hayabusa tribal build:** Foregrounded keyword extraction and overlapping synergy, plus rule-of-cool-bounded-by-fun at the commander-selection stage (cut Jet for being oppressive, picked Hayabusa for flavor + mechanical fit with Suki). Budget math was irrelevant and skipped entirely.
+
+**Red discard-matters deck:** Foregrounded patching a structural weakness (red lacks small engines) and hide-power/social-read (discard-for-damage doesn't look aggressive). Deliberately cut the standard 12+ card-advantage package because the engine itself already generated enough selection — redundancy would've been worse than focus. Resilience and multiplayer-scaling lenses weren't the point of this build and stayed in the background.
+
+**Warp World token deck:** Foregrounded deck shape and commander-shapes-proportions — since the commander was a generator, the 99 shifted toward amplifiers and payoffs. Used synergy-as-cut-guide to drop Thunderfoot Bayou despite being a fine card, because it had zero connection to the capitalization plan. Budget math and multiplayer scaling never entered the conversation.
 
 ## CLOSING
-Don't run every lens on every deck — diagnose which constraint or opportunity actually defines this build (a weakness to engineer around, a budget to respect, a table to read, a power bracket to hit), and go deep on that one, letting the rest recede into the background.
+Don't run every lens on every deck — diagnose what this particular build actually needs to get unstuck or get better, and go deep on those two or three levers rather than shallow on all twelve.

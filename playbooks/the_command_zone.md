@@ -1,72 +1,59 @@
 # The Command Zone - Deckbuilding Playbook
 
-*Distilled from 106 videos. Lenses to weigh with judgment, not a checklist.*
+*Distilled from 113 videos. Lenses to weigh with judgment, not a checklist.*
 
-# THE COMMAND ZONE PLAYBOOK
-## An Operating Guide for Commander Deckbuilding Advisors
-
----
+# PLAYBOOK: Commander Deckbuilding Advisor
 
 ## HOW THE COMMAND ZONE THINKS
+Decks are built around a clear, articulable *identity* (what it does, how it wins) and judged by whether their parts actually serve that identity—not by how individually powerful or exciting each card is. They favor pragmatic iteration (play it, feel the friction, fix it) over theorycrafting in a vacuum, and they never forget that Commander is a social, multiplayer game where fun and fit matter as much as raw power.
 
-They treat deckbuilding as an exercise in *purposeful, situational judgment* — every deck has a job to do, and the job (not a universal template) dictates the math. They obsess over efficiency of mana, cards, and slots, but always in service of "does this help the deck do the thing it's trying to do," while staying alert to the human factors (fun, fairness, table politics, personal attachment) that pure power-level thinking ignores.
+## LENSES (weigh with judgment, not a checklist)
 
----
+**Deck identity / log line.** Every deck should have a one-sentence answer to "what does this deck do and how does it win?" Use it as a filter, not a straitjacket — some decks genuinely want to "do a thing" rather than optimize to win, and that's fine as long as it's chosen on purpose.
 
-## LENSES (weigh with judgment — not every lens applies to every deck)
+**Commander as hub, not just a legal option.** The commander should usually be the thing the deck is actually built around — check whether its ability matches the *density* of what the 99 already does. Sometimes the printed "face" commander isn't the best fit; sometimes forcing a cooler commander requires rebuilding too much of the deck to be worth it.
 
-**1. Know the deck's log line before evaluating any card.** A one-sentence statement of what the deck does and how it wins is the filter for every inclusion/cut decision. Without it, you keep thematically-adjacent cards that don't serve the actual plan. *Applies most when a deck feels unfocused or bloated.*
+**Density/critical mass of a mechanic.** If a deck cares about something (enchantments, counters, artifacts), there's usually a rough threshold (often ~25-30+) below which the payoff is unreliable. Don't evaluate build-around cards in isolation from this density.
 
-**2. Commander choice should match the deck's actual density/mechanics, not just brand recognition or box art.** If 30+ cards in the 99 support one theme, the commander should be the hub of that theme — even if it's a different legendary than the "face" of the precon. *Less relevant when a deck is intentionally commander-agnostic goodstuff.*
+**Category baselines, held loosely.** Ramp, card draw, removal, wipes have rough target ranges (e.g., ~10 ramp, ~10 draw, 8-12 removal, 2-5 wipes) that exist to catch obvious gaps — not as a rigid formula. Deviate freely, but be able to say *why*.
 
-**3. Density thresholds make synergies real.** A payoff needs "critical mass" of enablers (rough baselines: ~30 for enchantments/tribal, ~25 minimum, proliferate needs counter sources first, etc.) or it's a cute inclusion, not a strategy. *Only invoke when evaluating whether a synergy is load-bearing or decorative.*
+**Mana curve as a compounding resource.** The player who uses the most mana each turn tends to win; dead turns compound into irrecoverable deficits. Curve should be shaped around your *commander's* cost — a cheap setup commander wants fast ramp into it, a six-mana finisher doesn't need early ramp at all.
 
-**4. Mana curve is a race, and the commander's CMC sets your ramp/curve needs.** The player who spends the most cumulative mana wins; skipped mana is a permanent deficit. Match ramp speed and 2-3 drop density to whether your commander is a turn-2 enabler or a turn-6 finisher. *Applies to nearly every deck, but the *shape* of the curve varies wildly by commander role.*
+**Power-level fit to the table.** A card or whole deck isn't evaluated purely on strength — it's evaluated on whether it creates a *fair fight* at the intended table. Communicate expectations; a deck too strong or too weak for its group just won't get played.
 
-**5. Card draw > ramp when forced to choose.** Ramp without gas strands you; draw (especially draw that finds lands) keeps you moving. *Weigh this against decks that are commander-draw-engines already covering the need.*
+**Quadrant / average-case thinking.** Avoid best-case-scenario evaluation. Ask how a card performs when you're behind, ahead, or in parity — not just in its dream scenario.
 
-**6. Evaluate cards in realistic/average scenarios, not best-case.** Ask what the floor is, what hoops must be jumped through, and whether the payoff is still live by the time you can trigger it. *Crucial for "prepared," conditional, or combo-piece cards; irrelevant for vanilla efficient staples.*
+**Synergy stacking and multi-role cards.** Cards that do two things (ramp + fixing, removal + draw, token-maker + sac fodder) are worth more than linear effects, especially in a 99-card format starved for slots.
 
-**7. Interaction should match the deck's actual vulnerabilities.** Board wipes fight go-wide plans; too much removal in a token/synergy deck is a signal of misalignment. Spot removal usually beats wipes when you want to preserve your own board state. *Reverse this for stax/control decks where wipes are the plan.*
+**Timing & information (instant vs. sorcery, telegraphing).** Instant speed is a different *and better* category than sorcery speed doing the same thing — flexibility of timing matters independent of raw effect. Also: visible setup (planeswalker ultimates, "prepare" mechanics) gives opponents time to play around or remove you before payoff.
 
-**8. Redundancy of an *effect category* (fast mana, tutors, wipes) — not any single card — is what shifts power level.** One Sol Ring is baseline; a second piece of unconditional fast mana is a real power jump. *Use this lens specifically when calibrating power level, not general deckbuilding.*
+**Table psychology / politics.** Threat assessment, salt, and political leverage are real deckbuilding inputs — a scary, snowballing commander needs protection; a commander that "can't be stopped once it resolves" invites the whole table's removal.
 
-**9. Fun, fairness, and table fit are deckbuilding inputs, not afterthoughts.** A deck that's "too good for casual, too fragile for cEDH" won't get played. Communicate with the playgroup before building; match perceived commander "brand" to actual build intent. *Central for personal/casual deckbuilding; secondary for pure power-max builds.*
+**Complexity as a real cost.** Bookkeeping, trigger-tracking, and decision fatigue are legitimate reasons to simplify or cut a line, independent of its power — "juice worth the squeeze" is a real question.
 
-**10. Protect what the opponent will target.** Scary commanders, visible engines, and telegraphed payoffs (planeswalker ultimates, "prepared" spells) invite removal before they pay off — build in protection, redundancy, or alternate win paths. *Matters most for commander-dependent or slow-payoff strategies.*
-
-**11. Format speed and power-creep erode old cards/strategies over time.** High CMC, slow value engines, and once-iconic strategies (Voltron, Deadeye Navigator loops) can quietly stop being good as the meta accelerates — reassess, don't assume. *Apply when auditing an older or inherited decklist.*
-
-**12. Complexity has a cost.** Excess triggers, math-heavy interactions, or bookkeeping-heavy loops can make a technically powerful deck unfun to pilot or play against. *Weigh heavily for budget/precon upgrades and new-player-facing decks; less for dedicated combo/cEDH builders who enjoy that puzzle.*
-
----
+**Not every lens fires every time.** A budget precon upgrade cares about density/baselines and commander-fit; a cEDH-adjacent combo deck cares about redundancy and resilience to disruption; a politics-heavy pod deck cares about table perception and salt. Diagnose, then pick.
 
 ## RED FLAGS
 
-- **Best-case-only card evaluation** — judging a card by its ceiling instead of its average battlefield performance.
-- **Theme-stacking / over-theming** — chasing a second or third cute sub-synergy that pulls slots away from the commander's actual plan.
-- **Board wipes in a go-wide/token deck** — actively fighting your own strategy.
-- **A "6" that plays turn-one Chrome Mox** — self-reported power level contradicted by card choices.
-- **Ramp with no payoffs to spend it on, or payoffs with no ramp to reach them** — ramp and draw must be paired.
-- **Commander mismatched to deck density** — running the box-art legend when a different card in the 99 is the actual synergy hub.
-- **Telegraphed, fragile payoffs** — a plan that's fully visible to the table and dies the instant the one enabling piece is removed.
-- **Assuming a template category count is sacrosanct** — e.g., "always run 4-5 wipes" without checking whether your actual meta needs them.
-- **Confusing recursion with card draw** — recursion replays what you've seen; only draw finds new answers.
-
----
+- **Over-theming:** stacking multiple unrelated sub-synergies dilutes the commander's role and the deck's identity.
+- **Best-case-only evaluation:** justifying a card purely by its dream scenario while ignoring its average/worst case.
+- **Mismatched commander:** running a "cooler" or "face" commander whose payoff doesn't match the 99's actual density, when a better-aligned option already exists.
+- **Ramp/draw imbalance:** heavy ramp without enough draw (mana flood with nothing to cast), or vice versa.
+- **Curve collision:** loading up on cards that compete for the same mana slot your commander or ramp plan needs.
+- **All-or-nothing game plans:** decks that either win uncontested by turn 3 or completely brick with a dead hand — bad for you and the table.
+- **Telegraphed payoffs:** cards that loudly announce a huge effect several turns out, giving opponents a free window to prepare or remove the engine.
+- **Unexamined "pet card" attachment:** keeping cards because you love them or once had a great story, without being honest that they hurt the plan.
+- **Ignoring format speed/power drift:** evaluating a card against the format as it was years ago rather than what the table actually plays now.
 
 ## WORKED EXAMPLES
 
-**1. Rakdos Madness precon (Anya vs. Greven):** Deck has 23 madness cards — density says the commander must be the one that discounts/enables madness. Anya wins not because she's flashier, but because Greven would require rebuilding the sacrifice/damage subtheme from scratch. *Lens used: commander-density match. Ignored: power-level ceiling comparisons, fun/politics.*
+1. **Precon commander swap (Rakdos Madness → Anya):** The deck had 23 madness cards; the box commander didn't maximize them. Lens applied: commander-as-hub + density. Ignored: table politics, curve theory — irrelevant here, the fix was purely about aligning the general with existing synergy mass.
 
-**2. Titania land-sac deck:** Here the operative lens is synergy density changing card evaluation — Armillary Sphere and Lotus Vale are "bad" cards in a vacuum but become mana-positive token engines once sacrifice-matters density is high enough. Curve and card draw lenses barely get mentioned; the whole discussion lives inside one lens because that's where the deck's identity actually is.
+2. **Chulane redundancy build:** Because Chulane is a removal magnet, the advisor leans hard on "build redundancy around the core mechanic" and "stack triggers for net-positive mana," while barely touching table-politics or salt lenses — this deck's problem is resilience, not social dynamics.
 
-**3. Chulane engine deck:** The commander is a removal magnet, so the dominant lens is redundancy/protection — stack cheap bounce/draw creatures that replicate Chulane's function even without him, plus untap effects (Seedborn Muse) to keep firing through disruption. Power-level and curve lenses are secondary; this deck lives and dies on "what happens when my one engine piece dies."
+3. **Voltron archetype (Light Paws critique):** Here the relevant lenses are table psychology and the all-or-nothing red flag — the deck's problem isn't curve or ramp ratios, it's that the win pattern is repetitive and either unstoppable or dead, which is a *fun/fit* failure, not a numbers failure.
 
-**4. "Miracle Worker" Aminatu precon upgrade:** Multiple lenses converge deliberately: density (30 enchantments = magic number), commander role (she's a setup engine, so ramp needs to come online turn 2-3), and consistent-draw-for-Miracle (sorcery-speed one-off draw doesn't cut it). Notably *absent*: no discussion of table politics or fun/fairness — because this is a budget power upgrade, not a social-fit question. Restraint here matters: they don't force in every lens (no combo-protection talk, no power-level-ceiling audit) because the problem at hand is pure synergy-density tuning.
-
----
+4. **Cutting cards from an Aristocrats deck:** Anthem effects seemed synergistic ("I make tokens, so bigger tokens must help") but failed the log-line test ("make tokens and sacrifice them for value," not "make tokens bigger"). Lens applied: deck identity as a cutting filter — power level and synergy-adjacency weren't enough to save the card.
 
 ## CLOSING LINE
-
-Don't run every lens on every deck — diagnose what this specific deck's real problem or opportunity actually is, then go deep on the two or three lenses that matter there, trusting judgment over procedure.
+Don't run every lens on every deck — diagnose what this specific deck actually needs to be better or more fun, and go deep on *those* one or two things rather than grinding through the whole list.

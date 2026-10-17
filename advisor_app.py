@@ -3227,6 +3227,89 @@ async def deck_ids(request: Request, _: None = Depends(require_auth)):
     return JSONResponse({"ids": ids})
 
 
+# Auto fill: cards for one short section of the deck template, best fit first - Recommander's
+# picks for this commander + list where the role index files them under the section, topped up
+# from Scryfall (the section's otags in the deck's colors, most played first). Ramp that comes down
+# before the operational threshold ranks first: ramp after it is dead weight.
+_FILL_ROLES = {"ramp": ("Ramp",), "draw": ("Draw",),
+               "interaction": ("Target Interaction", "Mass Interaction"), "protection": ("Protection",)}
+_FILL_LABEL = {"ramp": "ramp", "draw": "card draw", "interaction": "interaction", "protection": "protection"}
+
+
+@app.post("/deck/fill")
+async def deck_fill(request: Request, _: None = Depends(require_auth)):
+    import role_index
+    from mtg_tools import _recommander_post
+    body = await request.json()
+    section = str(body.get("section") or "")
+    if section not in _FILL_ROLES:
+        return JSONResponse({"error": "unknown section"}, status_code=400)
+    num = lambda k, d: int(body.get(k)) if str(body.get(k, "")).lstrip("-").isdigit() else d
+    want = max(1, min(num("n", 6), 12))
+    cmdrs = [n[:150] for n in body.get("commander") or [] if isinstance(n, str)][:2]
+    names = [n[:150] for n in body.get("cards") or [] if isinstance(n, str)][:300]
+    exclude = [n[:150] for n in body.get("exclude") or [] if isinstance(n, str)][:300]
+    skip = {_collection_name(n).lower() for n in names + cmdrs + exclude}
+    ident = "".join(x for x in str(body.get("identity") or "") if x in "WUBRG") or "C"
+    threshold = max(1, min(num("threshold", 4), 8))
+    bracket = num("bracket", 0)
+    gc_room = 3 - num("gc", 0) if bracket == 3 else 0 if bracket in (1, 2) else 99
+    roles = set(_FILL_ROLES[section])
+    picks: list[tuple[dict, str]] = []
+
+    def fits(full: dict | None) -> bool:
+        if not full or _collection_name(full.get("name", "")).lower() in skip:
+            return False
+        if (full.get("legalities") or {}).get("commander") != "legal" or full.get("digital"):
+            return False
+        if "Land" in (full.get("type_line") or "").split("//")[0]:
+            return False
+        if full.get("game_changer") and sum(1 for f, _ in picks if f.get("game_changer")) >= gc_room:
+            return False
+        return True
+
+    recs = []
+    if cmdrs:
+        try:
+            data = await _recommander_post({
+                "card_format": "name", "commander": cmdrs[0], "partner": cmdrs[1] if len(cmdrs) > 1 else None,
+                "deck": [n for n in names if n.lower() not in {c.lower() for c in cmdrs}], "weighted_deck": None})
+            if data.get("result_code") == "success":
+                recs = [r for r in (data.get("data") or {}).get("recommendations") or [] if r.get("name")]
+        except Exception:
+            recs = []
+    recs = [r for r in recs if _collection_name(r["name"]).lower() not in skip
+            and roles & set(role_index.roles_for(r["name"]))][:60]
+    await _batch_resolve([r["name"] for r in recs])
+    for r in recs:
+        full = FULL_CARD_CACHE.get(r["name"].lower())
+        if fits(full):
+            picks.append((full, "Decks with this commander and cards like yours play it (Recommander)"))
+            skip.add(_collection_name(full["name"]).lower())
+    if len(picks) < want + 4:  # top up with the section's most-played cards in these colors
+        q = (f"({' or '.join(role_index.ROLE_OTAG[x] for x in _FILL_ROLES[section])}) id<={ident} "
+             "legal:commander -t:land game:paper" + (" -is:gamechanger" if gc_room <= 0 else "")
+             + (f" mv<={max(2, threshold - 1)}" if section == "ramp" else ""))
+        found = await _scryfall_get("/cards/search", {"q": q, "order": "edhrec", "unique": "cards"})
+        for full in (found or {}).get("data") or []:
+            if len(picks) >= want + 12:
+                break
+            if fits(full):
+                FULL_CARD_CACHE.setdefault(full["name"].lower(), full)
+                rank = full.get("edhrec_rank")
+                picks.append((full, f"Popular {_FILL_LABEL[section]} in your colors"
+                                    + (f" (EDHREC #{rank:,})" if rank else "")))
+                skip.add(_collection_name(full["name"]).lower())
+    if section == "ramp":  # stable: fit order kept within each half
+        picks.sort(key=lambda p: (p[0].get("cmc") or 0) >= threshold)
+    cards = []
+    for full, why in picks[:want]:
+        card = _slim_deck_card(full, 1)
+        card["reason"] = why
+        cards.append(card)
+    return JSONResponse({"section": section, "cards": cards})
+
+
 AUTOCOMPLETE_CACHE: dict[str, list] = {}
 
 

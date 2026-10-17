@@ -1,51 +1,54 @@
 # Wise Hoopoe - Deckbuilding Playbook
 
-*Distilled from 18 videos. Lenses to weigh with judgment, not a checklist.*
+*Distilled from 19 videos. Lenses to weigh with judgment, not a checklist.*
 
-# WISE HOOPOE PLAYBOOK — Commander Deckbuilding Advisor
+# WISE HOOPOE DECKBUILDING PLAYBOOK
 
 ## HOW WISE HOOPOE THINKS
-Deckbuilding is comparative judgment in service of a deliberately chosen experience, not a search for abstract "good cards." Every slot is evaluated against what the specific deck is trying to do, at the table it's trying to do it in front of — power level, synergy, and social dynamics are one continuous design problem, not separate concerns.
+Every card, land, and rule choice is a trade-off that must serve a deck's *specific, articulable game plan* — not an abstract notion of "good." Power, price, and politics are all judged relative to context, intent, and the experience you want to create at the table, never in a vacuum.
 
-## LENSES (apply selectively — not every deck needs every lens)
+## LENSES (weigh with judgment — not every lens fires every time)
 
-**Game Plan Coherence** — A deck should have a legible setup (consistent first ~4 turns), 1-2 resource-accumulation axes, and an explicit wincon that actually clears its threshold. WHY: too many central concepts creates slot-machine variance where games play at wildly different power levels, confusing both mulligans and the table.
+**Price ≠ Power.** Cost reflects universality of demand and print scarcity, not strength in a niche shell. Useful when budget-brewing; irrelevant once budget isn't a constraint.
 
-**Price ≠ Power / Benchmarking** — Evaluate cards against your own evolving benchmarks (the worst thing you're running, the best thing you're not), not sticker price or abstract "goodness." WHY: price tracks universality and scarcity, not power in your specific shell — this is where budget value hides.
+**Game Plan Has a Shape.** Good decks have a consistent setup (first ~4 turns), 1-2 resource-accumulation axes (mana/draw), and an explicit win condition with a realistic threshold of iterations needed. Apply this as a diagnostic when a deck feels unfocused or wildly variable game to game — not every deck needs re-litigating if it already plays consistently.
 
-**Commander Resilience** — Build so the commander is a bonus, not a dependency; avoid feast-or-famine shells that invite kill-on-sight. WHY: removal is card-negative in multiplayer, and a deck that dies without its commander both punishes you for playing and guarantees it gets removed.
+**Web of Synergy, Not a Single Wincon.** Multiple overlapping sub-plans sharing the same resources (lynchpin cards) create resilience and agency; a lone, isolated payoff is a single point of failure. Most relevant when a deck feels fragile or "does nothing without card X."
 
-**Breakpoints, Not Generic Accumulation** — Ramp, removal counts, and card-draw density should be sized to specific thresholds derived from your actual game plan (commander MV, lethal power number, turn X), not "more is always better." WHY: a ramp spell that doesn't cross your commander's cost, or a wincon that can't realistically hit its trigger count, is a wasted slot regardless of rate.
+**Consistency ≠ Sameness.** A stable resource floor (mana/cards by a given turn) should *enable* varied lines, not dictate one repeated play. Use this to separate "my deck is consistent" from "my deck is a one-trick." Breakpoints (hypergeometric thresholds, commander-CMC-driven ramp cutoffs) matter when tuning redundancy — skip the math when a deck's identity is intentionally loose (bracket 2 exploration).
 
-**Manabase as Integrated System** — Lands are ~40% of the deck and should actively serve the plan (utility, landfall, fixing); land count should track when your draw engines come online, not a fixed formula. WHY: flood/screw is usually a card-draw problem misdiagnosed as a land-count problem — cutting lands often doesn't fix the real (floor vs. ceiling) issue.
+**Interaction by Intent.** Define removal/protection by what you built it to do. In-hand instant-speed interaction creates false security and punishes greed; on-board interaction is transparent but always live. Threat level is dynamic — judge removal targets by what a card *becomes*, not what it is in a vacuum. Pick this lens up when evaluating a removal suite or a specific interactive sequence, not when the question is about ramp or threats.
 
-**Web of Synergy over Centralization** — Prefer overlapping sub-plans and lynchpin cards that share resources over single-wincon builds or generic "necessary evil" staples. WHY: webs remove single points of failure, increase agency (meaningful choices, not just topdecking), and make niche cards viable.
+**Commander Resilience, Not Fragility.** Avoid "feast or famine" designs that make your commander the only reason to kill you. Build redundancy so the deck is simultaneously "better with it, functional without it." Matters most for commander-centric decks; irrelevant for pure good-stuff piles with no real commander dependency.
 
-**Interaction by Intent & Timing** — Choose interaction for what you built it to do, matched to your actual meta threats; weigh in-hand (surprise, holds mana) vs on-board (plannable, always live) tradeoffs; exploit board wipes/symmetry rather than just casting them. WHY: removal's job is punching above its cost by hitting the best card cheaply, not generating card advantage — and telegraphed answers let opponents play around them.
+**Politics as Rational Alignment.** Treat opponents as reasoning actors; shape their perception of your clock and threat level rather than making explicit deals. Consistency and a "helpful benefactor" posture earn credibility that actually redirects removal. Pull this lens when social dynamics/table politics are the live problem — not a universal requirement for every brew session.
 
-**Tempo, Role & Variance Calibration** — Know whether you're the beatdown or control at any moment, deploy wincons on the turn they go lethal rather than incrementally, and tune efficiency down until you're winning close to a coin-flip. WHY: telegraphing your clock lets opponents optimally answer you; permanent inevitability breeds resentment and misjudges the intended bracket.
+**Tempo & Role Awareness.** Identify who's the beatdown and who's control at any moment; deceive opponents about your role/clock to create windows. Deploy win conditions suddenly, not incrementally. This matters for decks with real combat/clock decisions; less relevant for pure engine/combo shells where the "race" framing doesn't apply.
 
-**Narrative & Bracket Intentionality** — Frame table politics as honest, consistent threat-assessment (not deals or guilt), and treat "game changer" inclusions as a commitment to a whole power tier, not a free upgrade; be wary of "says-the-thing" or "good stuff" commanders that flatten identity. WHY: consistent honesty earns influence over the table; unsupported bombs or shapeless good-stuff piles hijack the experience you actually wanted.
+**Benchmark, Don't Moralize.** Evaluate cards as "playable in this context" against a concrete benchmark card you already understand, not as abstractly good/bad. Benchmarks can set floors (minimum playability) or ceilings (power caps to preserve identity). Great for card-by-card cuts; unnecessary when the issue is structural (game plan, manabase).
+
+**Manabase Is Part of the Strategy.** Lands are ~40% of the deck and should be built for your actual acceleration target and curve, not a universal number. Distinguish floor problems (your consistency) from ceiling problems (a card that's too strong, not too easy to cast) before "fixing" a manabase.
+
+**Bracket as Intentional Design Target.** Build *toward* an experience (and its expected speed/type of interaction), not after-the-fact. A game-changer or combo forces a bracket commitment — include it only if you'll build the whole deck to match.
 
 ## RED FLAGS
-- A deck that does nothing without its commander (feast-or-famine — invites removal, punishes you for playing).
-- A "says-the-thing" commander or four-color "good stuff" pile with no cuttable identity — anything slots in, so nothing is chosen.
-- Ramp/removal/draw counts padded generically without checking they cross an actual breakpoint.
-- Cutting lands to fix flood/screw when the real gap is card draw (floor/ceiling confusion).
-- A single game-changer/combo bolted onto a lower-bracket deck without committing the whole build to that tier.
-- Removal chosen purely for efficiency with no parity-breaking angle or synergy tie-in.
-- Telegraphed, incremental win conditions that give the table time to prepare answers.
-- Direct dealmaking or guilt-based politicking instead of consistent, credible narrative framing.
+- Treating a card's price or rarity as a power signal (confusing accessibility with strength).
+- A commander whose removal ends the game for you — invites kill-on-sight and bad table feel.
+- More than 1-2 unrelated synergy axes, producing wildly different power levels draw to draw.
+- Generic "efficient" staples (Swords, Signet, Counterspell) filling slots that could tie the web tighter.
+- Sorcery-speed, one-for-one removal when the threat's power is time-sensitive (should be instant speed).
+- Cutting lands to fix a "problem" that's actually a card ceiling issue, or actually a lack of card draw.
+- A win condition whose trigger-count threshold is mathematically unreachable in practice.
+- Adding a game-changer/combo "just to close games" without committing the rest of the build to that bracket.
 
 ## WORKED EXAMPLES
+**Budget Ovika spellslinger ($50):** Price≠Power and "play to commander's strengths" are foregrounded — swap efficient spells for cheap ramp/draw the commander's high cost rewards. Politics/tempo deception shows up naturally later (looks like control, wins like aggro) — but manabase lens and benchmarking aren't needed here; the deck's problem is budget access, not identity.
 
-**Budget Satoru (Dimir Blink, $50):** Problem is pure price/power mismatch plus interaction scaling — foreground benchmarking (cheap creatures that punch above rate) and breakpoint-driven removal (Fleshbag effects hitting all opponents to substitute for unaffordable single-target removal). Tempo/politics lenses untouched — not the live issue here.
+**Aristocrats deck restricting to "can't win without death triggers":** Here the operative lens is archetype restriction/benchmark-as-ceiling — cutting a beloved infinite combo (Bosses Chauffeur) because it violates identity, not because it's weak. Web-of-synergy and stack-sequencing get deep attention; price and politics lenses are irrelevant to this problem.
 
-**Ruhan Anti-Newbie Fix:** Cutting lands didn't solve turn-5 kills; the real ceiling was 2-mana rocks reaching lethal too fast. Foreground manabase-as-system (floor vs. ceiling) — leave web-of-synergy and politics alone, since the diagnosis was a single breakpoint problem, not a design-wide one.
+**Ruhan "anti-newbie" deck killing too fast:** The instinct is to touch the manabase, but diagnosis shows the ceiling problem is fast mana rocks enabling turn-3 kills, not land count. Breakpoint thinking (what turn does lethal actually need to land) solves it precisely; benchmarking and politics lenses don't apply.
 
-**Krash, the Bloodbraided:** A control shell disguised as Voltron aggro. Foreground tempo/role deception (looking like beatdown buys space to hold wipes and protection) — manabase and benchmarking aren't the lever; this is entirely a "who's the beatdown" problem.
-
-**Ur-Dragon → Ramos/Niv-Mizzet:** The commander itself was the problem — "says the thing," obvious plan, oversaturated support. Foreground the archetype-trap lens (break into component pieces, pick a tighter commander that does one thing with more identity) — interaction suite and mana breakpoints are irrelevant to this fix.
+**Storvold deck relying on one power-cheat outlet:** Commander-resilience lens dominates — green counters synergies are added so the board threatens lethal with or without Storvold, removing the "just kill the commander" line. Interaction-suite tuning and manabase questions are secondary here.
 
 ## CLOSING
-Don't run the whole toolkit on every deck — diagnose what's actually broken or unclear about *this* build, then go deep on the one or two lenses that matter, trusting judgment over procedure.
+Don't run every lens on every deck. Diagnose what's actually broken or undefined in *this* build — fragility, focus, consistency, interaction, politics, or identity — and go deep on that one or two levers rather than auditing all of them.

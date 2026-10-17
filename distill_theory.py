@@ -168,7 +168,15 @@ def distill_creator(source_name, cap_videos=None):
     print(f"\n### Distilling {source_name!r} ###", flush=True)
     videos = reassemble_transcripts(source_name)
     if cap_videos:
-        videos = videos[:cap_videos]
+        # keep what's already mapped, then the most recently ingested (new uploads: the ingest
+        # manifest is in ingestion order) - so a re-run with a bigger cap updates the playbook
+        # instead of sampling a different slice
+        import json
+        order = {vid: i for i, vid in enumerate(json.loads((DATA_DIR / "ingested.json").read_text(encoding="utf-8")))}
+        cached = [v for v in videos if (CACHE_DIR / f"{slug}__{v['video_id']}.txt").exists()]
+        rest = sorted((v for v in videos if not (CACHE_DIR / f"{slug}__{v['video_id']}.txt").exists()),
+                      key=lambda v: -order.get(v["video_id"], -1))
+        videos = (cached + rest)[:cap_videos]
     print(f"  {len(videos)} videos (map with {MAP_WORKERS} workers)", flush=True)
 
     notes, done = [], 0

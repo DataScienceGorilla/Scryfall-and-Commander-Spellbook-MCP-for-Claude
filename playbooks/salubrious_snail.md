@@ -1,65 +1,61 @@
 # Salubrious Snail - Deckbuilding Playbook
 
-*Distilled from 78 videos. Lenses to weigh with judgment, not a checklist.*
+*Distilled from 79 videos. Lenses to weigh with judgment, not a checklist.*
 
-# SALUBROUS SNAIL: COMMANDER DECKBUILDING PLAYBOOK
+# PLAYBOOK: Reasoning Like Salubrious Snail
 
-## HOW SALUBROUS SNAIL THINKS
+## HOW SALUBRIOUS SNAIL THINKS
 
-Deckbuilding is diagnosis, not decoration. Every card, every subtheme, every commander choice should be interrogated against what the deck is *actually trying to do* — not what looks synergistic, powerful, or thematically cute on the surface. Power level, consistency, and fun are all context-dependent judgments, never absolute rankings, and the right answer for one deck is often wrong for the next.
+Deckbuilding is diagnosis, not assembly. Every deck has a specific set of things it's trying to do and specific things it's vulnerable to; the job is to find what actually matters for *this* deck and solve *that*, rather than running a generic template of ramp/draw/removal/wincons. Power level, fun, and consistency are negotiated tradeoffs, not separate concerns — a good decision in one area often creates a new problem in another, and that's expected, not a failure.
 
-## LENSES (weigh with judgment, not a checklist)
+## LENSES (apply selectively, weigh against each other)
 
-- **Theoretical vs. contextual goodness.** A card can be efficient in a vacuum and still wrong for this deck. Always ask what the deck is trying to accomplish before asking if a card is "good."
+- **Identity before parts.** A commander, a card, or a mechanic is not a gameplan by itself. Ask what the deck is actually trying to *do* before slotting in synergy pieces — tribal, a keyword, a "cool card" are starting points, not destinations.
 
-- **Gameplan first, theme/tribe/mechanic second.** A tribe, keyword, or cute card is not a strategy. It needs a coherent direction (beatdown, control, combo, grind) to organize around, or it becomes a pile of competing payoffs.
+- **Consistency & execution likelihood.** Weigh how often the core plan actually comes together vs. how often the deck just does something else. Fragile plans that need one specific card in play are a red flag; resilient plans function across a range of draws.
 
-- **Setup cost vs. payoff.** Powerful engines, commanders, or combos that require heavy assembly must be judged by how likely they are to *actually come together* in a real game, not just how good they are once online.
+- **Enabler vs. payoff, and commander as counterweight.** Commanders that enable the whole plan concentrate risk into one removable card; payoff commanders are safer. Sometimes the strongest move is making the commander solve the deck's *weakness* rather than amplify its strength — freeing deck slots for what the 99 does well.
 
-- **Floor and ceiling of synergy cards.** A payoff needs to be acceptable even in the 25th-percentile game where its synergy doesn't fully click. Cards that are only good in the best-case scenario are traps.
+- **Floor/ceiling of synergy pieces.** A card that's great in the ideal case but dead otherwise needs either a high floor on its own or heavy support density. Thin synergies (single-digit setup/payoff counts) can't support many narrow payoffs.
 
-- **Setup/payoff density matching.** Payoffs need enough enablers to trigger reliably; enablers need enough payoffs to matter. Mismatched ratios create dead draws in either direction.
+- **Compactness and multi-functionality.** Cards and categories that pull double duty (removal that's also discard, ramp that's also a proliferate source) let a deck do more with the same slot count — crucial when juggling several subthemes or an unavoidable structural cost (commander-enabling infrastructure, mana-fixing).
 
-- **Command zone as a resource, not just a theme anchor.** The commander is guaranteed every game — it can amplify a strategy, or it can cover a structural weakness the 99 has (a "counterweight commander"), freeing deck slots for what the deck does well.
+- **Opposing synergy axes can conflict.** Solving one problem can create an incompatible one (enchantress vs. Rule of Law, discard theme vs. a commander so strong it trivializes the theme). Notice when two "good ideas" fight each other before committing to both.
 
-- **Ramp/draw/interaction should match deck function, not template defaults.** Curve-out ramp should hit your actual mana targets; total-mana ramp should serve your actual late-game need; interaction density and type should match your speed and what threats you'll actually face — not a generic "8-10 removal" rule.
+- **Match ramp/draw/interaction to what the deck curve and plan need** — not generic quantities. Curve-out needs differ from total-mana needs; fast decks want less interaction, slow/board-dependent decks want more; removal should answer real threats in your meta, not a checklist of card types.
 
-- **Consistency and resilience over raw ceiling.** A deck that reliably does something acceptable across many game states beats one that occasionally does something incredible and otherwise does nothing.
+- **Power level variance vs. card variance.** Variety in what you draw is good (freshness); variance in how *powerful* your draws are is bad (unpredictable matchups, feast-or-famine games, broken threat assessment). Don't defend one by pointing at the other.
 
-- **Multi-functionality over generic utility.** In singleton, cards that pull double duty (ramp+synergy, removal+utility) increase the odds any given draw is useful, especially in decks with many small subthemes.
+- **Opponent experience and perception matter.** How a deck is piloted (what it shows, what it hides, how it wins) shapes table dynamics as much as raw power. Visible, legible threats create better games than hidden combo spikes or oppressive generic bombs — even at equal power.
 
-- **Power level concentration.** A deck's power is often concentrated in a handful of specific cards/combos, not evenly distributed. Removing or adding a few key pieces can shift a whole bracket.
+- **Budget/constraint as creative pressure, not just limitation.** Tight card pools or price caps often produce more interesting, more mechanically engaged decks than unlimited budgets, because they force genuine problem-solving instead of slotting in staples.
 
-- **Perception and social dynamics matter.** How a deck telegraphs its threat level (visible board presence vs. hidden combo, commander role as combo piece vs. fair engine) shapes how opponents remove/interact with it, and shapes whether games feel fair.
+- **Don't build cards; build for the games you want.** Owning a powerful card, or a card being "theoretically good," isn't a reason to include it. Ask whether it serves this deck's actual needs and desired power level.
 
-- **Vibes/identity coherence.** A deck should feel like itself. Don't graft on powerful generic staples or mechanics (stax into a spells-matter deck, discard payoffs with no discard density) that contradict or undercut the thing you're actually building.
-
-- **Budget/constraint as clarifying, not limiting.** Tight constraints (money, card pool, no synergy support) often force better, more creative decisions than unlimited access, which invites drift and warping.
-
-Not every lens matters for every deck — a fast combo deck doesn't need the same interaction-scaling thinking as a grindy control deck, and a tight two-card synergy deck doesn't need floor/ceiling analysis the way a five-subtheme pile does. Diagnose first.
+- **Earn the right to run jank.** A strong foundation (consistent mana, real card draw/filtering, flexible answers) creates room for pet cards and flavor picks; a weak foundation gets clogged by them.
 
 ## RED FLAGS
 
-- **Tribal/mechanic-as-identity.** Building around a type-line or keyword with no underlying gameplan — flag it, ask what the deck actually wins with.
-- **Payoff without enough enablers (or vice versa).** Doublers with one payoff creature, discard payoffs with five discard sources — fragile piles waiting to whiff.
-- **Win-more cards mistaken for wincons.** Anthems on a go-tall deck, cards that only matter once you're already ahead — these are dead weight, not a plan.
-- **Amplifiers with no consistent target.** Counters-matter, power-matters, or artifact-matters payoffs stacked without a resilient base of the thing being amplified.
-- **Commander turned into a combo piece unintentionally.** If casual play with the commander invites full removal-priority every game, that's a structural problem, not flavor.
-- **Adding cards just because you own them or they're cheap.** Free/budget power warps a deck's real power level and the table's read of it — same sin as buying an overpowered staple.
-- **Templated ramp/draw/removal counts applied without asking why.** "8-10 ramp because that's what decks run" without checking curve, commander cost, or actual need.
-- **Fixing one problem while creating an equally serious new one.** (Rule of Law next to enchantress; graveyard reanimator solving Throne but creating fragility.)
-- **Mistaking deckbuilding cleverness for good gameplay.** A creative combo assembled through genius technical work can still just play out as "generic combo deck" at the table.
+- **Generic power standing in for identity** — bomb tutors/reanimation targets so widely played they make the deck interchangeable with a hundred others, even if "optimal."
+- **A card asked to *be* the deck** rather than support an already-formed plan (a cute build-around that can't carry the weight alone).
+- **Payoffs outrunning their support** — running a payoff for a synergy the deck barely enables (discard payoff with 5 discard outlets; graveyard payoff with no mill).
+- **Dead-card drawbacks that trigger more than the upside** — a keyword/ability that works against you as often as for you.
+- **Amplifiers without a resilient target** — doublers/anthems/proliferate effects stacked on a thin, easily-removed core.
+- **Mana symbols misaligned with actual card demands** — double-pip cards jammed into an off-color-heavy manabase.
+- **Ramp/ratios copied from a template** without asking whether *this* deck's curve or commander actually wants it.
+- **Ignoring commander-as-combo-piece fallout** — turning a fair commander into a combo engine changes how every opponent treats it, even in "fair" games.
+- **Win conditions and interaction mismatched to deck speed** — holding up counterspells in a deck that never leaves mana open; running board wipes in a synergy deck that dies to its own wipe.
 
-## WORKED EXAMPLES
+## WORKED EXAMPLES (showing restraint — not every lens fires every time)
 
-**1. Miirym Dragons — foregrounding contextual goodness.** Crucible of Fire and Acolyte of Bahamut look efficient on paper, but Miirym's deck is go-tall with low dragon counts and immediate threat generation — the anthem comes too late, the ramp assumes a safe untap that opponents won't allow. The fix isn't "better cards," it's asking what the deck actually does before evaluating fit. (Curve calculators, budget concerns, social perception — irrelevant here; this is a pure "what does this card assume vs. what actually happens" problem.)
+**1. Tribal dragons with Crucible of Fire.** Here the relevant lens is *identity before parts* plus *floor/ceiling*: dragons are a go-tall shape, anthems assume go-wide, so the card is win-more more often than not. No need to invoke budget, variance, or social-perception lenses — this is a pure fit-check between card function and deck shape.
 
-**2. Enigmatic Control (Tuvasa Enigmatic Incarnation) — foregrounding tension between synergy axes, with restraint to walk away.** Enchantress wants multiple enchantments per turn; Rule of Law-style stax wants the opposite. Multiple fixes were tried (push stax harder, go generic enchantress, keep the split) and each traded one coherence problem for another. The right call was abandonment — not forcing a lens like "just add more ramp" to paper over a fundamental incompatibility.
+**2. $20 playgroup deck with Pako/Haldan → Xyris swap.** The operative lens is *commander as counterweight / engine fit*, not power-level variance or budget creativity (budget was already a given, not the lever). Xyris converts draw into board presence and velocity, solving the deck's actual bottleneck. Nothing here calls for discussing stax or table perception.
 
-**3. Meria Voltron — foregrounding manabase/ramp fit and restraint on power creep.** Curve-out logic says a 3-cost equipment-heavy deck needs zero ramp; total-mana logic says commander tax still matters, so moderate rock-based ramp is kept. Separately, Sword of Forge and Frontier was cut despite being free and powerful — not a manabase issue, not a synergy issue, purely a "this warps opponents' perception and the deck's intended power bracket" issue. Two different lenses, applied to two different problems, in the same deck — neither forced onto the other's territory.
+**3. Rhystic Study ban discussion.** This is squarely a *red flag / opponent experience* case, weighed through the specific lens of "power + frustrating pattern together," not through consistency or ramp-matching lenses, which are irrelevant to a social/format-level judgment.
 
-**4. Malfegor Discard / Aggro Ideology — foregrounding command-zone-as-counterweight and speed-appropriate interaction, ignoring manabase and synergy-package lenses.** Malfegor is chosen not for raw synergy with discard but because it solves the shell's specific weakness (grindy small creatures can't attack into a full board — Malfegor wipes blockers). Ramp is deliberately minimal because curve-out and total-mana needs are both low. No agonizing over floor/ceiling of subthemes, because there's only one tight subtheme here, not five competing ones.
+**4. Glass cannon Kaalia vs. Pantlaza-style dino swap.** Here *enabler vs. payoff commander* and *opponent experience* dominate — the decision is about resilience and telegraphing, not about mana symbols, budget, or synergy density, which don't bear on why one commander invites "kill on sight" and the other doesn't.
 
-## CLOSING LINE
+## CLOSING
 
-Don't run every lens on every deck like a rubric — diagnose what this specific deck is actually struggling with or organized around, and go deep on the two or three lenses that matter there. The judgment is the point.
+Don't run every lens on every deck — diagnose what this specific deck is actually struggling with or reaching for, then go deep on the two or three lenses that matter most there, trusting judgment over procedure.

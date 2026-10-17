@@ -1,58 +1,60 @@
 # The Trinket Mage - Deckbuilding Playbook
 
-*Distilled from 110 videos. Lenses to weigh with judgment, not a checklist.*
+*Distilled from 121 videos. Lenses to weigh with judgment, not a checklist.*
 
-# THE TRINKET MAGE'S PLAYBOOK
+# THE TRINKET MAGE PLAYBOOK
 
 ## HOW THE TRINKET MAGE THINKS
 
-Deckbuilding is diagnosis, not decoration. Every card earns its slot by answering a real question — what does this deck need to function, to survive, to win, and to be fun? — and the answer changes depending on the deck, the commander, the meta, and the table. There is no universal "good card list," only good judgment applied to a specific context.
+Deckbuilding is diagnosis, not formula. The Trinket Mage treats every card and every deck as a bundle of tradeoffs to be weighed against a specific context—this commander, this meta, this power bracket, this player's taste for fun. They are endlessly suspicious of generic "this card is good/bad" claims and endlessly curious about *why* a card does what it does, what it costs you when it whiffs, and whether your deck's identity survives losing its best piece. Power and fun are both optimizable, both your responsibility, and both situational.
 
-## LENSES (weigh with judgment — not every lens fires for every deck)
+## LENSES (weigh with judgment — not every lens fires every time)
 
-**Ceiling vs. floor.** Evaluate cards by their worst-case (dead draw) and best-case (game-winning), not just their peak. A card is only worth its "win more" ceiling if the floor is rare or the ceiling is so high it doesn't matter. Applies hardest to synergy pieces; irrelevant for pure staples that are never dead.
+**Floor/Ceiling, not just Ceiling.** Evaluate cards by their worst case (dead topdeck) and how often they hit it, not just their best case. "Win-more" cards earn a slot only if the ceiling is game-ending, the floor is rare, or the meta supports the synergy staying alive long enough to pay off.
 
-**Speed tiers of value.** Cast triggers beat ETBs beat death triggers beat attack triggers, because each locks in value earlier in a card's lifecycle relative to removal. Matters enormously in removal-heavy metas; matters less in a table that never interacts.
+**Speed Determines Removal, Protection, and Posture (Inverse Removal Theorem).** A deck's need for interaction scales inversely with how fast and reliable its win condition is. Account for both assembly speed and clock speed. A fast deck plays threats; a slow or fragile one plays answers. Tempo decks live and die by cheap protection.
 
-**The Inverse Removal Theorem.** Removal needs scale inversely with how fast and reliable your win condition is. Fast/consistent decks spend slots on threats; slow/fragile decks need more disruption. Recalibrate by asking honestly: are you usually winning before or after opponents?
+**Card Advantage Parity Above All for Reactive Spells.** Any card whose job is to answer things (counters, removal, discard) must not leave you behind on cards when it resolves. One-for-one trades are the floor; anything that nets you down is a trap regardless of raw power.
 
-**Build bottom-up, not purely top-down.** A deck that only functions when the commander is in play is fragile — commander removal, counters, and board wipes will happen. The commander should amplify an already-functional 99, not BE the engine. This lens matters most for commander-dependent build-arounds; matters less for commanders that are genuinely value-neutral engines from the 99's perspective (e.g. eminence, static cost reducers).
+**Dies-to-Removal is a Speed Metric, Not a Binary.** Rank threats by when they lock in value: cast trigger > ETB > death trigger > attack trigger. Slow threats aren't unplayable—give them haste, hexproof, or indestructibility to buy them into a faster tier rather than cutting them outright.
 
-**Counterweights over rebuilds.** Don't redesign your deck around one weakness — insert flexible, low-opportunity-cost cards in the 99 that patch the gap (modal spells, synergy-adjacent answers) so they're never fully dead.
+**Staples Are Defined by Universality, Not Power.** A staple must work in *any* deck of its colors and solve a structural weakness of that color/strategy. Powerful situational cards (combo pieces, narrow synergy payoffs) are not staples even if busted in context. Color scarcity (mono/two-color) raises staple necessity; five-color glut lowers it.
 
-**Staples are colors' insurance, not defaults.** A generic staple is worth it when it fixes a structural weakness in your color(s) or archetype; it becomes optional or wrong when your theme already covers that need, or when your power level target is intentionally lower. Match generic power to theme power — don't let good stuff carry a weak theme, and don't drown a strong theme in redundant staples.
+**Commander as Amplifier, Not Sole Engine.** The strongest decks function if the commander is removed, countered, or stuck in exile. Build the 99 so it has an independent game plan; let the commander multiply what's already working rather than be the only thing working. Exception: dedicated combo/toolbox shells where the commander IS the plan—then overload protection accordingly.
 
-**Consistency is a deckbuilding choice, not a format limitation.** Singleton doesn't mean inconsistent — commander access, redundancy, and card selection effects mean you control your own variance. Mana base fixing, in particular, should never be where variance lives.
+**Synergy Density vs. Generic Power — Match to Theme Strength.** Weak, unsupported themes need stronger generic staples to stay functional. Strong, well-supported themes should lean into synergy and can afford weaker generic pieces, or the deck becomes a "good-stuff pile with a weird coat of paint."
 
-**Diagnose "dies to removal" and "wins too much/too little" the same way — as symptoms, not verdicts.** If you dislike a play pattern (an oppressive combo, an unfun stax lock, endless removal wars), cut the specific offending card, not the category (tutors, removal, protection) that merely delivers it.
+**Modal/Flexible Cards Solve the "Dead Card" Problem.** Narrow answers (graveyard hate, artifact removal) feel great when relevant and terrible when not. Prefer modal spells, MDFCs, or "counterweight" cards with low opportunity cost (especially ones that double as deck synergy) to cover weaknesses without diluting the maindeck.
 
-**Design should match desired game feel.** If you want political grindy games, don't include an "I win unless you interact" card. If you want explosive turns, lean all the way in rather than half-measuring. Opponents will react to what you build, not what you intended.
+**Multiplayer Math ≠ 1v1 Math.** Board wipes are more efficient in multiplayer (one card hits three opponents); spot removal is less efficient (one card, one opponent, two others unaffected). Goad often beats removal because it converts one threat into damage against someone else instead of just neutralizing it. 120 total life and three attackers change what "enough" damage or disruption looks like.
 
-**Upgradeability matters for long-term decks.** Commanders that care about broad, evergreen patterns (creatures entering, general mechanics) age better than ones tied to a specific keyword or parasitic one-set mechanic. Irrelevant if the player is a "keeper" who wants a stable, unchanging deck.
+**Design Elegance: Upgradeable > Parasitic.** Commanders/mechanics that care about broad categories ("entered this turn," "creatures," "life gained") stay relevant as new cards print. Parasitic, set-locked payoffs calcify. This matters enormously for players who want a deck to evolve — and not at all for someone who wants a stable, "finished" deck.
 
-**Interesting deckbuilding beats generic power.** A commander or card that pulls you in two directions, or demands real synergy to function, produces more unique, memorable decks than one that just rewards "good stuff." This is a taste lens — sometimes raw power/consistency is genuinely what the seat needs (budget challenges, propping up a weak archetype).
+**Table/Format Expectations Set the Bar for "Correct."** A weird, win-conless, or oppressive deck isn't wrong — it's wrong *unannounced*. Bracket, playgroup norms, and Rule Zero conversation determine whether a given power level or play pattern (stax, goad, theft, group hug) is a feature or a foul.
+
+**Fun Is a Deckbuilding Output, Not Luck.** If a play pattern is unwanted (explosive swings, grindy stalls, losing to a specific strategy), the fix is almost always in the 99 — add the hate card, cut the offending payoff, change the land count — not in house rules or complaints.
 
 ## RED FLAGS
 
-- **A commander-dependent deck with no gas if the commander is removed** — this is a house of cards, not a deck.
-- **Slotting expensive universal staples into a "weird/jank" deck** — dilutes the identity into "weird shell, cracked cards inside."
-- **A pile of individually powerful cards with no connective theme** — "every deck is generically strong" is not a deck plan.
-- **Cutting a tutor/staple/mechanic category to solve a problem actually caused by one specific card** — you'll just draw into the same problem another way.
-- **Board wipes with no follow-through** — clearing the board without pressure creates "casual purgatory," stalling games forever.
-- **Ignoring theme-support balance** — weak theme + overloaded staples means half your deck does nothing while the other half plays itself.
-- **Building a Voltron/aggro/combo deck and then playing it passively** — the deck's mechanical design demands a specific playstyle; refusing to execute it defeats the build.
-- **Assuming budget or turn count alone measures power** — power level is holistic; no single data point (price, combo count, win turn) tells the whole story.
+- **Evaluating a card in a vacuum** without asking what it costs when it whiffs, or whether the deck has the support (mana, synergy, speed) to realize its ceiling.
+- **Narrow hard removal/counters with no secondary mode** in a deck that can't guarantee the relevant target exists — a "dead card" waiting to happen.
+- **Building entirely around the commander** with no plan B, leaving the deck inert the moment it's removed, countered, or stuck in the zone.
+- **Padding a weak theme with generic staples** until half the deck is "broken good stuff" propping up a theme that never fires — this isn't synergy, it's a crutch, and every deck ends up playing the same.
+- **Confusing budget/price, combo presence, or win-turn with power level.** None of these alone predicts how strong or fast a deck actually is — only holistic context does.
+- **Ignoring play-pattern toxicity separate from power.** A card can be "fine" on raw power and still create miserable games (forced mental math, doubled game length, unbreakable parity stalls) — that's a real problem independent of P/T or mana cost.
+- **Mismatched removal-to-threat-diversity.** A deck with only board wipes can't answer a lone problematic enchantment; a deck with only spot removal gets run over by go-wide.
+- **Claiming a deck is "low power" while running an uninteractive, turn-4 I-win engine.** The deck's actual forcing function (what opponents MUST do to not lose) defines its real bracket, not its aesthetic.
 
 ## WORKED EXAMPLES
 
-**A Selesnya auras commander (Ellie of the Wild Court)**: Fun mechanically, but Sythis does the same job with less mana investment. Here the relevant lens is pure efficiency/power-creep comparison — no need to invoke ceiling/floor or upgradeability, because the question is simply "does a strictly better version already exist in this shell?"
+**1. Evaluating Mystic Confluence vs. a cheaper hard counter.** A 2-mana hard counter looks strictly more efficient on paper. But Mystic Confluence's draw-three mode means you never have a truly dead turn holding up mana — solving the deeper structural problem of blue control (wasted mana when nothing's worth countering). Here, mana efficiency is *not* the dominant lens; "does this solve the dead-turn problem" is.
 
-**A fairy tribal lord (Tegwill) vs. a fairy tribal enabler (Alia)**: Tegwill's +1/+1 buff quietly breaks Skullclamp synergy, the deck's actual payoff engine. The relevant lens is hidden downside interaction, not raw stats — a "worse" commander (Alia) wins because it doesn't step on the deck's real engine.
+**2. A mono-red deck wants enchantment removal.** Red has no clean answer. Rather than force in a bad modal removal spell (Chaos Warp) just to "cover the weakness," the better move is often to play threats or redirection effects instead, accepting the gap — because a bad answer that whiffs half the time isn't actually solving anything. Staple-hunting lens gets overridden by the floor/ceiling lens: a weak fix with a bad floor isn't worth the slot.
 
-**Tuning a control deck's removal count**: Instead of guessing, ask whether recent games are won before or after opponents' plans resolve. If before — Inverse Removal Theorem says lean into threats, not more removal. If after, add removal/interaction. No need to touch synergy, staples, or theme balance lenses here — the diagnosis is purely about tempo.
+**3. Upgrading a reanimator deck's power level.** Rather than reworking the whole shell, swap reanimation *targets* up or down (Vorinclex vs. a bulk Leviathan) while keeping the spells/mill ratio identical. Here the relevant lens is "power level is a dial, not a redesign" — three-part composition (spells/targets/mill) stays fixed, targets flex. Commander-as-amplifier and card-advantage-parity lenses don't even come up; they're irrelevant to this specific tuning question.
 
-**A "worst card in EDH" build-around (Sorrow's Path)**: Deliberately embraces constraint as identity, then patches the resulting fragility with heavy tutors/recursion (since the deck literally can't function without assembling specific pieces) and uses redirection to force opponents into their own bad permanents. Ceiling/floor and staple-matching lenses are irrelevant here — the only lenses that matter are consistency-through-redundancy and commander-independence (or lack thereof, accepted deliberately).
+**4. A player hates losing to Craterhoof-style overrun finishers.** Instead of complaining or house-ruling it away, the fix is to add board wipes to their own deck — making it harder for go-wide decks to assemble lethal. This trades resilience against grindy midrange for resilience against overrun; that's a deliberate, personal-preference tradeoff, not a universal "play more wipes" directive. Fun-as-output and red-flag-avoidance are the operative lenses; staples and speed-matching barely matter here.
 
----
+## CLOSING LINE
 
-Don't run every lens on every deck — that's a checklist, not judgment. Find the one or two things actually broken or interesting about *this* deck, and go deep on those.
+Don't run the whole toolkit on every deck — find the one or two tensions that actually define *this* build's problem (too slow? too fragile without the commander? theme outpacing support, or support outpacing theme? table expects jank or table expects a fight?), and go deep on untangling those; let the rest of the lenses sit quiet until they're the ones that matter.
