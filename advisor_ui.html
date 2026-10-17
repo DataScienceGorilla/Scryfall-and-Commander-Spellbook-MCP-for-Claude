@@ -294,6 +294,30 @@
   .deck-toolbar .tb-btn { cursor: pointer; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
   .deck-toolbar .tb-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
   .deck-toolbar .tb-btn:disabled { opacity: .45; cursor: default; }
+  .view-seg { display: flex; flex-shrink: 0; }
+  .view-seg button { height: 38px; padding: 0 12px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+    font: inherit; font-size: 14px; cursor: pointer; }
+  .view-seg button:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+  .view-seg button + button { border-left: none; border-radius: 0 var(--radius) var(--radius) 0; }
+  .view-seg button:hover:not(.on) { color: var(--text); }
+  .view-seg button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  /* Stacks: one column per group, packed like a wall; the cards overlap so each shows its title
+     bar, the last card and the one under the pointer open whole (pushing the rest down). A
+     negative margin in % is of the column's width, so 120% leaves ~20% of the width showing. */
+  .deck-groups.stacks { column-width: calc(var(--card-min, 105px) * 1.45); column-gap: var(--s3); }
+  .deck-groups.stacks > .role-group:not(.empty-group), body.dragging .deck-groups.stacks > .role-group.empty-group {
+    break-inside: avoid; display: inline-block; width: 100%; }
+  .deck-groups.stacks .role-grid { display: flex; flex-direction: column; gap: 0; }
+  .deck-groups.stacks .role-grid > .card-tile { flex-shrink: 0; margin-bottom: -120%; box-shadow: 0 -1px 3px var(--shadow);
+    transition: margin-bottom .15s ease, box-shadow .12s; }
+  .deck-groups.stacks .role-grid > .card-tile:last-child { margin-bottom: 0; }
+  @media (hover: hover) { .deck-groups.stacks .role-grid > .card-tile:hover { margin-bottom: 0; transform: none; } }
+  .deck-groups.stacks .role-grid > .card-tile.gc { box-shadow: 0 0 0 2px var(--accent); }
+  .deck-groups.stacks .role-grid > .card-tile.commander { box-shadow: 0 0 0 2px var(--accent-2); }
+  .deck-groups.stacks .role-grid > .card-tile.offcolor { box-shadow: 0 0 0 2px var(--danger); }
+  .deck-groups.stacks .card-tile .qty { top: 4px; left: 4px; bottom: auto; right: auto; }
+  body.drag-in #cards { outline: 2px dashed var(--accent); outline-offset: -4px; }
+  .deck-groups.stacks .card-tile.offcolor::after { content: "⚠"; top: 4px; left: auto; right: 4px; padding: 1px 6px; }
   .add-wrap { position: relative; flex: 1 1 180px; min-width: 0; }
   .add-wrap input { width: 100%; padding-left: 36px; background-color: var(--bg); border-color: var(--border);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235f5442' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
@@ -412,7 +436,26 @@
   .role-group.empty-group { display: none; }
   body.dragging .role-group.empty-group { display: block; }
   body.dragging .role-group .role-grid { min-height: 56px; border: 1px dashed var(--border); border-radius: var(--radius); padding: 4px; }
-  .role-group.drop-over .role-grid { border-color: var(--accent) !important; background: var(--accent-tint); }
+  .role-group.drop-over .role-grid { border: 2px solid var(--accent) !important; background: var(--accent-tint); box-shadow: 0 0 0 4px var(--accent-tint); }
+  .role-group.drop-over .role-group-title { color: var(--accent); }
+  /* where the card will land: an open slot at the end of the group under the pointer */
+  .role-group.drop-over .role-grid::after { content: "+"; display: flex; align-items: center; justify-content: center;
+    aspect-ratio: 63/88; border: 2px dashed var(--accent); border-radius: var(--radius-card); color: var(--accent);
+    font-size: 24px; font-weight: 600; }
+  .deck-groups.stacks .role-group.drop-over .role-grid::after { aspect-ratio: auto; height: 44px; margin-top: 4px; }
+  /* what a drop does here, pinned to the top of the canvas while a card is dragged */
+  #canvas { position: relative; }
+  .drop-hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 20; pointer-events: none;
+    background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 650; padding: 6px 14px;
+    border-radius: 999px; box-shadow: 0 6px 18px var(--shadow); white-space: nowrap; max-width: calc(100% - 24px);
+    overflow: hidden; text-overflow: ellipsis; }
+  .drop-hint.muted { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  /* a dropped card on its way (the Scryfall lookup), then the card itself opens and glows */
+  .card-tile.pending-tile { display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--accent);
+    border: 2px dashed var(--accent); background: var(--accent-tint); animation: pending-pulse .8s ease-in-out infinite alternate; }
+  @keyframes pending-pulse { from { opacity: .55; } to { opacity: 1; } }
+  .deck-groups.stacks .role-grid > .card-tile.pending-tile { margin-bottom: 0; aspect-ratio: auto; height: 44px; }
+  .deck-groups.stacks .role-grid > .card-tile.flash { margin-bottom: 0; box-shadow: 0 0 0 3px var(--accent), 0 8px 20px var(--shadow); }
   .card-tile.commander { box-shadow: 0 0 0 2px var(--accent-2); }
   .card-tile.dragging-src { opacity: .35; }
   .card-tile .tag-dot { position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,.82); color: var(--accent);
@@ -2115,6 +2158,9 @@ function buildToolbar() {
     + '<button class="tb-btn" id="briefBtn" title="Commander, bracket, goals and limits for the advisor">Brief</button>'
     + '<button class="tb-btn" id="copyDeckBtn" title="Copy the decklist in a format your deckbuilder imports">Export ▾</button>'
     + '<button class="tb-btn" id="goldfishBtn" title="Open this list in the Archidekt playtester to goldfish it - no account needed">Goldfish ↗</button>'
+    + '<div class="seg view-seg" role="group" aria-label="Card layout">'
+    + '<button type="button" data-view="stacks" title="Stacks: a column per role, cards overlapped - hover one to open it">Stacks</button>'
+    + '<button type="button" data-view="grid" title="Grid: every card shown whole">Grid</button></div>'
     + '<button class="tb-btn tb-icon" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>';
   const input = tb.querySelector('#addCardInput');
   attachAutocomplete(input, tb.querySelector('.ac-list'), {
@@ -2125,10 +2171,15 @@ function buildToolbar() {
   tb.querySelector('#copyDeckBtn').addEventListener('click', (e) => toggleExportMenu(e.currentTarget));
   tb.querySelector('#briefBtn').addEventListener('click', () => openIntake());
   tb.querySelector('#goldfishBtn').addEventListener('click', goldfishInArchidekt);
+  tb.querySelectorAll('.view-seg button').forEach(b => b.addEventListener('click', () => {
+    if (prefs.deckView === b.dataset.view) return;
+    prefs.deckView = b.dataset.view; savePrefs(); renderDeck();
+  }));
   return tb;
 }
 function syncToolbar() {
   toolbarEl.querySelector('#undoBtn').disabled = !undoStack.length;
+  toolbarEl.querySelectorAll('.view-seg button').forEach(b => b.classList.toggle('on', b.dataset.view === (prefs.deckView || 'stacks')));
 }
 // Deck title: the commander is the deck's name. Clicking it opens the Brief, where the
 // commander, bracket and goals are set.
@@ -2208,6 +2259,11 @@ function renderDeck() {
   const order = DECK_ROLES.concat(Object.keys(byGroup).filter(g => !DECK_ROLES.includes(g)));
   const ident = commanderIdentity();
   deckTiles = new Map();
+  // Stacks: each group is a column of overlapping cards (title bars showing, hover opens one),
+  // the columns packed like a wall. Grid: each group is a wrapping row of whole cards.
+  const groupsEl = document.createElement('div');
+  groupsEl.className = 'deck-groups' + (prefs.deckView === 'grid' ? '' : ' stacks');
+  deckView.appendChild(groupsEl);
   for (const g of order) {
     const cards = (byGroup[g] || []).sort((a, b) => (a.cmc || 0) - (b.cmc || 0) || a.name.localeCompare(b.name));
     const section = document.createElement('div');
@@ -2219,8 +2275,8 @@ function renderDeck() {
     for (const c of cards) grid.appendChild(deckCardTile(c, ident));
     section.appendChild(title); section.appendChild(grid);
     bindDropZone(section);
-    deckView.appendChild(section);
-    if (g === 'Commander' && deck.companion) deckView.appendChild(companionSection());
+    groupsEl.appendChild(section);
+    if (g === 'Commander' && deck.companion) groupsEl.appendChild(companionSection());
   }
   if (!deck.maybe) deck.maybe = [];
   deckView.appendChild(maybeSection());
@@ -2257,7 +2313,10 @@ function deckCardTile(c, ident) {
   return tile;
 }
 function bindDropZone(section) {
-  section.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; section.classList.add('drop-over'); });
+  section.addEventListener('dragover', (e) => {
+    e.preventDefault(); e.dataTransfer.dropEffect = isOwnDrag(e) ? 'move' : 'copy'; section.classList.add('drop-over');
+    setDropHint(`${dragFrom === 'deck' ? 'Move to' : 'Add to'} ${section.dataset.group}`);
+  });
   section.addEventListener('dragleave', (e) => { if (!section.contains(e.relatedTarget)) section.classList.remove('drop-over'); });
   section.addEventListener('drop', (e) => {
     e.preventDefault(); section.classList.remove('drop-over'); endDrag();
@@ -2268,7 +2327,7 @@ function bindDropZone(section) {
 
 // ---- mutations ----
 // -> the deck card (new or already there), or null when it couldn't be found
-async function addCardByName(name) {
+async function addCardByName(name, ref) {  // ref: a drag-in's printing (id, or set + cn)
   if (!deck) { deck = { commander: [], bracket: null, cards: [], not_found: [] }; }
   const existing = deckFind(name);
   if (existing) {
@@ -2277,8 +2336,8 @@ async function addCardByName(name) {
     return existing;
   }
   try {
-    const r = await fetch('/deck/card?name=' + encodeURIComponent(name));
-    if (!r.ok) { showToast(`Couldn't find "${name}"`); return null; }
+    const r = await fetch(cardQuery(name, ref));
+    if (!r.ok) { showToast(name ? `Couldn't find "${name}"` : "Couldn't find that card"); return null; }
     const c = await r.json();
     const again = deckFind(c.name);  // the canonical name may already be there
     if (again) { if (anyQty(again)) changeQty(again.name, +1); else { showToast(`${again.name} is already in the deck`); flashCard(again.name); } return again; }
@@ -2947,15 +3006,81 @@ function setDragCard(e, name, from, key) {
   e.dataTransfer.setData('text/plain', name);
   e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ name, from, key: key || null }));
   e.dataTransfer.effectAllowed = 'copyMove';
+  dragFrom = from;
   hideTooltip();
   setTimeout(() => document.body.classList.add('dragging'), 0);  // after the drag image is captured
 }
 function getDragCard(e) {
   try { const d = JSON.parse(e.dataTransfer.getData(DRAG_TYPE)); if (d && d.name) return d; } catch (err) {}
+  const web = webCardRef(e.dataTransfer);
+  if (web) return { ...web, name: web.name || '', from: 'web' };
   const n = (e.dataTransfer.getData('text/plain') || '').trim();
   return n && n.length < 150 ? { name: n, from: 'text' } : null;
 }
-function endDrag() { document.body.classList.remove('dragging'); dragEdge = 0; }
+// A card dragged in from another site (Scryfall, EDHREC, Commander Spellbook - anything showing
+// Scryfall's images): the image URL carries that printing's Scryfall id. Failing that, a Scryfall
+// /card/set/number link, an EDHREC /cards/name link or the image's alt text names it.
+const SCRY_ID_RE = /\/(?:front|back)\/[0-9a-f]\/[0-9a-f]\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\./i;
+function webCardRef(dt) {
+  const html = dt.getData('text/html') || '';
+  const hay = [html, dt.getData('text/uri-list') || '', dt.getData('text/plain') || ''].join('\n');
+  const name = imgAltName(html);
+  const id = (hay.match(SCRY_ID_RE) || [])[1];
+  if (id) return { id: id.toLowerCase(), name };
+  const sf = hay.match(/scryfall\.com\/card\/([a-z0-9]{2,6})\/([^\/\s"'?#]+)/i);
+  if (sf) return { set: sf[1].toLowerCase(), cn: decodeURIComponent(sf[2]), name };
+  const slug = hay.match(/edhrec\.com\/(?:cards|commanders)\/([a-z0-9-]+)/i);
+  if (slug) return { name: slug[1].replace(/-/g, ' ') };
+  return name ? { name } : null;
+}
+function imgAltName(html) {  // Scryfall's alt is "Sol Ring (Commander Masters #464)"
+  const m = html.match(/<img[^>]*\balt="([^"]+)"/i);
+  if (!m) return '';
+  const n = m[1].replace(/&amp;/g, '&').replace(/&#0?39;|&apos;/g, "'").replace(/&quot;/g, '"')
+    .replace(/^Card art for /i, '').replace(/\s*\(.*$/, '').trim();
+  return n.length < 150 ? n : '';
+}
+function cardQuery(name, ref) {  // /deck/card for a name, or the exact printing a drag-in carried
+  const q = new URLSearchParams({ name: name || '' });
+  if (ref) for (const k of ['id', 'set', 'cn']) if (ref[k]) q.set(k, ref[k]);
+  return '/deck/card?' + q;
+}
+const isOwnDrag = e => e.dataTransfer.types.includes(DRAG_TYPE);
+const isCardDrag = e => isOwnDrag(e) || ['text/uri-list', 'text/html', 'text/plain'].some(t => e.dataTransfer.types.includes(t));
+function endDrag() {
+  document.body.classList.remove('dragging', 'drag-in'); dragEdge = 0; dragFrom = null;
+  dropHint.hidden = true;
+  document.querySelectorAll('.drop-over').forEach(el => el.classList.remove('drop-over'));
+}
+// Drag feedback: a hint pinned to the top of the canvas says what a drop does where the card is
+// now; the group under it lights up and opens a slot where the card will land.
+let dragFrom = null;  // our own drag's source ('deck' | 'mention' | 'maybe'); null = another site
+const dropHint = document.createElement('div'); dropHint.className = 'drop-hint'; dropHint.hidden = true;
+document.getElementById('canvas').appendChild(dropHint);
+function setDropHint(text, muted) {
+  if (dropHint.textContent !== text) dropHint.textContent = text;
+  dropHint.classList.toggle('muted', !!muted);
+  dropHint.hidden = false;
+}
+document.addEventListener('dragover', (e) => {  // off the canvas: nothing to say
+  if (document.body.classList.contains('dragging') && !e.target.closest('#canvas')) dropHint.hidden = true;
+});
+// A drag from another window: open the drop targets the way our own drags do, and keep a card
+// dropped outside the canvas from navigating the page to its image.
+document.addEventListener('dragenter', (e) => {
+  if (isOwnDrag(e) || document.body.classList.contains('dragging') || !isCardDrag(e)) return;
+  if (!e.dataTransfer.types.some(t => t === 'text/uri-list' || t === 'text/html')) return;  // plain text: let it be
+  document.body.classList.add('dragging', 'drag-in');
+});
+document.addEventListener('dragleave', (e) => { if (!e.relatedTarget && document.body.classList.contains('drag-in')) endDrag(); });
+document.addEventListener('dragover', (e) => {
+  if (document.body.classList.contains('drag-in') && !e.target.closest('input, textarea, [contenteditable]')) e.preventDefault();
+});
+document.addEventListener('drop', (e) => {
+  if (!document.body.classList.contains('drag-in')) return;
+  if (!e.target.closest('input, textarea, [contenteditable]')) e.preventDefault();
+  endDrag();
+});
 // Scrolling the card canvas mid-drag: the wheel scrolls it (where the browser delivers wheel
 // events during a drag), and holding the card near the canvas's top or bottom edge scrolls it too
 // (Chrome on Windows swallows the wheel while dragging).
@@ -2994,9 +3119,31 @@ async function dropOnDeckGroup(d, group) {
     pushUndo();
     await decideMaybe(m, true);
     c = deckFind(m.add || '');
-  } else c = await addCardByName(d.name);
+  } else {
+    const grid = group && document.querySelector(`.deck-groups .role-group[data-group="${CSS.escape(group)}"] .role-grid`);
+    const slot = grid && !deckFind(d.name) ? document.createElement('div') : null;
+    if (slot) { slot.className = 'card-tile pending-tile'; slot.textContent = 'Adding…'; grid.appendChild(slot); }
+    else if (!deckFind(d.name)) showToast(d.name ? `Adding ${d.name}…` : 'Adding card…');
+    try { c = await addCardByName(d.name, d.from === 'web' ? d : null); } finally { if (slot) slot.remove(); }
+  }
   if (c && group && cardGroup(c) !== group) setCardGroup(c.name, group);
+  if (c) flashCard(c.name);
 }
+// Dropped on the canvas but not on a group: the card goes to its own group (a deck starts if
+// there's none). Moving a deck card onto blank canvas does nothing.
+cardsEl.addEventListener('dragover', (e) => {
+  if (!isCardDrag(e) || e.defaultPrevented) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = isOwnDrag(e) ? 'move' : 'copy';
+  if (dragFrom === 'deck') setDropHint('Drop on a role to move it', true);
+  else setDropHint(deck ? 'Drop to add - it goes under its role' : 'Drop to start a deck with it');
+});
+cardsEl.addEventListener('drop', (e) => {
+  if (e.defaultPrevented) return;  // a group or the Maybe board took it
+  e.preventDefault(); endDrag();
+  const d = getDragCard(e);
+  if (!d || d.from === 'deck' || (d.from === 'maybe' && !deck)) return;
+  dropOnDeckGroup(d, null);
+});
 async function dropOnMaybe(d) {
   if (d.from === 'maybe') return;
   const c = deckFind(d.name);
@@ -3007,11 +3154,11 @@ async function dropOnMaybe(d) {
     addMaybeCard(c, true);
     return;
   }
-  let card = mentionCard(d.name);
+  let card = d.from === 'web' ? null : mentionCard(d.name);
   if (!card) {
-    try { const r = await fetch('/deck/card?name=' + encodeURIComponent(d.name)); if (r.ok) card = await r.json(); } catch (err) {}
+    try { const r = await fetch(cardQuery(d.name, d.from === 'web' ? d : null)); if (r.ok) card = await r.json(); } catch (err) {}
   }
-  if (card) addMaybeCard(card); else showToast(`Couldn't find "${d.name}"`);
+  if (card) addMaybeCard(card); else showToast(d.name ? `Couldn't find "${d.name}"` : "Couldn't find that card");
 }
 function maybeSection() {
   const section = document.createElement('div'); section.className = 'role-group maybe-group';
@@ -3019,7 +3166,10 @@ function maybeSection() {
   title.textContent = `Maybe board · ${deck.maybe.length}`;
   title.title = "Cards you're considering - not in the deck or the 100";
   const grid = document.createElement('div'); grid.className = 'role-grid';
-  section.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; section.classList.add('drop-over'); });
+  section.addEventListener('dragover', (e) => {
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; section.classList.add('drop-over');
+    setDropHint(dragFrom === 'deck' ? 'Move to Maybe' : 'Save to Maybe');
+  });
   section.addEventListener('dragleave', (e) => { if (!section.contains(e.relatedTarget)) section.classList.remove('drop-over'); });
   section.addEventListener('drop', (e) => {
     e.preventDefault(); section.classList.remove('drop-over'); endDrag();
@@ -3997,7 +4147,7 @@ function parseFrame(frame) {
 // ---- per-browser layout/text preferences (chat:deck ratio, card size, chat font) ----
 // Stored in localStorage: a convenience for this viewer only, never needed for correctness.
 const PREFS_KEY = 'brewbot_prefs_v1';
-const PREF_DEFAULTS = { canvasW: null, cardMin: 105, proseSerif: true };
+const PREF_DEFAULTS = { canvasW: null, cardMin: 105, proseSerif: true, deckView: 'stacks' };
 let prefs = { ...PREF_DEFAULTS };
 try { prefs = { ...PREF_DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch (e) {}
 function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) {} }

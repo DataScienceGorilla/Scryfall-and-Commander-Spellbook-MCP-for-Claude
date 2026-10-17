@@ -3255,13 +3255,29 @@ async def card_search(q: str, commander: bool = False, _: None = Depends(require
     return JSONResponse({"names": AUTOCOMPLETE_CACHE[key]})
 
 
+_SCRYFALL_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
 @app.get("/deck/card")
-async def deck_card(name: str, _: None = Depends(require_auth)):
-    """One card in the deck-object shape (same as /deck/parse items), for add-card."""
-    data = await _resolve_full_card(name)
+async def deck_card(name: str = "", id: str = "", set: str = "", cn: str = "",
+                    _: None = Depends(require_auth)):
+    """One card in the deck-object shape (same as /deck/parse items), for add-card. A Scryfall
+    id or set + collector number (a card dragged in from Scryfall / EDHREC) picks that printing."""
+    data, picked = None, False
+    if _SCRYFALL_ID.match(id.lower()):
+        data = await _scryfall_get(f"/cards/{id.lower()}", {})
+    elif re.fullmatch(r"[a-z0-9]{2,6}", set.lower()) and re.fullmatch(r"[0-9a-z★†-]{1,8}", cn.lower()):
+        data = await _scryfall_get(f"/cards/{set.lower()}/{cn.lower()}", {})
+    if data and data.get("digital"):  # an Arena-only printing: use the card's paper default
+        name, data = data.get("name", "") or name, None
+    picked = data is not None
+    if data is None and name.strip():
+        data = await _resolve_full_card(name)
     if not data:
         return JSONResponse({"error": "not found"}, status_code=404)
     card = _slim_deck_card(data, 1)
+    if picked:
+        card["printing"] = {"id": data.get("id"), "set": data.get("set"), "cn": data.get("collector_number")}
     await _apply_commander_eligibility([card])
     return JSONResponse(card)
 
