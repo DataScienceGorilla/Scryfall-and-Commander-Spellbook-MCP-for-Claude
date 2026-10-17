@@ -493,6 +493,14 @@
   .deck-groups.stacks .role-grid > .card-tile.flash { margin-bottom: 0; box-shadow: 0 0 0 3px var(--accent), 0 8px 20px var(--shadow); }
   .card-tile.commander { box-shadow: 0 0 0 2px var(--accent-2); }
   .card-tile.dragging-src { opacity: .35; }
+  /* the card under the pointer during an in-app drag (pointer-driven, so the wheel keeps working) */
+  .drag-ghost { position: fixed; z-index: 300; pointer-events: none; width: 150px; aspect-ratio: 63/88;
+    border-radius: var(--radius-card); overflow: hidden; box-shadow: 0 14px 34px var(--shadow); opacity: .92;
+    transform: translate(-50%, -18%) rotate(2deg); background: var(--panel-2); }
+  .drag-ghost img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  body.pointer-dragging, body.pointer-dragging * { cursor: grabbing !important; user-select: none; }
+  /* stacks hold still under the dragged card instead of opening each card it passes over */
+  @media (hover: hover) { body.pointer-dragging .deck-groups.stacks .role-grid > .card-tile:not(:last-child):hover { margin-bottom: -120%; } }
   .card-tile .tag-dot { position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,.82); color: var(--accent);
     font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius); pointer-events: none;
     max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3409,6 +3417,67 @@ cardsEl.addEventListener('dragover', (e) => {
   }
 });
 cardsEl.addEventListener('dragleave', (e) => { if (!cardsEl.contains(e.relatedTarget)) dragEdge = 0; });
+// In-app card drags run on pointer events, replayed as synthetic drag events so every drop zone,
+// the drop hint and the edge scroll above work unchanged. A native HTML5 drag hands Chromium to
+// the OS drag loop, which swallows the mouse wheel - the deck couldn't scroll mid-drag. Cards
+// dragged in from other sites are native drags by nature and stay that way; so does touch.
+let pdrag = null;  // { tile, dt, ghost, over, moved }
+document.addEventListener('dragstart', (e) => {
+  if (!e.isTrusted) return;  // our own replayed dragstart
+  const tile = e.target.closest && e.target.closest('#cards .card-tile[draggable=true]');
+  if (!tile || !pdrag || pdrag.tile !== tile) return;
+  e.preventDefault(); e.stopPropagation();  // no native drag: the pointer drag below takes over
+  beginPointerDrag(e.clientX, e.clientY);
+}, true);
+document.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || e.pointerType === 'touch') return;
+  const tile = e.target.closest && e.target.closest('#cards .card-tile[draggable=true]');
+  if (!tile || e.target.closest('button, a, input')) return;
+  pdrag = { tile, dt: null, ghost: null, over: null, moved: false };
+}, true);
+function beginPointerDrag(x, y) {
+  const d = pdrag;
+  d.dt = new DataTransfer();
+  d.tile.dispatchEvent(new DragEvent('dragstart', { dataTransfer: d.dt, bubbles: true, clientX: x, clientY: y }));
+  d.ghost = document.createElement('div'); d.ghost.className = 'drag-ghost';
+  const img = d.tile.querySelector('img');
+  if (img) d.ghost.innerHTML = `<img src="${escapeHtml(img.src)}" alt="">`;
+  else d.ghost.textContent = d.tile.textContent;
+  document.body.appendChild(d.ghost);
+  document.body.classList.add('pointer-dragging');
+  d.moved = true;
+  movePointerDrag(x, y);
+}
+function movePointerDrag(x, y) {
+  const d = pdrag;
+  d.ghost.style.left = x + 'px'; d.ghost.style.top = y + 'px';
+  const el = document.elementFromPoint(x, y) || document.body;
+  if (d.over && d.over !== el) d.over.dispatchEvent(new DragEvent('dragleave', { dataTransfer: d.dt, bubbles: true, relatedTarget: el, clientX: x, clientY: y }));
+  d.over = el;
+  el.dispatchEvent(new DragEvent('dragover', { dataTransfer: d.dt, bubbles: true, cancelable: true, clientX: x, clientY: y }));
+}
+function finishPointerDrag(x, y, drop) {
+  const d = pdrag; pdrag = null;
+  if (drop) {
+    const el = document.elementFromPoint(x, y) || document.body;
+    el.dispatchEvent(new DragEvent('drop', { dataTransfer: d.dt, bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  }
+  d.ghost.remove();
+  document.body.classList.remove('pointer-dragging');
+  if (d.tile.isConnected) d.tile.dispatchEvent(new DragEvent('dragend', { dataTransfer: d.dt, bubbles: true }));
+  else endDrag();
+  // the mouseup lands on a card: swallow the click it makes, or it would open the card editor
+  const swallow = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+  document.addEventListener('click', swallow, { capture: true, once: true });
+  setTimeout(() => document.removeEventListener('click', swallow, { capture: true }), 0);
+}
+document.addEventListener('pointermove', (e) => { if (pdrag && pdrag.moved) movePointerDrag(e.clientX, e.clientY); });
+document.addEventListener('pointerup', (e) => {
+  if (!pdrag) return;
+  if (pdrag.moved) finishPointerDrag(e.clientX, e.clientY, true); else pdrag = null;
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pdrag && pdrag.moved) finishPointerDrag(0, 0, false); });
+window.addEventListener('blur', () => { if (pdrag && pdrag.moved) finishPointerDrag(0, 0, false); });
 function mentionCard(name) {  // the canvas's lookup of a mentioned card, in deck-card shape
   const e = cardCache.get(keyFor(name));
   return e && e.status === 'ok' ? { name: e.canonical || name, image: e.img || null, image_back: e.imgBack || null,
@@ -3437,9 +3506,11 @@ async function dropOnDeckGroup(d, group) {
 // there's none). Moving a deck card onto blank canvas does nothing.
 cardsEl.addEventListener('dragover', (e) => {
   if (!isCardDrag(e) || e.defaultPrevented) return;
+  // a deck card moved over blank canvas does nothing, so don't make the canvas a drop target for
+  // it - with the whole canvas accepting the drag, Chromium on Windows stops scrolling it on the wheel
+  if (dragFrom === 'deck') { setDropHint('Drop on a role to move it', true); return; }
   e.preventDefault(); e.dataTransfer.dropEffect = isOwnDrag(e) ? 'move' : 'copy';
-  if (dragFrom === 'deck') setDropHint('Drop on a role to move it', true);
-  else setDropHint(deck ? 'Drop to add - it goes under its role' : 'Drop to start a deck with it');
+  setDropHint(deck ? 'Drop to add - it goes under its role' : 'Drop to start a deck with it');
 });
 cardsEl.addEventListener('drop', (e) => {
   if (e.defaultPrevented) return;  // a group or the Maybe board took it
