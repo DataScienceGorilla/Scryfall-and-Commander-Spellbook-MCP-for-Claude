@@ -619,6 +619,14 @@
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
   .in-actions .primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 650; }
   @media (max-width: 560px) { .in-two { grid-template-columns: 1fr; } }
+  /* Deck brief: wide, two columns under the full-width commander picker, and the Save bar stuck to
+     the bottom of the dialog so a long companion list can't push it out of reach */
+  .in-inner.in-brief { max-width: 1040px; }
+  .in-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 28px; align-items: start; }
+  .in-col { min-width: 0; }
+  @media (max-width: 860px) { .in-cols { grid-template-columns: minmax(0, 1fr); } }
+  .in-brief .in-actions { position: sticky; bottom: -16px; z-index: 2; margin: 18px -20px -16px; padding: 12px 20px 16px;
+    background: var(--panel); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
 
   /* Player profile ("What Brew Bot remembers") - reuses the brief's modal */
   .pf-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -2782,7 +2790,7 @@ function renderIntake(opts) {
   let cmdrs = [...(deck.commander || [])];
   let bracket = deck.bracket || null;
   const esc = s => escapeHtml(String(s || '')).replace(/"/g, '&quot;');
-  intakeEl.innerHTML = `<form class="in-inner" autocomplete="off">
+  intakeEl.innerHTML = `<form class="in-inner in-brief" autocomplete="off">
     <button type="button" class="ed-close in-x" title="Close">×</button>
     <h2 class="in-title">${opts.build ? 'New build' : 'Deck brief'}</h2>
     <p class="in-sub">${opts.build ? "Pick your commander and tell the advisor what you're going for - it'll brew the deck with you." : (opts.fromSend ? 'Before the advisor reads your deck - ' : '') + "tell it who leads the deck and what you're going for."}
@@ -2790,20 +2798,23 @@ function renderIntake(opts) {
     <section><h3>Commander <span class="in-hint">pick up to 2 (partners / Background)</span></h3>
       <div class="in-cmdrs"></div>
       <div class="in-row"><div class="ac-wrap"><input type="search" class="in-cmdr-search" ${NO_AUTOFILL} placeholder="${opts.build ? 'Search for your commander…' : 'Not listed? Add your commander by name…'}"><ul class="ac-list in-cmdr-list" hidden></ul></div><button type="button" class="in-small in-cmdr-add">Add</button></div></section>
+    <div class="in-cols"><div class="in-col">
     <section><h3>Target bracket</h3><div class="in-pills in-bracket"></div></section>
     <section><h3>Gameplan <span class="in-hint">how do you want to win?</span></h3>
       <textarea class="in-plan" rows="3" ${NO_AUTOFILL} placeholder="e.g. Drain everyone out with sacrifice triggers; Gut is a payoff, the treasure engine is the deck.">${esc(brief.plan)}</textarea>
       <div class="in-chips in-styles"></div></section>
+    <section><h3>Avoid <span class="in-hint">things you don't want recommended</span></h3>
+      <div class="in-chips in-avoid"></div>
+      <input type="search" class="in-avoid-note" ${NO_AUTOFILL} placeholder="Anything else to avoid?" value="${esc(brief.avoidNote)}"></section>
+    </div><div class="in-col">
     <section><h3>Companion <span class="in-hint">optional - an Ikoria companion outside the 100, in your commander's colors</span></h3>
       <div class="in-comps"><div class="in-hint">Pick a commander to see which companions fit.</div></div></section>
     <section><h3>Must keep <span class="in-hint">pet cards the advisor should never suggest cutting</span></h3>
       <div class="in-row"><div class="ac-wrap"><input type="search" class="in-keep-input" ${NO_AUTOFILL} placeholder="Type a card from your deck…"><ul class="ac-list in-keep-list" hidden></ul></div><button type="button" class="in-small in-keep-add">Add</button></div>
       <div class="in-chips in-keep"></div></section>
-    <section><h3>Avoid <span class="in-hint">things you don't want recommended</span></h3>
-      <div class="in-chips in-avoid"></div>
-      <input type="search" class="in-avoid-note" ${NO_AUTOFILL} placeholder="Anything else to avoid?" value="${esc(brief.avoidNote)}"></section>
     <section class="in-two"><div><h3>Budget</h3><input type="search" class="in-budget" ${NO_AUTOFILL} placeholder="e.g. under $10 a card" value="${esc(brief.budget)}"></div>
       <div><h3>Playgroup notes</h3><input type="search" class="in-notes" ${NO_AUTOFILL} placeholder="e.g. lots of flyers, no stax at our table" value="${esc(brief.notes)}"></div></section>
+    </div></div>
     <div class="in-actions"><button type="button" class="in-skip">Skip</button>
       <button type="submit" class="primary">${opts.build ? 'Start building' : opts.fromSend ? 'Save & ask' : 'Save brief'}</button></div>
   </form>`;
