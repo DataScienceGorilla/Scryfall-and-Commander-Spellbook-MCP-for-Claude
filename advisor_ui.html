@@ -1137,14 +1137,15 @@ function resetCanvas() {
 }
 
 // ---- mention grouping by concrete role (from the otag index, sent by /card) ----
-const ROLE_ORDER = ['Mentioned','Commander','Ramp','Draw','Tutor','Recursion','Target Interaction','Mass Interaction',
+const ROLE_ORDER = ['Latest','Mentioned','Commander','Ramp','Draw','Tutor','Recursion','Target Interaction','Mass Interaction',
                     'Protection','Stax','Other','Lands','Unresolved','Loading'];
 const roleGroups = {};   // role -> { section, grid, title, n }
 function resetGroups() { for (const k in roleGroups) delete roleGroups[k]; }
 function updateGroupTitle(role) {
   const g = roleGroups[role];
   if (!g) return;
-  const label = role === 'Mentioned' ? (deck ? 'Mentioned in chat · not in deck' : 'Mentioned in chat') : role;
+  const label = role === 'Latest' ? 'From the last reply · not in deck'
+    : role === 'Mentioned' ? (deck ? 'Earlier in chat · not in deck' : 'Mentioned in chat') : role;
   g.title.textContent = role === 'Loading' ? `Loading… · ${g.n}` : `${label} · ${g.n}`;
   g.section.style.display = g.n > 0 ? '' : 'none';  // hide empty groups (e.g. Loading when done)
 }
@@ -1174,8 +1175,21 @@ function dropMentionTile(entry) {
   entry.group = null; entry.inDeck = true;
   entry.tile.remove();
 }
-// Role sorting is for the deck being built; mentions are one flat list either way.
-function mentionRole(entry) { return 'Mentioned'; }
+// With a deck, the latest reply's cards sit apart from earlier mentions - while building, that
+// group is the menu the player picks from. The latest reply is the one streaming, else the last saved.
+let latestReplyText = null;  // the streaming reply's text; null = use the last saved reply
+let latestNamesCache = { text: null, names: new Set() };
+function latestMentionNames() {
+  const text = latestReplyText ?? ((lastAssistantEntry() || {}).text || '');
+  if (latestNamesCache.text !== text)
+    latestNamesCache = { text, names: new Set([...text.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => lc(m[1].trim()))) };
+  return latestNamesCache.names;
+}
+function mentionRole(entry) {
+  if (!deck) return 'Mentioned';
+  const names = latestMentionNames();
+  return names.has(lc(entry.asked)) || names.has(lc(entry.canonical)) ? 'Latest' : 'Mentioned';
+}
 // Re-file every resolved mention after the deck appears/changes.
 function regroupMentions() {
   for (const entry of new Set(cardCache.values())) {
@@ -1274,6 +1288,30 @@ function deckEditNote(prev, cur) {
   return parts.length ? `[Deck edits since your last reply: ${parts.join('; ')}]` : '';
 }
 
+// While building, the advisor pitches cards in prose and the player picks them off the canvas -
+// so its next turn hears which of the last reply's cards they saved to Maybe or left (adds show
+// in the deck-edit note). Cards it put up as proposals are reported with the decisions instead.
+function pitchNote(conv) {
+  if (!building()) return '';
+  let prev = null;  // the advisor's reply before the message being sent (the last entry)
+  for (let i = conv.length - 2; i >= 0; i--) if (conv[i].role === 'assistant') { prev = conv[i]; break; }
+  if (!prev || !prev.text) return '';
+  const proposed = new Set((prev.proposals || []).map(p => lc(p.add)));
+  const maybe = new Set((deck.maybe || []).map(m => lc(m.add)));
+  const saved = [], left = [], seen = new Set();
+  for (const m of prev.text.matchAll(/\[\[([^\]]+)\]\]/g)) {
+    const name = m[1].trim(), k = lc(name);
+    if (seen.has(k) || proposed.has(k)) continue;
+    seen.add(k);
+    const entry = cardCache.get(k), canon = lc(entry && entry.canonical) || k;
+    if (deckFind(name) || (entry && entry.canonical && deckFind(entry.canonical))) continue;
+    if (entry && entry.status === 'missing') continue;
+    (maybe.has(k) || maybe.has(canon) ? saved : left).push(name);
+  }
+  const parts = [saved.length ? `saved to Maybe: ${saved.join(', ')}` : '',
+                 left.length ? `not added: ${left.join(', ')}` : ''].filter(Boolean);
+  return parts.length ? `[Cards from your last reply: ${parts.join('; ')}]` : '';
+}
 const lc = s => (s || '').toLowerCase();
 function deckFind(name) {
   if (!deck || !deck.cards || !name) return null;
@@ -2429,7 +2467,11 @@ function deckTitleBlock(comp) {
 function renderDeck() {
   document.body.classList.toggle('has-deck', !!deck);
   document.getElementById('canvasTitle').textContent = deck ? 'Deck' : 'Card canvas';
-  if (!deck || !deck.cards) { deckView.innerHTML = ''; toolbarEl = null; return; }
+  if (!deck || !deck.cards) {
+    deckView.innerHTML = ''; toolbarEl = null;
+    if (mentionView.parentNode !== cardsEl) cardsEl.appendChild(mentionView);  // it sits in the deck while building
+    return;
+  }
   const scroll = cardsEl.scrollTop;
   const note = mentionView.querySelector('.empty-note');
   if (note) note.remove();
@@ -2477,7 +2519,8 @@ function renderDeck() {
   }
   if (warns.childNodes.length) head.appendChild(warns);
   deckView.appendChild(head);
-  if (building()) deckView.appendChild(buildPanel(comp));
+  if (building()) deckView.append(buildPanel(comp), mentionView);
+  else if (mentionView.parentNode !== cardsEl) cardsEl.appendChild(mentionView);
   if (deck.cards.length) deckView.append(templatePanel(comp), statsPanel(), advancedPanel(comp), oddsPanel(comp), goldfishPanel(comp));
   refreshCompanion();
 
@@ -2742,7 +2785,7 @@ function renderIntake(opts) {
   intakeEl.innerHTML = `<form class="in-inner" autocomplete="off">
     <button type="button" class="ed-close in-x" title="Close">×</button>
     <h2 class="in-title">${opts.build ? 'New build' : 'Deck brief'}</h2>
-    <p class="in-sub">${opts.build ? "Pick your commander and tell the advisor what you're going for - it'll build the deck with you, one section at a time." : (opts.fromSend ? 'Before the advisor reads your deck - ' : '') + "tell it who leads the deck and what you're going for."}
+    <p class="in-sub">${opts.build ? "Pick your commander and tell the advisor what you're going for - it'll brew the deck with you." : (opts.fromSend ? 'Before the advisor reads your deck - ' : '') + "tell it who leads the deck and what you're going for."}
       ${opts.build ? "Everything is optional - no commander yet? Leave it blank and the advisor will help you pick one." : 'Everything but the commander is optional.'}</p>
     <section><h3>Commander <span class="in-hint">pick up to 2 (partners / Background)</span></h3>
       <div class="in-cmdrs"></div>
@@ -3030,7 +3073,7 @@ function startDeckCard(sd, entry, bubble) {
       sd.status = 'created';
       deckChanged();
       renderTurnExtras(entry, bubble);
-      inputEl.value = `Deck created with ${names.join(' + ')} as commander. Before you propose cards, ask me what you need to know about how I want it to play.`;
+      inputEl.value = `Deck created with ${names.join(' + ')} as commander - let's build it.`;
       send(true);
     };
     const no = document.createElement('button'); no.className = 'prop-btn'; no.textContent = 'Not yet';
@@ -3477,7 +3520,7 @@ function maybeAutoContinue(entry, bubble) {
     const may = props.filter(p => p.status === 'maybe').length, rej = props.length - acc - may;
     const tally = `accepted ${acc}, ${may ? `maybe ${may}, ` : ''}rejected ${rej}`;
     inputEl.value = building()
-      ? `Done deciding - ${tally}. Take my decisions and reasons into account. Before proposing the next section, ask me anything you need to know about how I want it to go.`
+      ? `Decided on those - ${tally}.`
       : `Done deciding - ${tally}. Take my decisions and reasons into account and keep going.`;
     send(true);
   };
@@ -3999,7 +4042,7 @@ function addActivity() {
 
 function addNote(wrap, note) {
   const n = document.createElement('div');
-  n.className = 'edit-note'; n.textContent = '✎ ' + note.replace(/^\[Deck edits since your last reply: |\]$/g, '');
+  n.className = 'edit-note'; n.textContent = '✎ ' + note.replace(/^\[Deck edits since your last reply: |^\[Cards from your last reply: |\]$/gm, '');
   n.title = 'Deck editor changes the advisor was told about';
   wrap.appendChild(n);
 }
@@ -4037,7 +4080,7 @@ function requestCard(name) {
   const tile = document.createElement('div');
   tile.className = 'card-tile loading';
   tile.textContent = name;
-  const entry = { status: 'loading', tile, group: null };
+  const entry = { status: 'loading', tile, group: null, asked: name };
   cardCache.set(key, entry);
   setTileGroup(entry, 'Loading');  // grouped into its concrete role once /card resolves
 
@@ -4170,8 +4213,8 @@ function offerBuild(text) {
   chats[activeId].buildOffered = true; saveState();
   const card = document.createElement('div'); card.className = 'q-card build-offer';
   card.innerHTML = `<div class="q-title">Building a new deck?</div>
-    <div class="prop-reason">Build it step by step: pick the commander and goals, and the advisor fills the deck in
-      the panel one section at a time while you accept or reject each card.</div>
+    <div class="prop-reason">Build it together: pick the commander and goals, then talk it through with the advisor -
+      the cards it suggests show up beside the deck, and you add the ones you like.</div>
     <div class="q-quote"></div><div class="q-options"></div>`;
   card.querySelector('.q-quote').textContent = '“' + (text.length > 160 ? text.slice(0, 157) + '…' : text) + '”';
   const go = document.createElement('button'); go.className = 'prop-btn ok'; go.textContent = 'Build from scratch';
@@ -4241,7 +4284,7 @@ async function send(force) {
   }
   const originChat = chats[originId];
   const snap = deckSnapshot();
-  const note = sendDeck ? deckEditNote(originChat.deckSent, snap) : '';
+  const note = sendDeck ? [deckEditNote(originChat.deckSent, snap), pitchNote(originConv)].filter(Boolean).join('\n') : '';
   if (note) { userEntry.note = note; if (onScreen()) annotateLastUser(note); }
   if (sendDeck) originChat.deckSent = snap;
   saveState(originId);
@@ -4249,6 +4292,7 @@ async function send(force) {
   let bubble = null;
   const turnProposals = []; let turnQuestion = null, turnStartDeck = null;  // interactive UI the advisor put up this turn
   let acc = '';
+  latestReplyText = ''; regroupMentions();
   const activity = addActivity();  // "Thinking…" appears immediately
 
   try {
@@ -4280,6 +4324,7 @@ async function send(force) {
           // 'text' = next streamed chunk; 'replace' = the finished answer rewritten after the
           // off-color check struck an illegal pick
           acc = ev.event === 'replace' ? ev.data.text : acc + ev.data.text;
+          latestReplyText = acc;
           if (onScreen()) {
             // follow the stream only if the reader is already at the bottom
             const atBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
@@ -4295,7 +4340,7 @@ async function send(force) {
         } else if (ev.event === 'reset') {
           // the model narrated, then decided to look something up - roll back to the answer
           // text kept from earlier turns (e.g. analysis written before a question/proposal)
-          acc = (ev.data && ev.data.keep) || '';
+          acc = (ev.data && ev.data.keep) || ''; latestReplyText = acc;
           if (bubble && !acc) { bubble.closest('.msg').remove(); bubble = null; }
           else if (bubble && onScreen()) { bubble.innerHTML = renderMarkdown(acc); bindChips(bubble); }
         } else if (ev.event === 'status') {
@@ -4328,6 +4373,7 @@ async function send(force) {
   } catch (e) {
     if (!abort.signal.aborted && onScreen()) addMessage('assistant', '⚠️ Connection error: ' + e.message);
   } finally {
+    latestReplyText = null;
     if (onScreen()) activity.finish();
     const interrupted = abort.signal.aborted;
     // Always persist the answer to the chat that ASKED, wherever the user is now. A stopped
@@ -4591,7 +4637,7 @@ function focusComposer(hint) {
 }
 const ONB_PATHS = [
   ['tune', 'Tune a deck I have', 'Paste a decklist or an Archidekt link. It loads as an editable deck on the right and the advisor reviews it from the real card text.'],
-  ['build', 'Build one from scratch', 'Pick a commander and build the deck with the advisor, a section at a time. You approve every card.'],
+  ['build', 'Build one from scratch', 'Pick a commander and brew it with the advisor. Its suggestions land on the canvas - you add the ones you like.'],
   ['ask', 'Just ask a question', 'A commander idea, a card choice, a combo or a rules question - anything Commander.'],
 ];
 function openWelcome() {
