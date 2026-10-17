@@ -792,6 +792,15 @@ SYSTEM_PROMPT += (
     "the calls silently and write the finished answer."
 )
 
+# System prompt v2 ("coach"): v1's sections regrouped into stance / knowledge / situation /
+# mechanics, plus a per-turn [SITUATION] block on the player's message (prompt_v2.py). A/B by
+# "prompt_variant" in /chat; ADVISOR_PROMPT_DEFAULT picks the default.
+import prompt_v2
+SYSTEM_PROMPT_V2 = prompt_v2.build(SYSTEM_PROMPT)
+PROMPT_DEFAULT = os.environ.get("ADVISOR_PROMPT_DEFAULT", "v1")
+if PROMPT_DEFAULT not in ("v1", "v2"):
+    PROMPT_DEFAULT = "v1"
+
 # =============================================================================
 # THEORY CORPUS (deckbuilding_search tool) - lazy loaded, mirrors rules pattern
 # =============================================================================
@@ -1064,13 +1073,13 @@ async def _load_format_lists() -> None:
     print(f"Format lists loaded: {len(banned)} banned, {len(gcs)} game changers.", flush=True)
 
 
-def _cached_system(memory_block: str = "", deck_block: str = "", profile_block: str = ""):
+def _cached_system(memory_block: str = "", deck_block: str = "", profile_block: str = "", variant: str = "v1"):
     """System prompt + optional PLAYER PROFILE + SESSION MEMORY + CURRENT DECK, ordered most- to
     least-stable (static prompt -> profile, fixed per chat -> memory, which changes every ~N
     turns -> deck, which changes on edits). An edit re-caches only what follows it. The profile
     gets no breakpoint of its own (the API allows 4: prompt, memory, deck, last message); the
     next breakpoint caches it as part of the prefix."""
-    blocks = [{"type": "text", "text": SYSTEM_PROMPT + FORMAT_LISTS_TEXT,
+    blocks = [{"type": "text", "text": (SYSTEM_PROMPT_V2 if variant == "v2" else SYSTEM_PROMPT) + FORMAT_LISTS_TEXT,
                "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
     if profile_block:
         blocks.append({"type": "text", "text": profile_block})
@@ -2648,6 +2657,8 @@ async def chat(request: Request, _: None = Depends(require_auth)):
     # only in the in-memory SESSIONS dict. Rebuild the message list from it; fall
     # back to the in-memory store for older clients that don't send history.
     history = body.get("history")
+    variant = body.get("prompt_variant") if body.get("prompt_variant") in ("v1", "v2") else PROMPT_DEFAULT
+    template = body.get("template") if isinstance(body.get("template"), dict) else None
     deck = body.get("deck") if isinstance(body.get("deck"), dict) else None
     has_deck = bool(deck and deck.get("cards"))
     # Session memory: the browser keeps {text, upTo} per chat; history[:upTo] is already
@@ -2713,6 +2724,8 @@ async def chat(request: Request, _: None = Depends(require_auth)):
         ctx.append(f"deck {sum(int(c.get('qty') or 1) for c in deck['cards'])}c")
     if memory_text:
         ctx.append(f"mem@{mem_upto}")
+    if variant != "v1":
+        ctx.append(f"prompt {variant}")
     who = request.session.get("user") or "-"
     account = _session_user(request)  # "" on the login-free dev server: no profile there
     log_activity(f"QUERY  sid={session_id[:8]} user={who} ip={client_ip} [{model.replace('claude-','')}]"
@@ -2764,14 +2777,25 @@ async def chat(request: Request, _: None = Depends(require_auth)):
                         + memory_text) if memory_text else ""
         profile_block = _profile_for_chat(account, session_id) if account else ""
         capture = _AnswerCapture()
-        async for chunk in agent_stream(session_id, messages, model, extra,
-                                        system=_cached_system(memory_block, deck_block, profile_block),
+        turn = messages
+        if variant == "v2" and messages and isinstance(messages[-1].get("content"), str):
+            # the [SITUATION] rides on the player's latest message, not the system prompt, so a deck
+            # edit doesn't invalidate the cached conversation before it
+            last = history[-1] if history and isinstance(history[-1], dict) else {}
+            note = last.get("note") if last.get("role") == "user" else ""
+            situation = prompt_v2.situation_block(deck, template, note or "")
+            turn = messages[:-1] + [{**messages[-1], "content": messages[-1]["content"] + "\n\n" + situation}]
+        async for chunk in agent_stream(session_id, turn, model, extra,
+                                        system=_cached_system(memory_block, deck_block, profile_block, variant),
                                         deck_text=deck_text, deck_identity=deck_identity,
                                         deck=deck if has_deck else None, user=account):
             capture.feed(chunk)
             yield chunk
         if history is not None:  # keep a copy for the admin page (players are told)
-            _save_chat(session_id, who, history, capture.entry(), deck)
+            answer = capture.entry()
+            if answer and variant != "v1":
+                answer["prompt"] = variant  # which system prompt wrote it (A/B), shown on the admin page
+            _save_chat(session_id, who, history, answer, deck)
             _maybe_learn(account, session_id, history, deck)  # background; never delays the answer
 
     return StreamingResponse(

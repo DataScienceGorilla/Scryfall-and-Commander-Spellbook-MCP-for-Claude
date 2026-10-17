@@ -1470,6 +1470,22 @@ function curveTargets(T, slots, cmdrMv) {
   raw.map((x, i) => [x - out[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { out[i]++; left--; } });
   return out;
 }
+// the deck's nonland curve now (0..6, 7+) and the suggested one for these targets
+function templateCurve(t) {
+  const now = Array(8).fill(0);
+  for (const c of deck.cards) if (!c.is_land && !isCommander(c)) now[Math.min(7, Math.floor(c.cmc || 0))] += c.qty || 1;
+  const nCmdr = Math.max(1, (deck.commander || []).length);
+  const cmdrMvs = (deck.commander || []).map(n => deckFind(n)).filter(Boolean).map(c => Math.floor(c.cmc || 0));
+  return { now, want: curveTargets(t.T, Math.max(0, 100 - nCmdr - t.lands), cmdrMvs.length ? Math.max(...cmdrMvs) : 0) };
+}
+// what the Template panel shows, for the advisor's per-turn situation (prompt v2)
+function templateSnapshot() {
+  if (!deck || !deck.cards || !deck.cards.length) return null;
+  const comp = deckComposition(), t = templateTargets(comp), have = buildCounts();
+  const keys = ['lands', 'ramp', 'draw', 'interaction'];
+  return { threshold: t.T, targets: Object.fromEntries(keys.map(k => [k, t[k]])),
+           have: Object.fromEntries(keys.map(k => [k, have[k]])), curve: templateCurve(t) };
+}
 let fillTray = null;  // { section, items: [suggestion], skipped: [names], loading, error } - not saved
 function templatePanel(comp) {
   const t = templateTargets(comp), have = buildCounts();
@@ -1522,10 +1538,7 @@ function templatePanel(comp) {
     if (fillTray && fillTray.section === k) rows.appendChild(fillTrayEl(label));
   }
   // curve: bars are the deck now, the dashed line is the suggestion; chips say how far off
-  const cur = Array(8).fill(0);
-  for (const c of deck.cards) if (!c.is_land && !isCommander(c)) cur[Math.min(7, Math.floor(c.cmc || 0))] += c.qty || 1;
-  const cmdrMvs = (deck.commander || []).map(n => deckFind(n)).filter(Boolean).map(c => Math.floor(c.cmc || 0));
-  const want = curveTargets(t.T, Math.max(0, 100 - nCmdr - t.lands), cmdrMvs.length ? Math.max(...cmdrMvs) : 0);
+  const { now: cur, want } = templateCurve(t);
   const max = Math.max(1, ...cur, ...want);
   el.querySelector('.tpl-curve').innerHTML = cur.map((n, i) => {
     const d = want[i] - n, x = i === 7 ? '7+' : i;
@@ -4247,7 +4260,8 @@ async function send(force) {
       // `originConv` already includes the just-added user turn as its last entry.
       body: JSON.stringify({ session_id: originSession, message: text, history: originConv,
                              deck: sendDeck ? deckForChat() : null, memory: originChat.memory || null,
-                             ui_version: UI_VERSION }),
+                             template: sendDeck ? templateSnapshot() : null,
+                             prompt_variant: prefs.promptVariant || undefined, ui_version: UI_VERSION }),
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -4321,6 +4335,7 @@ async function send(force) {
     if (acc.trim() || turnProposals.length || turnQuestion || turnStartDeck || interrupted) {
       const entry = { role: 'assistant', text: acc };
       if (interrupted) entry.interrupted = true;
+      if (prefs.promptVariant) entry.prompt = prefs.promptVariant;  // which system prompt answered (A/B)
       if (turnStartDeck) entry.startDeck = turnStartDeck;
       if (turnProposals.length) entry.proposals = turnProposals;
       if (turnQuestion) entry.question = turnQuestion;
@@ -4419,6 +4434,9 @@ applyPrefs();
       <input type="range" id="setCard" min="90" max="340" step="5" aria-label="Card size"></div>
     <div class="row"><h4>Chat text</h4>
       <div class="seg"><button type="button" data-serif="1">Cormorant</button><button type="button" data-serif="0">Karla</button></div></div>
+    <div class="row"><h4>Advisor style</h4>
+      <div class="seg seg-prompt"><button type="button" data-prompt="">Classic</button><button type="button" data-prompt="v2">Coach (beta)</button></div>
+      <div class="hint">Coach is a new system prompt being tested - same knowledge, more of an advisor at your side.</div></div>
     <div class="row"><div class="hint">Drag the line between the chat and the deck to resize them.</div>
       <button type="button" class="reset" id="setReset">Reset layout</button></div>
     <div class="row" id="setProfileRow" hidden><h4>Memory</h4>
@@ -4434,12 +4452,16 @@ applyPrefs();
     const avail = cardsEl.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     card.max = Math.max(150, Math.min(600, Math.floor(avail / 5) * 5));
     card.value = Math.min(prefs.cardMin, card.max);
-    pop.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', !!prefs.proseSerif === (b.dataset.serif === '1')));
+    pop.querySelectorAll('.seg button[data-serif]').forEach(b => b.classList.toggle('on', !!prefs.proseSerif === (b.dataset.serif === '1')));
+    pop.querySelectorAll('.seg button[data-prompt]').forEach(b => b.classList.toggle('on', (prefs.promptVariant || '') === b.dataset.prompt));
   };
   card.addEventListener('input', () => { prefs.cardMin = Number(card.value); applyPrefs(); });
   card.addEventListener('change', savePrefs);
-  pop.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+  pop.querySelectorAll('.seg button[data-serif]').forEach(b => b.addEventListener('click', () => {
     prefs.proseSerif = b.dataset.serif === '1'; applyPrefs(); savePrefs(); paint();
+  }));
+  pop.querySelectorAll('.seg button[data-prompt]').forEach(b => b.addEventListener('click', () => {
+    prefs.promptVariant = b.dataset.prompt || null; savePrefs(); paint();
   }));
   pop.querySelector('#setReset').addEventListener('click', () => { prefs = { ...PREF_DEFAULTS }; applyPrefs(); savePrefs(); paint(); });
   pop.querySelector('#setTour').addEventListener('click', () => { pop.hidden = true; openWelcome(); });
